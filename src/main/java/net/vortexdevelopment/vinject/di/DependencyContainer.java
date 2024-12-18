@@ -10,9 +10,6 @@ import net.vortexdevelopment.vinject.annotation.database.Entity;
 import net.vortexdevelopment.vinject.database.repository.CrudRepository;
 import net.vortexdevelopment.vinject.database.repository.RepositoryContainer;
 import net.vortexdevelopment.vinject.database.repository.RepositoryInvocationHandler;
-import org.bukkit.Bukkit;
-import org.bukkit.event.Listener;
-import org.bukkit.plugin.Plugin;
 import org.reflections.ReflectionUtils;
 import org.reflections.Reflections;
 import sun.misc.Unsafe;
@@ -59,21 +56,6 @@ public class DependencyContainer {
         //Register Components
         //Need to create a loading order to avoid circular dependencies and inject issues
         createLoadingOrder(reflections.getTypesAnnotatedWith(Component.class)).forEach(this::registerComponent);
-
-        //Register listeners
-        reflections.getTypesAnnotatedWith(RegisterListener.class).forEach(aClass -> {
-            //Check if the class is implementing Listener
-            if (!Listener.class.isAssignableFrom(aClass)) {
-                throw new RuntimeException("Class: " + aClass.getName() + " annotated with @RegisterListener does not implement org.bukkit.event.Listener");
-            }
-            Listener instance = (Listener) newInstance(aClass);
-            try {
-                Class.forName("org.bukkit.Bukkit");
-                Bukkit.getPluginManager().registerEvents((Listener) instance, (Plugin) dependencies.get(pluginClass));
-            } catch (Exception ignored) {
-                //TODO handle it better when testing
-            }
-        });
 
         //Get all entities
         entities.addAll(reflections.getTypesAnnotatedWith(Entity.class));

@@ -8,6 +8,6 @@ import java.lang.annotation.Target;
 // Annotation to mark the main class of the plugin
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.TYPE)
-public @interface PluginRoot {
+public @interface Root {
     String packageName();
 }
