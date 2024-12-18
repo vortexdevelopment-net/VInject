@@ -3,17 +3,25 @@ package net.vortexdevelopment.vinject.di;
 import net.vortexdevelopment.vinject.annotation.Bean;
 import net.vortexdevelopment.vinject.annotation.Component;
 import net.vortexdevelopment.vinject.annotation.Inject;
-import net.vortexdevelopment.vinject.annotation.RegisterListener;
+import net.vortexdevelopment.vinject.annotation.Registry;
 import net.vortexdevelopment.vinject.annotation.Repository;
+import net.vortexdevelopment.vinject.annotation.Root;
 import net.vortexdevelopment.vinject.annotation.Service;
 import net.vortexdevelopment.vinject.annotation.database.Entity;
+import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.database.repository.CrudRepository;
 import net.vortexdevelopment.vinject.database.repository.RepositoryContainer;
 import net.vortexdevelopment.vinject.database.repository.RepositoryInvocationHandler;
+import net.vortexdevelopment.vinject.di.registry.AnnotationHandler;
+import net.vortexdevelopment.vinject.di.registry.AnnotationHandlerRegistry;
+import net.vortexdevelopment.vinject.di.registry.RegistryOrder;
+import org.reflections.Configuration;
 import org.reflections.ReflectionUtils;
 import org.reflections.Reflections;
+import org.reflections.util.ConfigurationBuilder;
 import sun.misc.Unsafe;
 
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -33,32 +41,104 @@ public class DependencyContainer {
 
     private final Map<Class<?>, Object> dependencies;
     private final Unsafe unsafe;
-    private final Class<?> pluginClass;
-    private final Object pluginInstance;
+    private final Class<?> rootClass;
+    private final Object rootInstance;
     private final Set<Class<?>> entities;
+    private AnnotationHandlerRegistry annotationHandlerRegistry;
 
-    public DependencyContainer(String pluginRoot, Class<?> pluginClass, Object pluginInstance) {
+    public DependencyContainer(Root rootAnnotation, Class<?> rootClass, Object rootInstance, Database database, RepositoryContainer repositoryContainer) {
         dependencies = new ConcurrentHashMap<>();
         entities = ConcurrentHashMap.newKeySet();
         unsafe = getUnsafe();
+        annotationHandlerRegistry = new AnnotationHandlerRegistry();
 
         //Add plugin as bean so components can inject it
-        dependencies.put(pluginClass, pluginInstance);
-        this.pluginClass = pluginClass;
-        this.pluginInstance = pluginInstance;
+        dependencies.put(rootClass, rootInstance);
+        this.rootClass = rootClass;
+        this.rootInstance = rootInstance;
+
+        String[] ignoredPackages = rootAnnotation.ignoredPackages();
+
+        //included packages override ignored packages
+        String[] includedPackages = rootAnnotation.includedPackages();
+
+        Configuration configuration = new ConfigurationBuilder()
+                .forPackage(rootAnnotation.packageName())
+                .filterInputsBy(s -> {
+                    if (s == null) return false;
+                    boolean include = true;
+
+                    for (String ignoredPackage : ignoredPackages) {
+                        if (s.startsWith(ignoredPackage)) {
+                            include = false;
+                            break;
+                        }
+                    }
+
+                    for (String includedPackage : includedPackages) {
+                        if (s.startsWith(includedPackage)) {
+                            include = true;
+                            break;
+                        }
+                    }
+
+                    return include && s.endsWith(".class");
+                });
 
         //Find all classes which annotated as Service
-        Reflections reflections = new Reflections(pluginRoot);
+        Reflections reflections = new Reflections(configuration);
+
+        //Collect all Registry annotations
+        reflections.getTypesAnnotatedWith(Registry.class).forEach(aClass -> {
+            //Check if extends AnnotationHandler class
+            if (aClass.getSuperclass().equals(AnnotationHandlerRegistry.class)) {
+                AnnotationHandler instance = (AnnotationHandler) newInstance(aClass);
+                Class<? extends Annotation> annotation = instance.getAnnotation();
+                if (annotation == null) {
+                    throw new RuntimeException("Annotation not found for class: " + aClass + ". Make sure to return a valid annotation in getAnnotation method");
+                }
+                annotationHandlerRegistry.registerHandler(annotation, instance);
+            }
+            throw new RuntimeException("Class: " + aClass.getName() + " annotated with @Registry does not extend AnnotationHandlerRegistry");
+        });
+
+        annotationHandlerRegistry.getHandlers(RegistryOrder.FIRST).forEach(annotationHandler -> {
+            Class<? extends Annotation> find = annotationHandler.getAnnotation();
+            reflections.getTypesAnnotatedWith(find).forEach(annotationHandler::handle);
+        });
 
         //Register Beans and Services
         reflections.getTypesAnnotatedWith(Service.class).forEach(this::registerBeans);
+
+        annotationHandlerRegistry.getHandlers(RegistryOrder.SERVICES).forEach(annotationHandler -> {
+            Class<? extends Annotation> find = annotationHandler.getAnnotation();
+            reflections.getTypesAnnotatedWith(find).forEach(annotationHandler::handle);
+        });
 
         //Register Components
         //Need to create a loading order to avoid circular dependencies and inject issues
         createLoadingOrder(reflections.getTypesAnnotatedWith(Component.class)).forEach(this::registerComponent);
 
+        annotationHandlerRegistry.getHandlers(RegistryOrder.COMPONENTS).forEach(annotationHandler -> {
+            Class<? extends Annotation> find = annotationHandler.getAnnotation();
+            reflections.getTypesAnnotatedWith(find).forEach(annotationHandler::handle);
+        });
+
         //Get all entities
         entities.addAll(reflections.getTypesAnnotatedWith(Entity.class));
+
+        annotationHandlerRegistry.getHandlers(RegistryOrder.ENTITIES).forEach(annotationHandler -> {
+            Class<? extends Annotation> find = annotationHandler.getAnnotation();
+            reflections.getTypesAnnotatedWith(find).forEach(annotationHandler::handle);
+        });
+
+        registerRepositories(repositoryContainer);
+        database.initializeEntityMetadata(this);
+
+        annotationHandlerRegistry.getHandlers(RegistryOrder.REPOSITORIES).forEach(annotationHandler -> {
+            Class<? extends Annotation> find = annotationHandler.getAnnotation();
+            reflections.getTypesAnnotatedWith(find).forEach(annotationHandler::handle);
+        });
     }
 
     public Object mapEntity(Object entityInstance, Map<String, Object> resultSet) {
@@ -72,8 +152,8 @@ public class DependencyContainer {
         }
     }
 
-    public void registerRepositories(RepositoryContainer repositoryContainer) {
-        Reflections reflections = new Reflections(pluginClass.getPackageName());
+    private void registerRepositories(RepositoryContainer repositoryContainer) {
+        Reflections reflections = new Reflections(rootClass.getPackageName());
 
         reflections.getTypesAnnotatedWith(Repository.class).forEach(repositoryClass -> {
             // Check if the class implements CrudRepository
@@ -137,7 +217,7 @@ public class DependencyContainer {
                     Class<?> fieldType = field.getType();
                     // Skip fields annotated as Services since they are preloaded
                     // Skip plugin main class, it will always present in the container when component injection is performed
-                    if (!fieldType.isAnnotationPresent(Service.class) && !fieldType.equals(this.pluginClass)) {
+                    if (!fieldType.isAnnotationPresent(Service.class) && !fieldType.equals(this.rootClass)) {
                         dependencies.add(fieldType);
                     }
                 }

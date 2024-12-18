@@ -1,4 +1,15 @@
 package net.vortexdevelopment.vinject.di.registry;
 
-public class AnnotationHandler {
+import sun.misc.Unsafe;
+
+import java.lang.annotation.Annotation;
+
+public abstract class AnnotationHandler {
+
+    public AnnotationHandler() {
+    }
+
+    public abstract Class<? extends Annotation> getAnnotation();
+
+    public abstract void handle(Class<?> clazz);
 }

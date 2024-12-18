@@ -1,6 +1,6 @@
 package net.vortexdevelopment.vinject.database.repository;
 
-import net.vortexdevelopment.vinject.database.DB;
+import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
 
 import java.util.Map;
@@ -9,9 +9,9 @@ import java.util.concurrent.ConcurrentHashMap;
 public class RepositoryContainer {
 
     private Map<Class<?>, RepositoryInvocationHandler<?, ?>> repositoryProxies;
-    private DB database;
+    private Database database;
 
-    public RepositoryContainer(DB database) {
+    public RepositoryContainer(Database database) {
         this.repositoryProxies = new ConcurrentHashMap<>();
         this.database = database;
     }

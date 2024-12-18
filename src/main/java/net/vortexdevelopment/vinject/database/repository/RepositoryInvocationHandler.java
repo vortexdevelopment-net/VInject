@@ -3,7 +3,7 @@ package net.vortexdevelopment.vinject.database.repository;
 import net.vortexdevelopment.vinject.annotation.database.Column;
 import net.vortexdevelopment.vinject.annotation.database.Entity;
 import net.vortexdevelopment.vinject.annotation.database.Temporal;
-import net.vortexdevelopment.vinject.database.DB;
+import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
 
 
@@ -37,11 +37,11 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
     private final Class<?> repositoryClass;
     private final Class<T> entityClass;
     private final EntityMetadata entityMetadata;
-    private final DB database; // Assume Database is a utility class for DB connections
+    private final Database database; // Assume Database is a utility class for DB connections
     private final DependencyContainer dependencyContainer; // For dependency injection
     private final Map<String, String> queryCache = new HashMap<>();
 
-    public RepositoryInvocationHandler(Class<?> repositoryClass, Class<T> entityClass, DB database, DependencyContainer dependencyContainer) {
+    public RepositoryInvocationHandler(Class<?> repositoryClass, Class<T> entityClass, Database database, DependencyContainer dependencyContainer) {
         this.entityClass = entityClass;
         this.entityMetadata = new EntityMetadata(entityClass);
         this.database = database;
@@ -669,7 +669,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
             if (entity == null) {
                 throw new IllegalArgumentException("Entity annotation not found on class: " + entityClass.getName());
             }
-            this.tableName = DB.getTablePrefix()
+            this.tableName = Database.getTablePrefix()
                     + (entity.table().isEmpty() ? entityClass.getSimpleName().toLowerCase() : entity.table());
 
             String pkColumn = null;

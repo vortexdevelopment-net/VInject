@@ -14,31 +14,30 @@ import java.sql.Connection;
 import java.sql.Statement;
 import java.util.*;
 
-public class DB implements DatabaseConnector {
+public class Database implements DatabaseConnector {
 
     private HikariDataSource hikari;
     private Map<Class<?>, EntityMetadata> entityMetadataMap = new HashMap<>();
     private static String TABLE_PREFIX = "example_";
     private final List<String> FOREIGN_KEY_QUERIES = new ArrayList<>();
 
-    public DB(DependencyContainer dependencyContainer) {
+    public Database(String host, String port, String database, String username, String password, int maxPoolSize) {
         HikariConfig config = new HikariConfig();
-        config.setJdbcUrl("jdbc:mysql://localhost:3306/plugincore?autoReconnect=true&useSSL=false");
-        config.setUsername("Admin");
-        config.setPassword("pass");
+        config.setJdbcUrl("jdbc:mysql://" + host + ":" + port + "/" + database + "?autoReconnect=true&useSSL=false");
+        config.setUsername(username);
+        config.setPassword(password);
+        config.setMaximumPoolSize(maxPoolSize);
         config.addDataSourceProperty("cachePrepStmts", "true");
         config.addDataSourceProperty("prepStmtCacheSize", "250");
         config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
         hikari = new HikariDataSource(config);
-        initializeEntityMetadata(dependencyContainer);
-        verifyTables();
     }
 
     public static String getTablePrefix() {
         return TABLE_PREFIX;
     }
 
-    private void initializeEntityMetadata(DependencyContainer dependencyContainer) {
+    public void initializeEntityMetadata(DependencyContainer dependencyContainer) {
         Class<?>[] classes = dependencyContainer.getAllEntities();
         for (Class<?> clazz : classes) {
             if (clazz.isAnnotationPresent(Entity.class)) {
@@ -53,10 +52,11 @@ public class DB implements DatabaseConnector {
         for (EntityMetadata metadata : entityMetadataMap.values()) {
             metadata.resolveFields(entityMetadataMap);
         }
+        verifyTables();
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    public void verifyTables() {
+    private void verifyTables() {
         connect(connection -> {
             for (EntityMetadata metadata : entityMetadataMap.values()) {
                 try {
