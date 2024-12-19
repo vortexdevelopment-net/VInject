@@ -54,6 +54,8 @@ public class DependencyContainer {
 
         //Add plugin as bean so components can inject it
         dependencies.put(rootClass, rootInstance);
+        injectRoot(rootInstance);
+
         this.rootClass = rootClass;
         this.rootInstance = rootInstance;
 
@@ -168,6 +170,15 @@ public class DependencyContainer {
                 annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
         });
+    }
+
+    private void injectRoot(Object rootInstance) {
+        //Find field with the same class as the root class and inject it
+        for (Field field : rootInstance.getClass().getDeclaredFields()) {
+            if (field.getType().equals(rootClass)) {
+                unsafe.putObject(rootInstance, unsafe.objectFieldOffset(field), rootInstance);
+            }
+        }
     }
 
     public Object mapEntity(Object entityInstance, Map<String, Object> resultSet) {
