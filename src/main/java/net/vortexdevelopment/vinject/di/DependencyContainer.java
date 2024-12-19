@@ -27,11 +27,13 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -217,14 +219,29 @@ public class DependencyContainer {
     private LinkedList<Class<?>> createLoadingOrder(Set<Class<?>> components) {
         // Build the dependency graph
         Map<Class<?>, Set<Class<?>>> dependencyGraph = new HashMap<>();
+        List<Class<?>> provided = new ArrayList<>();
         for (Class<?> component : components) {
             Set<Class<?>> dependencies = new HashSet<>();
 
             // Check constructor parameters
-            Constructor<?>[] constructors = component.getDeclaredConstructors();
-            for (Constructor<?> constructor : constructors) {
-                if (constructor.isAnnotationPresent(Component.class)) {
-                    dependencies.addAll(Arrays.asList(constructor.getParameterTypes()));
+            if (!hasDefaultConstructor(component)) {
+                //Need to add parameter types to the dependencies, only one constructor is supported
+                Class<?>[] parameterTypes = component.getDeclaredConstructors()[0].getParameterTypes();
+                for (Class<?> parameter : parameterTypes) {
+                    //Check if a parameter is a component, service or root class
+                    if (parameter.isAnnotationPresent(Component.class) || parameter.isAnnotationPresent(Service.class) || parameter.equals(this.rootClass)) {
+                        dependencies.add(parameter);
+                    } else {
+                        //if the parameter type does not have a component annotation in its class declaration, something is providing it, skip it
+                        Class<?> providingClass = getProvidingClass(components, parameter);
+                        if (providingClass != null) {
+                            dependencies.add(providingClass);
+                            provided.add(providingClass);
+                            continue;
+                        } else {
+                            throw new RuntimeException("Dependency not found for constructor parameter: " + parameter.getName() + " in class: " + component.getName() + ". Forget to add Bean?");
+                        }
+                    }
                 }
             }
 
@@ -235,6 +252,17 @@ public class DependencyContainer {
                     // Skip fields annotated as Services since they are preloaded
                     // Skip plugin main class, it will always present in the container when component injection is performed
                     if (!fieldType.isAnnotationPresent(Service.class) && !fieldType.equals(this.rootClass)) {
+                        //if the field type does not have a component annotation in its class declaration, something is providing it, skip it
+                        if (!fieldType.isAnnotationPresent(Component.class) || fieldType.isInterface()) {
+                            Class<?> providingClass = getProvidingClass(components, fieldType);
+                            if (providingClass != null) {
+                                dependencies.add(providingClass);
+                                provided.add(providingClass);
+                                continue;
+                            } else {
+                                throw new RuntimeException("Dependency not found for field: " + fieldType.getName() + " in class: " + component.getName() + ". Forget to add Bean?");
+                            }
+                        }
                         dependencies.add(fieldType);
                     }
                 }
@@ -245,6 +273,28 @@ public class DependencyContainer {
 
         // Perform topological sort
         return performTopologicalSort(dependencyGraph);
+    }
+
+    private Class<?> getProvidingClass(Set<Class<?>> components, Class<?> searchedClass) {
+        for (Class<?> clazz : components) {
+            Component component = clazz.getAnnotation(Component.class);
+            if (component != null) {
+                for (Class<?> providingClass : component.registerSubclasses()) {
+                    if (providingClass.equals(searchedClass)) {
+                        return clazz;
+                    }
+                }
+            }
+            Bean bean = clazz.getAnnotation(Bean.class);
+            if (bean != null) {
+                for (Class<?> providingClass : bean.registerSubclasses()) {
+                    if (providingClass.equals(searchedClass)) {
+                        return clazz;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     private LinkedList<Class<?>> performTopologicalSort(Map<Class<?>, Set<Class<?>>> dependencyGraph) {
@@ -286,25 +336,22 @@ public class DependencyContainer {
 
     public <T> T newInstance(Class<T> clazz) {
         try {
-            //Check if the Component annotation has any parameters
-            Class<?>[] parameters = clazz.getDeclaredConstructor().getParameterTypes();
-
-            if (parameters.length > 0) {
-                //Get the classes of the parameters
-                Constructor<T> constructor;
-                try {
-                    constructor = clazz.getDeclaredConstructor(parameters);
-                } catch (NoSuchMethodException e) {
-                    throw new RuntimeException("Could not create new instance of class: " + clazz.getName() + "with parameters: " + Arrays.toString(parameters) + ". Constructor not found");
+            //Check if we need to inject dependencies into the constructor
+            if (!hasDefaultConstructor(clazz)) {
+                System.err.println("Creating new instance of class: " + clazz.getName() + " with constructor injection");
+                Class<?>[] parameterTypes = clazz.getDeclaredConstructors()[0].getParameterTypes();
+                System.err.println("Constructor parameter types: " + Arrays.toString(parameterTypes));
+                Object[] parameters = new Object[parameterTypes.length];
+                for (int i = 0; i < parameterTypes.length; i++) {
+                    parameters[i] = dependencies.get(parameterTypes[i]);
+                    if (parameters[i] == null) {
+                        throw new RuntimeException("Dependency not found for constructor parameter: " + parameterTypes[i].getName() + " in class: " + clazz.getName() + ". Forget to add Bean?");
+                    }
                 }
-
-                Object[] parameterInstances = Arrays.stream(parameters).map(dependencies::get).toArray();
-                constructor.setAccessible(true);
-                T instance = constructor.newInstance(parameterInstances);
+                T instance = (T) clazz.getDeclaredConstructors()[0].newInstance(parameters);
                 inject(instance);
                 return instance;
             }
-
             Constructor<T> constructor = clazz.getDeclaredConstructor();
             constructor.setAccessible(true);
             T instance = constructor.newInstance();
@@ -312,6 +359,15 @@ public class DependencyContainer {
             return instance;
         } catch (Exception e) {
             throw new RuntimeException("Unable to create new instance of class: " + clazz.getName(), e);
+        }
+    }
+
+    private boolean hasDefaultConstructor(Class<?> clazz) {
+        try {
+            clazz.getDeclaredConstructor();
+            return true;
+        } catch (NoSuchMethodException e) {
+            return false;
         }
     }
 
@@ -340,6 +396,10 @@ public class DependencyContainer {
     }
 
     public void registerComponent(Class<?> clazz) {
+        if (clazz.isAnnotationPresent(Root.class)) {
+            //Do not register the root class, we already did it in the constructor
+            return;
+        }
         Component component = clazz.getAnnotation(Component.class);
         Object instance = newInstance(clazz);
         dependencies.put(clazz, instance);
