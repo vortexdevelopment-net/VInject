@@ -320,7 +320,6 @@ public class DependencyContainer {
 
     public void registerComponent(Class<?> clazz) {
         Object instance = newInstance(clazz);
-        inject(instance);
         dependencies.put(clazz, instance);
     }
 
