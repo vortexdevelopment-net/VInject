@@ -3,7 +3,6 @@ package net.vortexdevelopment.vinject.di;
 import net.vortexdevelopment.vinject.annotation.Bean;
 import net.vortexdevelopment.vinject.annotation.Component;
 import net.vortexdevelopment.vinject.annotation.Inject;
-import net.vortexdevelopment.vinject.annotation.MultipleClasses;
 import net.vortexdevelopment.vinject.annotation.Registry;
 import net.vortexdevelopment.vinject.annotation.Repository;
 import net.vortexdevelopment.vinject.annotation.Root;
@@ -331,10 +330,9 @@ public class DependencyContainer {
 
     public void registerComponent(Class<?> clazz) {
         Component component = clazz.getAnnotation(Component.class);
-        MultipleClasses multipleClasses = clazz.getAnnotation(MultipleClasses.class);
         Object instance = newInstance(clazz);
         dependencies.put(clazz, instance);
-        for (Class<?> subclass : multipleClasses.registerSubclasses()) {
+        for (Class<?> subclass : component.registerSubclasses()) {
             dependencies.put(subclass, instance);
         }
     }
@@ -365,7 +363,7 @@ public class DependencyContainer {
                 Object beanInstance = bean.invoke(instance); //Invoke the method and get an instance of the class
                 dependencies.put(bean.getReturnType(), beanInstance); //Add the instance to the dependencies map
 
-                MultipleClasses annotation = bean.getAnnotation(MultipleClasses.class);
+                Bean annotation = bean.getAnnotation(Bean.class);
                 //Check if it has more classes to register as
                 for (Class<?> register : annotation.registerSubclasses()) {
                     dependencies.put(register, beanInstance);
