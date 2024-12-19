@@ -9,9 +9,4 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.METHOD)
 public @interface Bean {
-
-    /**
-     * See {@link MultipleClasses#registerSubclasses()}
-     */
-    Class<?>[] registerSubclasses() default {};
 }
