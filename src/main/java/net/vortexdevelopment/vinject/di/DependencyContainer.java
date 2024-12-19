@@ -325,8 +325,12 @@ public class DependencyContainer {
     }
 
     public void registerComponent(Class<?> clazz) {
+        Component component = clazz.getAnnotation(Component.class);
         Object instance = newInstance(clazz);
         dependencies.put(clazz, instance);
+        for (Class<?> subclass : component.registerSubclasses()) {
+            dependencies.put(subclass, instance);
+        }
     }
 
     public void registerBeans(Class<?> clazz) {
