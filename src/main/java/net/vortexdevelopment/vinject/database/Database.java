@@ -23,7 +23,7 @@ public class Database implements DatabaseConnector {
 
     public Database(String host, String port, String database, String username, String password, int maxPoolSize) {
         HikariConfig config = new HikariConfig();
-        config.setJdbcUrl("jdbc:mysql://" + host + ":" + port + "/" + database + "?autoReconnect=true&useSSL=false");
+        config.setJdbcUrl("jdbc:mariadb://" + host + ":" + port + "/" + database + "?autoReconnect=true&useSSL=false");
         config.setUsername(username);
         config.setPassword(password);
         config.setMaximumPoolSize(maxPoolSize);
