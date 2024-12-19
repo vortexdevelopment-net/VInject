@@ -25,6 +25,7 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
@@ -386,7 +387,12 @@ public class DependencyContainer {
                     }
 
                 }
-                unsafe.putObject(object, unsafe.objectFieldOffset(field), dependency);
+                try {
+                    long offset = Modifier.isStatic(field.getModifiers()) ? unsafe.staticFieldOffset(field) : unsafe.objectFieldOffset(field);
+                    unsafe.putObject(object, offset, dependency);
+                } catch (Exception e) {
+                    throw new RuntimeException("Unable to inject dependency: " + field.getType() + " " + field.getName() + " in class: " + object.getClass().getName(), e);
+                }
             }
         }
     }
