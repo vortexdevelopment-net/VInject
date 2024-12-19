@@ -311,7 +311,13 @@ public class DependencyContainer {
                 field.setAccessible(true);
                 Object dependency = dependencies.get(field.getType());
                 if (dependency == null) {
-                    throw new RuntimeException("Dependency not found for field: " + field.getType() +" " + field.getName() + " in class: " + object.getClass().getName() + ". Forget to add Bean?");
+                    //Check if the object is a @Service class
+                    if (object.getClass().isAnnotationPresent(Service.class)) {
+                        throw new RuntimeException("Only @Root class can be injected to @Service classes! Class: " + object.getClass().getName());
+                    } else {
+                        throw new RuntimeException("Dependency not found for field: " + field.getType() +" " + field.getName() + " in class: " + object.getClass().getName() + ". Forget to add Bean?");
+                    }
+
                 }
                 unsafe.putObject(object, unsafe.objectFieldOffset(field), dependency);
             }
@@ -339,7 +345,7 @@ public class DependencyContainer {
                 throw new RuntimeException("Could not register beans, class: " + clazz.getName() + " does not have a default constructor");
             }
 
-            Object instance = constructor.newInstance(); //Create an instance of the class
+            Object instance = newInstance(clazz); //Create new instance of the service and inject dependencies (Root class)
 
             //Register service as a Bean itself
             dependencies.put(clazz, instance);
