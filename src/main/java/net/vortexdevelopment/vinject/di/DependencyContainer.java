@@ -376,7 +376,6 @@ public class DependencyContainer {
         //Inject object where @Inject annotation is present
         for (Field field : object.getClass().getDeclaredFields()) {
             if (field.isAnnotationPresent(Inject.class)) {
-                field.setAccessible(true);
                 Object dependency = dependencies.get(field.getType());
                 if (dependency == null) {
                     //Check if the object is a @Service class
@@ -385,11 +384,11 @@ public class DependencyContainer {
                     } else {
                         throw new RuntimeException("Dependency not found for field: " + field.getType() +" " + field.getName() + " in class: " + object.getClass().getName() + ". Forget to add Bean?");
                     }
-
                 }
                 try {
-                    long offset = Modifier.isStatic(field.getModifiers()) ? unsafe.staticFieldOffset(field) : unsafe.objectFieldOffset(field);
-                    unsafe.putObject(object, offset, dependency);
+                    boolean isStatic = Modifier.isStatic(field.getModifiers());
+                    long offset = isStatic ? unsafe.staticFieldOffset(field) : unsafe.objectFieldOffset(field);
+                    unsafe.putObject(isStatic ? object.getClass() : object, offset, dependency);
                 } catch (Exception e) {
                     throw new RuntimeException("Unable to inject dependency: " + field.getType() + " " + field.getName() + " in class: " + object.getClass().getName(), e);
                 }
