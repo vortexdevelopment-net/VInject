@@ -324,6 +324,10 @@ public class DependencyContainer {
         }
     }
 
+    public void replaceBean(Class<?> clazz, Object instance) {
+        dependencies.put(clazz, instance);
+    }
+
     public void registerComponent(Class<?> clazz) {
         Component component = clazz.getAnnotation(Component.class);
         Object instance = newInstance(clazz);
