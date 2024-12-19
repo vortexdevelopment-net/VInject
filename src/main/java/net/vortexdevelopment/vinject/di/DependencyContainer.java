@@ -66,6 +66,8 @@ public class DependencyContainer {
                 .forPackage(rootAnnotation.packageName())
                 .filterInputsBy(s -> {
                     if (s == null) return false;
+                    if (s.startsWith("META-INF")) return false;
+
                     boolean include = true;
 
                     for (String ignoredPackage : ignoredPackages) {
@@ -91,20 +93,23 @@ public class DependencyContainer {
         //Collect all Registry annotations
         reflections.getTypesAnnotatedWith(Registry.class).forEach(aClass -> {
             //Check if extends AnnotationHandler class
-            if (aClass.getSuperclass().equals(AnnotationHandlerRegistry.class)) {
+            if (aClass.getSuperclass().equals(AnnotationHandler.class)) {
                 AnnotationHandler instance = (AnnotationHandler) newInstance(aClass);
                 Class<? extends Annotation> annotation = instance.getAnnotation();
                 if (annotation == null) {
                     throw new RuntimeException("Annotation not found for class: " + aClass + ". Make sure to return a valid annotation in getAnnotation method");
                 }
                 annotationHandlerRegistry.registerHandler(annotation, instance);
+            } else {
+                throw new RuntimeException("Class: " + aClass.getName() + " annotated with @Registry does not extend AnnotationHandler");
             }
-            throw new RuntimeException("Class: " + aClass.getName() + " annotated with @Registry does not extend AnnotationHandlerRegistry");
         });
 
         annotationHandlerRegistry.getHandlers(RegistryOrder.FIRST).forEach(annotationHandler -> {
             Class<? extends Annotation> find = annotationHandler.getAnnotation();
-            reflections.getTypesAnnotatedWith(find).forEach(annotationHandler::handle);
+            reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
+                annotationHandler.handle(aClass, this);
+            });
         });
 
         //Register Beans and Services
@@ -112,7 +117,9 @@ public class DependencyContainer {
 
         annotationHandlerRegistry.getHandlers(RegistryOrder.SERVICES).forEach(annotationHandler -> {
             Class<? extends Annotation> find = annotationHandler.getAnnotation();
-            reflections.getTypesAnnotatedWith(find).forEach(annotationHandler::handle);
+            reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
+                annotationHandler.handle(aClass, this);
+            });
         });
 
         //Register Components
@@ -121,7 +128,9 @@ public class DependencyContainer {
 
         annotationHandlerRegistry.getHandlers(RegistryOrder.COMPONENTS).forEach(annotationHandler -> {
             Class<? extends Annotation> find = annotationHandler.getAnnotation();
-            reflections.getTypesAnnotatedWith(find).forEach(annotationHandler::handle);
+            reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
+                annotationHandler.handle(aClass, this);
+            });
         });
 
         //Get all entities
@@ -129,31 +138,10 @@ public class DependencyContainer {
 
         annotationHandlerRegistry.getHandlers(RegistryOrder.ENTITIES).forEach(annotationHandler -> {
             Class<? extends Annotation> find = annotationHandler.getAnnotation();
-            reflections.getTypesAnnotatedWith(find).forEach(annotationHandler::handle);
+            reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
+                annotationHandler.handle(aClass, this);
+            });
         });
-
-        registerRepositories(repositoryContainer);
-        database.initializeEntityMetadata(this);
-
-        annotationHandlerRegistry.getHandlers(RegistryOrder.REPOSITORIES).forEach(annotationHandler -> {
-            Class<? extends Annotation> find = annotationHandler.getAnnotation();
-            reflections.getTypesAnnotatedWith(find).forEach(annotationHandler::handle);
-        });
-    }
-
-    public Object mapEntity(Object entityInstance, Map<String, Object> resultSet) {
-        try {
-            for (Field field : entityInstance.getClass().getDeclaredFields()) {
-                unsafe.putObject(entityInstance, unsafe.objectFieldOffset(field), resultSet.get(field.getName()));
-            }
-            return entityInstance;
-        } catch (Exception e) {
-            throw new RuntimeException("Unable to map entity", e);
-        }
-    }
-
-    private void registerRepositories(RepositoryContainer repositoryContainer) {
-        Reflections reflections = new Reflections(rootClass.getPackageName());
 
         reflections.getTypesAnnotatedWith(Repository.class).forEach(repositoryClass -> {
             // Check if the class implements CrudRepository
@@ -168,11 +156,29 @@ public class DependencyContainer {
                 throw new RuntimeException("Unable to determine generic type for CrudRepository in class: " + repositoryClass.getName());
             }
 
-            System.out.println("Registered repository: " + repositoryClass.getName() + " with entity class: " + entityClass.getName());
             // Register the repository and its entity type
             RepositoryInvocationHandler<?, ?> proxy = repositoryContainer.registerRepository(repositoryClass, entityClass, this);
             this.dependencies.put(repositoryClass, proxy.create());
         });
+        database.initializeEntityMetadata(this);
+
+        annotationHandlerRegistry.getHandlers(RegistryOrder.REPOSITORIES).forEach(annotationHandler -> {
+            Class<? extends Annotation> find = annotationHandler.getAnnotation();
+            reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
+                annotationHandler.handle(aClass, this);
+            });
+        });
+    }
+
+    public Object mapEntity(Object entityInstance, Map<String, Object> resultSet) {
+        try {
+            for (Field field : entityInstance.getClass().getDeclaredFields()) {
+                unsafe.putObject(entityInstance, unsafe.objectFieldOffset(field), resultSet.get(field.getName()));
+            }
+            return entityInstance;
+        } catch (Exception e) {
+            throw new RuntimeException("Unable to map entity", e);
+        }
     }
 
     private Class<?> getGenericTypeFromCrudRepository(Class<?> repositoryClass) {
@@ -240,8 +246,6 @@ public class DependencyContainer {
                 performTopologicalSort(component, dependencyGraph, visited, visiting, sortedComponents);
             }
         }
-
-        System.err.println("Load order: " + sortedComponents);
 
         return sortedComponents;
     }
