@@ -1,6 +1,7 @@
 package net.vortexdevelopment.vinject.di.registry;
 
 import net.vortexdevelopment.vinject.di.DependencyContainer;
+import org.jetbrains.annotations.Nullable;
 import sun.misc.Unsafe;
 
 import java.lang.annotation.Annotation;
@@ -12,5 +13,5 @@ public abstract class AnnotationHandler {
 
     public abstract Class<? extends Annotation> getAnnotation();
 
-    public abstract void handle(Class<?> clazz, DependencyContainer dependencyContainer);
+    public abstract void handle(Class<?> clazz, @Nullable Object instance, DependencyContainer dependencyContainer);
 }

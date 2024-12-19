@@ -108,7 +108,7 @@ public class DependencyContainer {
         annotationHandlerRegistry.getHandlers(RegistryOrder.FIRST).forEach(annotationHandler -> {
             Class<? extends Annotation> find = annotationHandler.getAnnotation();
             reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
-                annotationHandler.handle(aClass, this);
+                annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
         });
 
@@ -118,7 +118,7 @@ public class DependencyContainer {
         annotationHandlerRegistry.getHandlers(RegistryOrder.SERVICES).forEach(annotationHandler -> {
             Class<? extends Annotation> find = annotationHandler.getAnnotation();
             reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
-                annotationHandler.handle(aClass, this);
+                annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
         });
 
@@ -129,7 +129,7 @@ public class DependencyContainer {
         annotationHandlerRegistry.getHandlers(RegistryOrder.COMPONENTS).forEach(annotationHandler -> {
             Class<? extends Annotation> find = annotationHandler.getAnnotation();
             reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
-                annotationHandler.handle(aClass, this);
+                annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
         });
 
@@ -139,7 +139,7 @@ public class DependencyContainer {
         annotationHandlerRegistry.getHandlers(RegistryOrder.ENTITIES).forEach(annotationHandler -> {
             Class<? extends Annotation> find = annotationHandler.getAnnotation();
             reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
-                annotationHandler.handle(aClass, this);
+                annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
         });
 
@@ -165,7 +165,7 @@ public class DependencyContainer {
         annotationHandlerRegistry.getHandlers(RegistryOrder.REPOSITORIES).forEach(annotationHandler -> {
             Class<? extends Annotation> find = annotationHandler.getAnnotation();
             reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
-                annotationHandler.handle(aClass, this);
+                annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
         });
     }
