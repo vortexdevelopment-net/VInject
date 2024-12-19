@@ -51,6 +51,43 @@
                         </configuration> -->
                     </execution>
                 </executions>
+                <configuration>
+                    <minimizeJar>true</minimizeJar>
+                    <filters>
+                        <filter>
+                            <artifact>*:*</artifact>
+                            <excludes>
+                                <exclude>META-INF/*.SF</exclude>
+                                <exclude>META-INF/*.DSA</exclude>
+                                <exclude>META-INF/*.RSA</exclude>
+                            </excludes>
+                        </filter>
+                        <filter>
+                            <artifact>net.vortexdevelopment.vinject:VInject</artifact>
+                            <includes>
+                                <include>**</include>
+                            </includes>
+                        </filter>
+                    </filters>
+                    <relocations>
+                        <relocation>
+                            <pattern>org.reflections</pattern>
+                            <shadedPattern>net.vortexdevelopment.vinject.libs.reflections</shadedPattern>
+                        </relocation>
+                        <relocation>
+                            <pattern>com.zaxxer.hikari</pattern>
+                            <shadedPattern>net.vortexdevelopment.vinject.libs.hikari</shadedPattern>
+                        </relocation>
+                        <relocation>
+                            <pattern>com.mysql.cj</pattern>
+                            <shadedPattern>net.vortexdevelopment.vinject.libs.mysql</shadedPattern>
+                        </relocation>
+                        <relocation>
+                            <pattern>org.mariadb.jdbc</pattern>
+                            <shadedPattern>net.vortexdevelopment.vinject.libs.mariadb</shadedPattern>
+                        </relocation>
+                    </relocations>
+                </configuration>
             </plugin>
         </plugins>
         <resources>
