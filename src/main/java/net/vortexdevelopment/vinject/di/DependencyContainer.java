@@ -358,6 +358,12 @@ public class DependencyContainer {
                 bean.setAccessible(true);
                 Object beanInstance = bean.invoke(instance); //Invoke the method and get an instance of the class
                 dependencies.put(bean.getReturnType(), beanInstance); //Add the instance to the dependencies map
+
+                Bean annotation = bean.getAnnotation(Bean.class);
+                //Check if it has more classes to register as
+                for (Class<?> register : annotation.registerSubclasses()) {
+                    dependencies.put(register, beanInstance);
+                }
             }
         } catch (Exception e) {
             throw new RuntimeException("Unable to register beans", e);
