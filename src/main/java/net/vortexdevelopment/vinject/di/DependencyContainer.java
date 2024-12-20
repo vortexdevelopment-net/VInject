@@ -339,9 +339,7 @@ public class DependencyContainer {
         try {
             //Check if we need to inject dependencies into the constructor
             if (!hasDefaultConstructor(clazz)) {
-                System.err.println("Creating new instance of class: " + clazz.getName() + " with constructor injection");
                 Class<?>[] parameterTypes = clazz.getDeclaredConstructors()[0].getParameterTypes();
-                System.err.println("Constructor parameter types: " + Arrays.toString(parameterTypes));
                 Object[] parameters = new Object[parameterTypes.length];
                 for (int i = 0; i < parameterTypes.length; i++) {
                     parameters[i] = dependencies.get(parameterTypes[i]);
@@ -349,12 +347,14 @@ public class DependencyContainer {
                         throw new RuntimeException("Dependency not found for constructor parameter: " + parameterTypes[i].getName() + " in class: " + clazz.getName() + ". Forget to add Bean?");
                     }
                 }
+                injectStatic(clazz);
                 T instance = (T) clazz.getDeclaredConstructors()[0].newInstance(parameters);
                 inject(instance);
                 return instance;
             }
             Constructor<T> constructor = clazz.getDeclaredConstructor();
             constructor.setAccessible(true);
+            injectStatic(clazz);
             T instance = constructor.newInstance();
             inject(instance);
             return instance;
@@ -375,7 +375,7 @@ public class DependencyContainer {
     public void inject(Object object) {
         //Inject object where @Inject annotation is present
         for (Field field : object.getClass().getDeclaredFields()) {
-            if (field.isAnnotationPresent(Inject.class)) {
+            if (field.isAnnotationPresent(Inject.class) && !Modifier.isStatic(field.getModifiers())) {
                 Object dependency = dependencies.get(field.getType());
                 if (dependency == null) {
                     //Check if the object is a @Service class
@@ -386,11 +386,27 @@ public class DependencyContainer {
                     }
                 }
                 try {
-                    boolean isStatic = Modifier.isStatic(field.getModifiers());
-                    long offset = isStatic ? unsafe.staticFieldOffset(field) : unsafe.objectFieldOffset(field);
-                    unsafe.putObject(isStatic ? object.getClass() : object, offset, dependency);
+                    unsafe.putObject(object, unsafe.objectFieldOffset(field), dependency);
                 } catch (Exception e) {
                     throw new RuntimeException("Unable to inject dependency: " + field.getType() + " " + field.getName() + " in class: " + object.getClass().getName(), e);
+                }
+            }
+        }
+    }
+
+    public void injectStatic(Class<?> target) {
+        //inject static fields before the class is loaded so injected fields are available in static blocks
+        for (Field field : target.getDeclaredFields()) {
+            if (field.isAnnotationPresent(Inject.class) && Modifier.isStatic(field.getModifiers())) {
+                Object dependency = dependencies.get(field.getType());
+                if (dependency == null) {
+                    throw new RuntimeException("Dependency not found for field: " + field.getType() +" " + field.getName() + " in class: " + target.getName() + ". Forget to add Bean?");
+                }
+                try {
+                    long offset = unsafe.staticFieldOffset(field);
+                    unsafe.putObject(target, offset, dependency);
+                } catch (Exception e) {
+                    throw new RuntimeException("Unable to inject dependency: " + field.getType() + " " + field.getName() + " in class: " + target.getName(), e);
                 }
             }
         }
