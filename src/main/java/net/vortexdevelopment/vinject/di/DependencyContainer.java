@@ -1,5 +1,6 @@
 package net.vortexdevelopment.vinject.di;
 
+import lombok.Getter;
 import net.vortexdevelopment.vinject.annotation.Bean;
 import net.vortexdevelopment.vinject.annotation.Component;
 import net.vortexdevelopment.vinject.annotation.Inject;
@@ -15,6 +16,8 @@ import net.vortexdevelopment.vinject.database.repository.RepositoryInvocationHan
 import net.vortexdevelopment.vinject.di.registry.AnnotationHandler;
 import net.vortexdevelopment.vinject.di.registry.AnnotationHandlerRegistry;
 import net.vortexdevelopment.vinject.di.registry.RegistryOrder;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.reflections.Configuration;
 import org.reflections.ReflectionUtils;
 import org.reflections.Reflections;
@@ -40,7 +43,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
-public class DependencyContainer {
+public class DependencyContainer implements DependencyRepository {
 
     private final Map<Class<?>, Object> dependencies;
     private final Unsafe unsafe;
@@ -48,6 +51,9 @@ public class DependencyContainer {
     private final Object rootInstance;
     private final Set<Class<?>> entities;
     private AnnotationHandlerRegistry annotationHandlerRegistry;
+
+    @Getter
+    private static DependencyContainer instance;
 
     public DependencyContainer(Root rootAnnotation, Class<?> rootClass, Object rootInstance, Database database, RepositoryContainer repositoryContainer) {
         dependencies = new ConcurrentHashMap<>();
@@ -173,6 +179,9 @@ public class DependencyContainer {
                 annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
         });
+
+        //Set the instance of the container
+        instance = this;
     }
 
     private void injectRoot(Object rootInstance) {
@@ -372,7 +381,13 @@ public class DependencyContainer {
         }
     }
 
-    public void inject(Object object) {
+    @Override
+    public <T> @Nullable T getDependency(Class<T> dependency) {
+        return (T) dependencies.get(dependency);
+    }
+
+    @Override
+    public void inject(@NotNull Object object) {
         //Inject object where @Inject annotation is present
         for (Field field : object.getClass().getDeclaredFields()) {
             if (field.isAnnotationPresent(Inject.class) && !Modifier.isStatic(field.getModifiers())) {
@@ -394,7 +409,13 @@ public class DependencyContainer {
         }
     }
 
-    public void injectStatic(Class<?> target) {
+    @Override
+    public void addBean(@NotNull Class<?> dependency, @NotNull Object instance) {
+        dependencies.put(dependency, instance);
+    }
+
+    @Override
+    public void injectStatic(@NotNull Class<?> target) {
         //inject static fields before the class is loaded so injected fields are available in static blocks
         for (Field field : target.getDeclaredFields()) {
             if (field.isAnnotationPresent(Inject.class) && Modifier.isStatic(field.getModifiers())) {
@@ -479,4 +500,5 @@ public class DependencyContainer {
     public Class[] getAllEntities() {
         return entities.toArray(new Class[0]);
     }
+
 }

@@ -2,7 +2,7 @@ package net.vortexdevelopment.vinject.di.registry;
 
 /**
  * The order in which the registry should be registered.
- *
+ * <p>
  * Build in register order:
  * RootClass - Nothing can be registered before this
  * Services - Services should be registered before components
