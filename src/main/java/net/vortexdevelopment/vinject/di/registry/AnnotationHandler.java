@@ -11,7 +11,5 @@ public abstract class AnnotationHandler {
     public AnnotationHandler() {
     }
 
-    public abstract Class<? extends Annotation> getAnnotation();
-
     public abstract void handle(Class<?> clazz, @Nullable Object instance, DependencyContainer dependencyContainer);
 }

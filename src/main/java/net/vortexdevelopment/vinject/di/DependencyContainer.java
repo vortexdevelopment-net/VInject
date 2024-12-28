@@ -106,7 +106,7 @@ public class DependencyContainer implements DependencyRepository {
             //Check if extends AnnotationHandler class
             if (aClass.getSuperclass().equals(AnnotationHandler.class)) {
                 AnnotationHandler instance = (AnnotationHandler) newInstance(aClass);
-                Class<? extends Annotation> annotation = instance.getAnnotation();
+                Class<? extends Annotation> annotation = getAnnotationFromHandler(instance);
                 if (annotation == null) {
                     throw new RuntimeException("Annotation not found for class: " + aClass + ". Make sure to return a valid annotation in getAnnotation method");
                 }
@@ -117,7 +117,7 @@ public class DependencyContainer implements DependencyRepository {
         });
 
         annotationHandlerRegistry.getHandlers(RegistryOrder.FIRST).forEach(annotationHandler -> {
-            Class<? extends Annotation> find = annotationHandler.getAnnotation();
+            Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
             reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
                 annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
@@ -127,7 +127,7 @@ public class DependencyContainer implements DependencyRepository {
         reflections.getTypesAnnotatedWith(Service.class).forEach(this::registerBeans);
 
         annotationHandlerRegistry.getHandlers(RegistryOrder.SERVICES).forEach(annotationHandler -> {
-            Class<? extends Annotation> find = annotationHandler.getAnnotation();
+            Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
             reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
                 annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
@@ -138,7 +138,7 @@ public class DependencyContainer implements DependencyRepository {
         createLoadingOrder(reflections.getTypesAnnotatedWith(Component.class)).forEach(this::registerComponent);
 
         annotationHandlerRegistry.getHandlers(RegistryOrder.COMPONENTS).forEach(annotationHandler -> {
-            Class<? extends Annotation> find = annotationHandler.getAnnotation();
+            Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
             reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
                 annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
@@ -148,7 +148,7 @@ public class DependencyContainer implements DependencyRepository {
         entities.addAll(reflections.getTypesAnnotatedWith(Entity.class));
 
         annotationHandlerRegistry.getHandlers(RegistryOrder.ENTITIES).forEach(annotationHandler -> {
-            Class<? extends Annotation> find = annotationHandler.getAnnotation();
+            Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
             reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
                 annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
@@ -174,7 +174,7 @@ public class DependencyContainer implements DependencyRepository {
         database.initializeEntityMetadata(this);
 
         annotationHandlerRegistry.getHandlers(RegistryOrder.REPOSITORIES).forEach(annotationHandler -> {
-            Class<? extends Annotation> find = annotationHandler.getAnnotation();
+            Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
             reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
                 annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
@@ -182,6 +182,12 @@ public class DependencyContainer implements DependencyRepository {
 
         //Set the instance of the container
         instance = this;
+    }
+
+    private Class<? extends Annotation> getAnnotationFromHandler(AnnotationHandler handler) {
+        //get the @Registry annotation from the handler and get the annotation
+        Registry annotation = handler.getClass().getAnnotation(Registry.class);
+        return annotation.annotation();
     }
 
     private void injectRoot(Object rootInstance) {

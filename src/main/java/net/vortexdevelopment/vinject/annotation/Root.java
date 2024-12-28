@@ -1,5 +1,6 @@
 package net.vortexdevelopment.vinject.annotation;
 
+import java.lang.annotation.Annotation;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -17,6 +18,13 @@ public @interface Root {
     String packageName();
 
     /**
+     * Should a new instance created of the root class?
+     * <p>It requires a default constructor to be present
+     * @return true if a new instance should be created
+     */
+    boolean createInstance() default true;
+
+    /**
      * Packages to ignore when scanning for classes in the root package
      * @return ignored packages
      */
@@ -29,4 +37,11 @@ public @interface Root {
      * @return included packages
      */
     String[] includedPackages() default {};
+
+    /**
+     * Used for the Intellij VInject Framework plugin to mark custom annotations as components
+     * <p>Used when a @Registry is used in a dependency project which will be available at runtime</p>
+     * @return The custom annotations to mark as components
+     */
+    Class<? extends Annotation>[] componentAnnotations() default {};
 }
