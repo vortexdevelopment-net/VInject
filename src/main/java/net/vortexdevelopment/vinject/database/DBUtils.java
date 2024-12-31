@@ -22,34 +22,49 @@ public class DBUtils {
     public static Map<String, String> getExistingColumns(Connection connection, String tableName) throws Exception {
         Map<String, String> columns = new HashMap<>();
 
-        // Query the INFORMATION_SCHEMA for more detailed column info
-        String sql = "SELECT COLUMN_NAME, COLUMN_TYPE, COLUMN_DEFAULT, EXTRA " +
+        // Query the INFORMATION_SCHEMA for detailed column info
+        String sql = "SELECT COLUMN_NAME, COLUMN_TYPE, COLUMN_DEFAULT, EXTRA, IS_NULLABLE " +
                 "FROM INFORMATION_SCHEMA.COLUMNS " +
-                "WHERE TABLE_NAME = '" + tableName + "' AND TABLE_SCHEMA = DATABASE()";
+                "WHERE TABLE_NAME = ? AND TABLE_SCHEMA = DATABASE()";
 
-        try (Statement stmt = connection.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
-            while (rs.next()) {
-                String columnName = rs.getString("COLUMN_NAME").toLowerCase();
-                String columnType = rs.getString("COLUMN_TYPE"); // Includes type + length (e.g., VARCHAR(255), DECIMAL(10,2))
-                String columnDefault = rs.getString("COLUMN_DEFAULT"); // Default value (e.g., CURRENT_TIMESTAMP)
-                String extra = rs.getString("EXTRA").toUpperCase(Locale.ENGLISH); // Includes additional info like ON UPDATE CURRENT_TIMESTAMP
+        try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+            stmt.setString(1, tableName);
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    String columnName = rs.getString("COLUMN_NAME").toLowerCase();
+                    String columnType = rs.getString("COLUMN_TYPE"); // Includes type + length (e.g., VARCHAR(255), DECIMAL(10,2))
+                    String columnDefault = rs.getString("COLUMN_DEFAULT"); // Default value (e.g., CURRENT_TIMESTAMP)
+                    String extra = rs.getString("EXTRA").toUpperCase(Locale.ENGLISH); // Includes additional info like ON UPDATE CURRENT_TIMESTAMP
+                    String isNullable = rs.getString("IS_NULLABLE"); // "YES" or "NO"
 
-                // Build the full type definition
-                StringBuilder typeDefinition = new StringBuilder(columnType.toUpperCase(Locale.ENGLISH));
-                if (columnDefault != null) {
-                    typeDefinition.append(" DEFAULT ").append(columnDefault);
+                    // Build the full type definition
+                    StringBuilder typeDefinition = new StringBuilder(columnType.toUpperCase(Locale.ENGLISH));
+
+                    // Check if the column is nullable
+                    if ("NO".equalsIgnoreCase(isNullable)) {
+                        typeDefinition.append(" NOT NULL");
+                    } else {
+                        typeDefinition.append(" NULL");
+                    }
+
+                    // Add default value if present
+                    if (columnDefault != null) {
+                        typeDefinition.append(" DEFAULT ").append(columnDefault);
+                    }
+
+                    // Add extra info if present
+                    if (!extra.isEmpty()) {
+                        typeDefinition.append(" ").append(extra);
+                    }
+
+                    // Add to the map
+                    columns.put(columnName, typeDefinition.toString());
                 }
-                if (extra != null && !extra.isEmpty()) {
-                    typeDefinition.append(" ").append(extra);
-                }
-
-                // Add to the map
-                columns.put(columnName, typeDefinition.toString());
             }
         }
         return columns;
     }
+
 
 
     /**

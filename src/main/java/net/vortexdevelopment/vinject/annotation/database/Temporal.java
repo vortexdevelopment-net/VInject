@@ -26,6 +26,12 @@ public @interface Temporal {
     boolean nullable() default true;
 
     /**
+     * If current_timestamp() should be used when the record is inserted.
+     * @return true if current_timestamp() should be used when the record is inserted, false otherwise.
+     */
+    boolean currentTimestampOnInsert() default true;
+
+    /**
      * If current_timestamp() should be used when the record is updated.
      * @return true if current_timestamp() should be used when the record is updated, false otherwise.
      */

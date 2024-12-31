@@ -22,10 +22,12 @@ public class EntityMetadata {
         this.clazz = clazz;
     }
 
-    public void resolveFields(Map<Class<?>, EntityMetadata> entityMetadataMap) {
+    public void resolveFields(Map<Class<?>, EntityMetadata> entityMetadataMap) throws Exception {
         //Debug print entityMetadataMap
 
+        Object entityInstance = clazz.getDeclaredConstructor().newInstance();
         for (Field field : clazz.getDeclaredFields()) {
+            field.setAccessible(true);
             if (field.isAnnotationPresent(Column.class) || field.isAnnotationPresent(Temporal.class)) {
                 Column column = field.getAnnotation(Column.class);
                 Temporal temporal = field.getAnnotation(Temporal.class);
@@ -53,7 +55,7 @@ public class EntityMetadata {
                             if (f.isAnnotationPresent(Column.class)) {
                                 Column c = f.getAnnotation(Column.class);
                                 if (c.primaryKey()) {
-                                    pkField = new FieldMetadata(f.getName(), c.name().isEmpty() ? f.getName() : c.name(), SQLDataTypeMapper.getSQLType(f.getType(), c, null), true, c.nullable(), c.unique(), c.autoIncrement(), null);
+                                    pkField = new FieldMetadata(f.getName(), c.name().isEmpty() ? f.getName() : c.name(), SQLDataTypeMapper.getSQLType(f.getType(), c, null, null), true, c.nullable(), c.unique(), c.autoIncrement(), null, f, null);
                                     break;
                                 }
                             }
@@ -67,7 +69,7 @@ public class EntityMetadata {
                     foreignKey = new ForeignKeyMetadata(relatedMetadata.getTableName(), pkField.getColumnName());
                 } else {
                     // Regular column
-                    sqlType = SQLDataTypeMapper.getSQLType(field.getType(), column, temporal);
+                    sqlType = SQLDataTypeMapper.getSQLType(field.getType(), column, temporal, field.get(entityInstance));
                 }
 
                 FieldMetadata fieldMeta = new FieldMetadata(
@@ -78,7 +80,9 @@ public class EntityMetadata {
                         isNullable,
                         isUnique,
                         isAutoIncrement,
-                        foreignKey
+                        foreignKey,
+                        field,
+                        field.get(entityInstance)
                 );
 
                 fields.add(fieldMeta);

@@ -5,15 +5,55 @@ import net.vortexdevelopment.vinject.annotation.database.Temporal;
 
 public class SQLDataTypeMapper {
 
-    public static String getSQLType(Class<?> fieldType, Column column, Temporal temporal) {
+    private static String getTemporalModifiers(Temporal temporal) {
+        StringBuilder sb = new StringBuilder();
+        if (!temporal.nullable()) {
+            sb.append(" NOT NULL");
+        } else {
+            sb.append(" NULL");
+        }
+        if (temporal.nullDefault()) {
+            sb.append(" DEFAULT NULL");
+        } else if (temporal.currentTimestampOnInsert()) {
+            sb.append(" DEFAULT CURRENT_TIMESTAMP()");
+        }
+        if (temporal.currentTimestampOnUpdate()) {
+            sb.append(" ON UPDATE CURRENT_TIMESTAMP()");
+        }
+        return sb.toString();
+    }
+
+    public static String getColumnModifiers(Column column, Object defaultValue, boolean isEnum) {
+        StringBuilder sb = new StringBuilder();
+        if (!column.nullable() || isEnum || column.autoIncrement()) {
+            sb.append(" NOT NULL");
+        } else {
+            sb.append(" NULL");
+        }
+
+        //Default value
+        if (defaultValue != null && !column.autoIncrement()) {
+            sb.append(" DEFAULT '").append(defaultValue).append("'");
+        } else if (defaultValue == null && !column.autoIncrement()) {
+            sb.append(" DEFAULT NULL");
+        }
+
+        if (column.unique()) {
+            sb.append(" UNIQUE");
+        }
+        if (column.autoIncrement()) {
+            sb.append(" AUTO_INCREMENT");
+        }
+        return sb.toString();
+    }
+
+    public static String getSQLType(Class<?> fieldType, Column column, Temporal temporal, Object defaultValue) {
         if (temporal != null) {
             // Handle temporal types if needed
             return switch (temporal.value()) {
-                case DATE -> "DATE" + (temporal.nullable() ? "" : " NOT NULL");
-                case TIME -> "TIME" + (temporal.nullable() ? "" : " NOT NULL");
-                case TIMESTAMP -> "TIMESTAMP"
-                        + (temporal.nullable() ? " DEFAULT " + (temporal.nullDefault() ? "NULL" : "current_timestamp()") : " NOT NULL DEFAULT current_timestamp()")
-                        + (temporal.currentTimestampOnUpdate() ? " ON UPDATE current_timestamp()" : "");
+                case DATE -> "DATE" + getTemporalModifiers(temporal);
+                case TIME -> "TIME" + getTemporalModifiers(temporal);
+                case TIMESTAMP -> "TIMESTAMP" + getTemporalModifiers(temporal);
                 default -> throw new UnsupportedOperationException("Unsupported Temporal type");
             };
         }
@@ -26,8 +66,22 @@ public class SQLDataTypeMapper {
         boolean autoIncrement = column.autoIncrement();
 
         //When a column auto increment it cannot be nullable
-        String nullableConstraint = column.nullable() && !autoIncrement && !primaryKey ? " DEFAULT NULL" : "";
+        //String nullableConstraint = column.nullable() && !autoIncrement && !primaryKey ? " DEFAULT NULL" : "";
+        String nullableConstraint = getColumnModifiers(column, defaultValue, fieldType.isEnum()); //defaultValue != null && !autoIncrement && !primaryKey ? " NOT NULL DEFAULT '" + defaultValue+"'" : (column.nullable() && !autoIncrement && !primaryKey ? " NULL" : " NOT NULL");
 
+        // Handle enum types
+        if (fieldType.isEnum()) {
+            StringBuilder enumValues = new StringBuilder();
+            Object[] constants = fieldType.getEnumConstants();
+            for (Object constant : constants) {
+                enumValues.append("'").append(constant.toString()).append("',");
+            }
+            // Remove the trailing comma
+            if (!enumValues.isEmpty()) {
+                enumValues.deleteCharAt(enumValues.length() - 1);
+            }
+            return "ENUM(" + enumValues + ")" + nullableConstraint;
+        }
 
         return switch (fieldType.getSimpleName()) {
             case "String" -> "VARCHAR(" + (column.length() != -1 ? column.length() : 255) + ")" + nullableConstraint;
