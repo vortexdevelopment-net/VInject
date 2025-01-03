@@ -43,6 +43,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -131,6 +132,8 @@ public class EntityTransformer extends AbstractMojo {
         // Remove all existing no-arg <init> methods to avoid duplicates  (CHANGED)
         removeNoArgConstructors(classGen);
 
+        int fieldCount = classGen.getFields().length;
+
         // Clear all existing methods
         Method[] methods = classGen.getMethods();
         for (Method method : methods) {
@@ -172,6 +175,9 @@ public class EntityTransformer extends AbstractMojo {
 
         // Return
         constructorInstructions.append(InstructionFactory.createReturn(Type.VOID));
+
+        //addAllArgsConstructor(javaClass, classGen, constantPool);
+        addAllArgsConstructor(javaClass, classGen, constantPool);
 
         // Create and add constructor
         MethodGen constructor = new MethodGen(
@@ -322,8 +328,6 @@ public class EntityTransformer extends AbstractMojo {
         isFieldModifiedMethod.getInstructionList().dispose();
 
 
-
-
         // Write the modified class to byte array
         try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
             classGen.getJavaClass().dump(outputStream);
@@ -346,5 +350,72 @@ public class EntityTransformer extends AbstractMojo {
         for (Method m : toRemove) {
             classGen.removeMethod(m);
         }
+    }
+
+    private void addAllArgsConstructor(JavaClass javaClass, ClassGen classGen, ConstantPoolGen constantPool) {
+        InstructionList constructorInstructions = new InstructionList();
+
+        // Gather all instance fields
+        Field[] fields = classGen.getFields();
+        List<Field> instanceFields = Arrays.stream(fields)
+                .filter(field -> !field.isStatic() && !field.isTransient())
+                .toList();
+
+        //Skip the changedFields field (Init in the constructor like the no-arg constructor)
+        // Generate constructor parameters and assign them
+        Type[] parameterTypes = new Type[instanceFields.size()-1];
+        String[] parameterNames = new String[instanceFields.size()-1];
+
+        for (int i = 0; i < instanceFields.size()-1; i++) {
+            Field field = instanceFields.get(i);
+            parameterTypes[i] = field.getType();
+            parameterNames[i] = field.getName();
+
+            // Assign the parameter to the field
+            constructorInstructions.append(new ALOAD(0)); // this
+            constructorInstructions.append(new ALOAD(i + 1)); // parameter
+            int fieldRef = constantPool.addFieldref(classGen.getClassName(), field.getName(), field.getSignature());
+            constructorInstructions.append(new PUTFIELD(fieldRef)); // this.field = parameter;
+        }
+
+        // Initialize "modifiedFields" using ConcurrentHashMap.newKeySet()
+        constructorInstructions.append(new ALOAD(0)); // this
+        int newKeySetRef = constantPool.addMethodref(
+                "java.util.concurrent.ConcurrentHashMap",
+                "newKeySet",
+                "()Ljava/util/Set;"
+        );
+        constructorInstructions.append(new INVOKESTATIC(newKeySetRef)); // Call static method
+        int modifiedFieldRef = constantPool.addFieldref(
+                classGen.getClassName(),
+                "modifiedFields",
+                "Ljava/util/Set;"
+        );
+        constructorInstructions.append(new PUTFIELD(modifiedFieldRef)); // this.modifiedFields = ConcurrentHashMap.newKeySet()
+
+
+
+        //Call super()
+        constructorInstructions.append(new ALOAD(0));
+        int superInit = constantPool.addMethodref(classGen.getSuperclassName(), "<init>", "()V");
+        constructorInstructions.append(new INVOKESPECIAL(superInit));
+
+        // Return
+        constructorInstructions.append(InstructionFactory.createReturn(Type.VOID));
+
+        // Create and add constructor
+        MethodGen constructor = new MethodGen(
+                Constants.ACC_PUBLIC,
+                Type.VOID,
+                parameterTypes,
+                parameterNames,
+                "<init>",
+                classGen.getClassName(),
+                constructorInstructions,
+                constantPool
+        );
+        constructor.setMaxStack();
+        classGen.addMethod(constructor.getMethod());
+        constructorInstructions.dispose();
     }
 }

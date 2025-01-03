@@ -457,6 +457,12 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
             Field field = entityMetadata.getField(fieldName);
             Object value = field.get(entity);
 
+            //Check if the field is annotated with @Temporal
+            Temporal temporal = field.getAnnotation(Temporal.class);
+            if (temporal != null) {
+                value = new Timestamp((long)value);
+            }
+
             setClauses.add(columnName + " = ?");
             values.add(value);
         }
