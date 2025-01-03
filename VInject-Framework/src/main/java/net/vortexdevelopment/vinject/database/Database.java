@@ -37,6 +37,10 @@ public class Database implements DatabaseConnector {
         return TABLE_PREFIX;
     }
 
+    public static void setTablePrefix(String tablePrefix) {
+        TABLE_PREFIX = tablePrefix;
+    }
+
     public void initializeEntityMetadata(DependencyContainer dependencyContainer) {
         Class<?>[] classes = dependencyContainer.getAllEntities();
         for (Class<?> clazz : classes) {
@@ -68,7 +72,6 @@ public class Database implements DatabaseConnector {
                     if (!DBUtils.tableExists(connection, "plugincore", metadata.getTableName())) {
                         // Table doesn't exist; create it
                         createTable(connection, metadata);
-                        System.err.println("Table does not exist: " + metadata.getTableName());
                     } else {
                         // Table exists; synchronize columns and relationships
                         synchronizeTable(connection, metadata);

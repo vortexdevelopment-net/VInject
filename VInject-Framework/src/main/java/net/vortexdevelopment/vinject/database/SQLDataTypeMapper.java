@@ -15,17 +15,17 @@ public class SQLDataTypeMapper {
         if (temporal.nullDefault()) {
             sb.append(" DEFAULT NULL");
         } else if (temporal.currentTimestampOnInsert()) {
-            sb.append(" DEFAULT CURRENT_TIMESTAMP()");
+            sb.append(" DEFAULT CURRENT_TIMESTAMP(3)");
         }
         if (temporal.currentTimestampOnUpdate()) {
-            sb.append(" ON UPDATE CURRENT_TIMESTAMP()");
+            sb.append(" ON UPDATE CURRENT_TIMESTAMP(3)");
         }
         return sb.toString();
     }
 
     public static String getColumnModifiers(Column column, Object defaultValue, boolean isEnum) {
         StringBuilder sb = new StringBuilder();
-        if (!column.nullable() || isEnum || column.autoIncrement()) {
+        if (!column.nullable() || column.autoIncrement()) {
             sb.append(" NOT NULL");
         } else {
             sb.append(" NULL");
@@ -51,9 +51,9 @@ public class SQLDataTypeMapper {
         if (temporal != null) {
             // Handle temporal types if needed
             return switch (temporal.value()) {
-                case DATE -> "DATE" + getTemporalModifiers(temporal);
-                case TIME -> "TIME" + getTemporalModifiers(temporal);
-                case TIMESTAMP -> "TIMESTAMP" + getTemporalModifiers(temporal);
+                case DATE -> "DATE(3)" + getTemporalModifiers(temporal);
+                case TIME -> "TIME(3)" + getTemporalModifiers(temporal);
+                case TIMESTAMP -> "TIMESTAMP(3)" + getTemporalModifiers(temporal);
                 default -> throw new UnsupportedOperationException("Unsupported Temporal type");
             };
         }

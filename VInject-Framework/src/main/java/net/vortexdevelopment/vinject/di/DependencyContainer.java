@@ -54,7 +54,6 @@ public class DependencyContainer implements DependencyRepository {
 
     @Getter
     private static DependencyContainer instance;
-
     public DependencyContainer(Root rootAnnotation, Class<?> rootClass, Object rootInstance, Database database, RepositoryContainer repositoryContainer) {
         dependencies = new ConcurrentHashMap<>();
         entities = ConcurrentHashMap.newKeySet();
@@ -133,17 +132,6 @@ public class DependencyContainer implements DependencyRepository {
             });
         });
 
-        //Register Components
-        //Need to create a loading order to avoid circular dependencies and inject issues
-        createLoadingOrder(reflections.getTypesAnnotatedWith(Component.class)).forEach(this::registerComponent);
-
-        annotationHandlerRegistry.getHandlers(RegistryOrder.COMPONENTS).forEach(annotationHandler -> {
-            Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
-            reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
-                annotationHandler.handle(aClass,  dependencies.get(aClass), this);
-            });
-        });
-
         //Get all entities
         entities.addAll(reflections.getTypesAnnotatedWith(Entity.class));
 
@@ -170,10 +158,23 @@ public class DependencyContainer implements DependencyRepository {
             // Register the repository and its entity type
             RepositoryInvocationHandler<?, ?> proxy = repositoryContainer.registerRepository(repositoryClass, entityClass, this);
             this.dependencies.put(repositoryClass, proxy.create());
+            System.out.println("Registered repository: " + repositoryClass.getName());
         });
+        //Run database initialization (Create, Update tables)
         database.initializeEntityMetadata(this);
 
         annotationHandlerRegistry.getHandlers(RegistryOrder.REPOSITORIES).forEach(annotationHandler -> {
+            Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
+            reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
+                annotationHandler.handle(aClass,  dependencies.get(aClass), this);
+            });
+        });
+
+        //Register Components
+        //Need to create a loading order to avoid circular dependencies and inject issues
+        createLoadingOrder(reflections.getTypesAnnotatedWith(Component.class)).forEach(this::registerComponent);
+
+        annotationHandlerRegistry.getHandlers(RegistryOrder.COMPONENTS).forEach(annotationHandler -> {
             Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
             reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
                 annotationHandler.handle(aClass,  dependencies.get(aClass), this);
@@ -245,7 +246,7 @@ public class DependencyContainer implements DependencyRepository {
                 Class<?>[] parameterTypes = component.getDeclaredConstructors()[0].getParameterTypes();
                 for (Class<?> parameter : parameterTypes) {
                     //Check if a parameter is a component, service or root class
-                    if (parameter.isAnnotationPresent(Component.class) || parameter.isAnnotationPresent(Service.class) || parameter.equals(this.rootClass)) {
+                    if (parameter.isAnnotationPresent(Component.class) || parameter.isAnnotationPresent(Service.class) || parameter.equals(this.rootClass) || parameter.isAnnotationPresent(Repository.class)) {
                         dependencies.add(parameter);
                     } else {
                         //if the parameter type does not have a component annotation in its class declaration, something is providing it, skip it
@@ -267,7 +268,7 @@ public class DependencyContainer implements DependencyRepository {
                     Class<?> fieldType = field.getType();
                     // Skip fields annotated as Services since they are preloaded
                     // Skip plugin main class, it will always present in the container when component injection is performed
-                    if (!fieldType.isAnnotationPresent(Service.class) && !fieldType.equals(this.rootClass)) {
+                    if (!fieldType.isAnnotationPresent(Service.class) && !fieldType.equals(this.rootClass) && !fieldType.isAnnotationPresent(Repository.class)) {
                         //if the field type does not have a component annotation in its class declaration, something is providing it, skip it
                         if (!fieldType.isAnnotationPresent(Component.class) || fieldType.isInterface()) {
                             Class<?> providingClass = getProvidingClass(components, fieldType);
@@ -286,7 +287,6 @@ public class DependencyContainer implements DependencyRepository {
 
             dependencyGraph.put(component, dependencies);
         }
-
         // Perform topological sort
         return performTopologicalSort(dependencyGraph);
     }
@@ -351,6 +351,10 @@ public class DependencyContainer implements DependencyRepository {
     }
 
     public <T> T newInstance(Class<T> clazz) {
+        Object component = dependencies.get(clazz);
+        if (component != null) {
+            return (T) component;
+        }
         try {
             //Check if we need to inject dependencies into the constructor
             if (!hasDefaultConstructor(clazz)) {
@@ -365,6 +369,8 @@ public class DependencyContainer implements DependencyRepository {
                 injectStatic(clazz);
                 T instance = (T) clazz.getDeclaredConstructors()[0].newInstance(parameters);
                 inject(instance);
+                //Register the instance in the dependency container
+                dependencies.put(clazz, instance);
                 return instance;
             }
             Constructor<T> constructor = clazz.getDeclaredConstructor();
@@ -372,6 +378,8 @@ public class DependencyContainer implements DependencyRepository {
             injectStatic(clazz);
             T instance = constructor.newInstance();
             inject(instance);
+            //Register the instance in the dependency container
+            dependencies.put(clazz, instance);
             return instance;
         } catch (Exception e) {
             throw new RuntimeException("Unable to create new instance of class: " + clazz.getName(), e);
@@ -392,6 +400,7 @@ public class DependencyContainer implements DependencyRepository {
         return (T) dependencies.get(dependency);
     }
 
+    //TODO: Show error when a non static field is injected and used in the constructor
     @Override
     public void inject(@NotNull Object object) {
         //Inject object where @Inject annotation is present
@@ -403,7 +412,7 @@ public class DependencyContainer implements DependencyRepository {
                     if (object.getClass().isAnnotationPresent(Service.class)) {
                         throw new RuntimeException("Only @Root class can be injected to @Service classes! Class: " + object.getClass().getName());
                     } else {
-                        throw new RuntimeException("Dependency not found for field: " + field.getType() +" " + field.getName() + " in class: " + object.getClass().getName() + ". Forget to add Bean?");
+                        throw new RuntimeException("Dependency not found for field: " + field.getType() + " " + field.getName() + " in class: " + object.getClass().getName() + ". Forget to add Bean?");
                     }
                 }
                 try {
@@ -444,8 +453,8 @@ public class DependencyContainer implements DependencyRepository {
     }
 
     public void registerComponent(Class<?> clazz) {
-        if (clazz.isAnnotationPresent(Root.class)) {
-            //Do not register the root class, we already did it in the constructor
+        if (!clazz.isAnnotationPresent(Component.class)) {
+            //Do not register non component classes
             return;
         }
         Component component = clazz.getAnnotation(Component.class);

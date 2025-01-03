@@ -1,4 +1,0 @@
-name: PluginCore
-version: '1.0-SNAPSHOT'
-main: net.vortexdevelopment.vinject.PluginCore
-api-version: '1.21'

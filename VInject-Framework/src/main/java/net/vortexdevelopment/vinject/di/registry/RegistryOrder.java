@@ -22,11 +22,6 @@ public enum RegistryOrder {
     SERVICES,
 
     /**
-     * Registers after Components
-     */
-    COMPONENTS,
-
-    /**
      * Registers after Entities
      */
     ENTITIES,
@@ -34,5 +29,12 @@ public enum RegistryOrder {
     /**
      * Registers after Repositories
      */
-    REPOSITORIES;
+    REPOSITORIES,
+
+    /**
+     * Registers after Components
+     */
+    COMPONENTS;
+
+
 }
