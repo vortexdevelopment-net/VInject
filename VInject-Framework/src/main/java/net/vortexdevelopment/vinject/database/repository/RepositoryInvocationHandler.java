@@ -117,6 +117,10 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
             return handleFindByMethod(method, args, startTime);
         }
 
+        if (methodName.startsWith("findAllBy")) {
+            return handleFindAllByMethod(method, args, startTime);
+        }
+
         // Handle basic Object methods
         return handleObjectMethods(proxy, method, args);
     }
@@ -145,6 +149,73 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
 
         System.out.println("Query '" + methodName + "' took: " + (System.currentTimeMillis() - startTime) + "ms");
         return result;
+    }
+
+    /**
+     * Handles 'findAllByXxx' dynamic methods.
+     */
+    private Object handleFindAllByMethod(Method method, Object[] args, long startTime) throws Exception {
+        String methodName = method.getName();
+
+        if (!methodName.startsWith("findAllBy")) {
+            throw new IllegalArgumentException("Invalid method name for findAllBy: " + methodName);
+        }
+
+        // Extract field names from findAllBy method
+        String[] fieldNames = methodName.substring(8) // Remove "findAllBy"
+                .split("And"); // Split by "And" for multiple fields
+
+        // Convert first character of each field name to lowercase
+        fieldNames = java.util.Arrays.stream(fieldNames)
+                .map(f -> Character.toLowerCase(f.charAt(0)) + f.substring(1))
+                .toArray(String[]::new);
+
+        // Ensure the method arguments match the number of fields
+        if (fieldNames.length != args.length) {
+            throw new IllegalArgumentException("Mismatch between fields and arguments in method: " + methodName);
+        }
+
+        // Prepare WHERE clause with the field names and arguments
+        StringBuilder whereClause = new StringBuilder();
+        List<Object> parameters = new ArrayList<>();
+
+        for (int i = 0; i < fieldNames.length; i++) {
+            String fieldName = fieldNames[i];
+            String columnName = entityMetadata.getColumnName(fieldName);
+
+            if (columnName == null) {
+                throw new IllegalArgumentException("No such field: " + fieldName + " in entity " + entityClass.getName());
+            }
+
+            if (i > 0) {
+                whereClause.append(" AND ");
+            }
+            whereClause.append(columnName).append(" = ?");
+            parameters.add(fetchValue(args[i])); // Fetch value (handle foreign keys if needed)
+        }
+
+        // Build SQL query
+        String sql = "SELECT * FROM " + entityMetadata.getTableName() +
+                " WHERE " + whereClause;
+
+        // Execute query and retrieve results
+        System.out.println("Executing query: " + sql); // Debugging log
+        List<T> results = new ArrayList<>();
+        database.connect(connection -> {
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                setStatementParameters(statement, parameters);
+                try (ResultSet rs = statement.executeQuery()) {
+                    while (rs.next()) {
+                        T entity = (T) mapEntity(connection, entityClass, rs);
+                        results.add(entity);
+                    }
+                }
+            }
+            return null;
+        });
+
+        System.out.println("Query '" + methodName + "' took: " + (System.currentTimeMillis() - startTime) + "ms");
+        return results; // Return the list of results
     }
 
     /**
