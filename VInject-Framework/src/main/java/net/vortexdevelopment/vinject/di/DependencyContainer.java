@@ -194,8 +194,12 @@ public class DependencyContainer implements DependencyRepository {
     private void injectRoot(Object rootInstance) {
         //Find field with the same class as the root class and inject it
         for (Field field : rootInstance.getClass().getDeclaredFields()) {
-            if (field.getType().equals(rootClass)) {
-                unsafe.putObject(rootInstance, unsafe.objectFieldOffset(field), rootInstance);
+            if (field.getType().equals(rootClass) && field.isAnnotationPresent(Inject.class)) {
+                if (Modifier.isStatic(field.getModifiers())) {
+                    unsafe.putObject(rootInstance, unsafe.staticFieldOffset(field), rootInstance);
+                } else {
+                    unsafe.putObject(rootInstance, unsafe.objectFieldOffset(field), rootInstance);
+                }
             }
         }
     }
@@ -439,8 +443,7 @@ public class DependencyContainer implements DependencyRepository {
                     throw new RuntimeException("Dependency not found for field: " + field.getType() +" " + field.getName() + " in class: " + target.getName() + ". Forget to add Bean?");
                 }
                 try {
-                    long offset = unsafe.staticFieldOffset(field);
-                    unsafe.putObject(target, offset, dependency);
+                    unsafe.putObject(target, unsafe.staticFieldOffset(field), dependency);
                 } catch (Exception e) {
                     throw new RuntimeException("Unable to inject dependency: " + field.getType() + " " + field.getName() + " in class: " + target.getName(), e);
                 }
