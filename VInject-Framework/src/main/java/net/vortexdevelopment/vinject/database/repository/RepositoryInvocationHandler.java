@@ -457,6 +457,9 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
             String fieldName = entry.getKey();
             String columnName = entry.getValue();
             Field field = entityMetadata.getField(fieldName);
+
+            if (field.getName().equals("modifiedFields")) continue;
+
             Object value = field.get(entity);
 
             // Skip primary key if it's auto-generated

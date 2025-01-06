@@ -158,7 +158,6 @@ public class DependencyContainer implements DependencyRepository {
             // Register the repository and its entity type
             RepositoryInvocationHandler<?, ?> proxy = repositoryContainer.registerRepository(repositoryClass, entityClass, this);
             this.dependencies.put(repositoryClass, proxy.create());
-            System.out.println("Registered repository: " + repositoryClass.getName());
         });
         //Run database initialization (Create, Update tables)
         database.initializeEntityMetadata(this);
@@ -249,8 +248,18 @@ public class DependencyContainer implements DependencyRepository {
                 //Need to add parameter types to the dependencies, only one constructor is supported
                 Class<?>[] parameterTypes = component.getDeclaredConstructors()[0].getParameterTypes();
                 for (Class<?> parameter : parameterTypes) {
+
+                    //Skip if it is provided by a Bean
+                    if (this.dependencies.containsKey(parameter)) {
+                        continue;
+                    }
+
                     //Check if a parameter is a component, service or root class
-                    if (parameter.isAnnotationPresent(Component.class) || parameter.isAnnotationPresent(Service.class) || parameter.equals(this.rootClass) || parameter.isAnnotationPresent(Repository.class)) {
+                    if (parameter.isAnnotationPresent(Component.class)
+                            || parameter.isAnnotationPresent(Service.class)
+                            || parameter.equals(this.rootClass)
+                            || parameter.isAnnotationPresent(Repository.class)
+                    ) {
                         dependencies.add(parameter);
                     } else {
                         //if the parameter type does not have a component annotation in its class declaration, something is providing it, skip it
@@ -260,7 +269,7 @@ public class DependencyContainer implements DependencyRepository {
                             provided.add(providingClass);
                             continue;
                         } else {
-                            throw new RuntimeException("Dependency not found for constructor parameter: " + parameter.getName() + " in class: " + component.getName() + ". Forget to add Bean?");
+                            throw new RuntimeException("Dependency not found for constructor parameter: " + parameter.getName() + " in class: " + component.getName() + " while creating loading order. Forget to add Bean?");
                         }
                     }
                 }
@@ -270,6 +279,12 @@ public class DependencyContainer implements DependencyRepository {
             for (Field field : component.getDeclaredFields()) {
                 if (field.isAnnotationPresent(Inject.class)) {
                     Class<?> fieldType = field.getType();
+
+                    //Skip Bean provided classes
+                    if (this.dependencies.containsKey(fieldType)) {
+                        continue;
+                    }
+
                     // Skip fields annotated as Services since they are preloaded
                     // Skip plugin main class, it will always present in the container when component injection is performed
                     if (!fieldType.isAnnotationPresent(Service.class) && !fieldType.equals(this.rootClass) && !fieldType.isAnnotationPresent(Repository.class)) {
@@ -281,7 +296,8 @@ public class DependencyContainer implements DependencyRepository {
                                 provided.add(providingClass);
                                 continue;
                             } else {
-                                throw new RuntimeException("Dependency not found for field: " + fieldType.getName() + " in class: " + component.getName() + ". Forget to add Bean?");
+                                System.err.println("field iteration");
+                                throw new RuntimeException("Dependency not found for field: " + fieldType.getName() + " in class: " + component.getName() + " while creating load order. Forget to add Bean?");
                             }
                         }
                         dependencies.add(fieldType);
@@ -416,7 +432,7 @@ public class DependencyContainer implements DependencyRepository {
                     if (object.getClass().isAnnotationPresent(Service.class)) {
                         throw new RuntimeException("Only @Root class can be injected to @Service classes! Class: " + object.getClass().getName());
                     } else {
-                        throw new RuntimeException("Dependency not found for field: " + field.getType() + " " + field.getName() + " in class: " + object.getClass().getName() + ". Forget to add Bean?");
+                        throw new RuntimeException("Dependency not found for field: " + field.getType() + " " + field.getName() + " in class: " + object.getClass().getName() + " while injecting dependencies. Forget to add Bean?");
                     }
                 }
                 try {
@@ -440,7 +456,7 @@ public class DependencyContainer implements DependencyRepository {
             if (field.isAnnotationPresent(Inject.class) && Modifier.isStatic(field.getModifiers())) {
                 Object dependency = dependencies.get(field.getType());
                 if (dependency == null) {
-                    throw new RuntimeException("Dependency not found for field: " + field.getType() +" " + field.getName() + " in class: " + target.getName() + ". Forget to add Bean?");
+                    throw new RuntimeException("Dependency not found for field: " + field.getType() +" " + field.getName() + " in class: " + target.getName() + " while injecting static dependencies. Forget to add Bean?");
                 }
                 try {
                     unsafe.putObject(target, unsafe.staticFieldOffset(field), dependency);
@@ -492,6 +508,11 @@ public class DependencyContainer implements DependencyRepository {
             for (Method bean : beans) {
                 bean.setAccessible(true);
                 Object beanInstance = bean.invoke(instance); //Invoke the method and get an instance of the class
+                if (beanInstance == null) {
+                    System.err.println("Unable to register bean for " + bean.getReturnType().getName() + ". Value most not be null!");
+                    continue;
+                }
+                System.err.println("Registered bean for " + bean.getReturnType().getName());
                 dependencies.put(bean.getReturnType(), beanInstance); //Add the instance to the dependencies map
 
                 Bean annotation = bean.getAnnotation(Bean.class);

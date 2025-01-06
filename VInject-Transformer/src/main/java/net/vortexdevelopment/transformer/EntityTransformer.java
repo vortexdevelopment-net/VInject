@@ -13,12 +13,15 @@ import org.apache.bcel.generic.GETFIELD;
 import org.apache.bcel.generic.INVOKEINTERFACE;
 import org.apache.bcel.generic.INVOKESPECIAL;
 import org.apache.bcel.generic.INVOKESTATIC;
+import org.apache.bcel.generic.InstructionConstants;
 import org.apache.bcel.generic.InstructionFactory;
+import org.apache.bcel.generic.InstructionHandle;
 import org.apache.bcel.generic.InstructionList;
 import org.apache.bcel.generic.LDC;
 import org.apache.bcel.generic.MethodGen;
 import org.apache.bcel.generic.ObjectType;
 import org.apache.bcel.generic.POP;
+import org.apache.bcel.generic.PUSH;
 import org.apache.bcel.generic.PUTFIELD;
 import org.apache.bcel.generic.Type;
 import org.apache.maven.execution.MavenSession;
@@ -64,7 +67,6 @@ public class EntityTransformer extends AbstractMojo {
     @Override
     public void execute() throws MojoExecutionException {
         String phase = session.getLifecyclePhase();
-
 
         if (phase.equals("process-classes")) {
             Set<File> classFiles = getClassFiles(outputDirectory);
@@ -114,7 +116,6 @@ public class EntityTransformer extends AbstractMojo {
             boolean hasDataAnnotation = Arrays.stream(javaClass.getAnnotationEntries())
                     .anyMatch(annotation -> annotation.getAnnotationType().equals("Lnet/vortexdevelopment/vinject/annotation/database/Entity;"));
 
-
             if (hasDataAnnotation) {
                 byte[] modifiedBytes = modifyClass(javaClass, classFile);
                 try (OutputStream outputStream = new FileOutputStream(classFile)) {
@@ -129,72 +130,53 @@ public class EntityTransformer extends AbstractMojo {
         ClassGen classGen = new ClassGen(javaClass);
         ConstantPoolGen constantPool = classGen.getConstantPool();
 
-        // Remove all existing no-arg <init> methods to avoid duplicates  (CHANGED)
-        removeNoArgConstructors(classGen);
-
-        int fieldCount = classGen.getFields().length;
-
-        // Clear all existing methods
-        Method[] methods = classGen.getMethods();
-        for (Method method : methods) {
-            classGen.removeMethod(method);
-        }
-
-        // Add the modifiedFields field
+        // Add the modifiedFields field with inline initialization
         String modifiedFieldName = "modifiedFields";
-        String modifiedFieldType = "Ljava/util/Set;";
-        FieldGen modifiedFieldsField =
-                new FieldGen(Constants.ACC_PRIVATE,
-                        new ObjectType("java.util.Set"),
-                        modifiedFieldName,
-                        constantPool);
-        classGen.addField(modifiedFieldsField.getField());
-
-        // Add a single default constructor that calls super() and initializes modifiedFields
-        InstructionList constructorInstructions = new InstructionList();
-
-        // Call super()
-        constructorInstructions.append(new ALOAD(0));
-        int superInit = constantPool.addMethodref(classGen.getSuperclassName(), "<init>", "()V");
-        constructorInstructions.append(new INVOKESPECIAL(superInit));
-
-        // Initialize modifiedFields using ConcurrentHashMap.newKeySet()
-        constructorInstructions.append(new ALOAD(0)); // this
-        int newKeySetRef = constantPool.addMethodref(
-                "java.util.concurrent.ConcurrentHashMap",
-                "newKeySet",
-                "()Ljava/util/concurrent/ConcurrentHashMap$KeySetView;"
-        );
-        constructorInstructions.append(new INVOKESTATIC(newKeySetRef)); // Call static method
-        int modifiedFieldRef = constantPool.addFieldref(
-                classGen.getClassName(),
-                "modifiedFields",
-                "Ljava/util/Set;"
-        );
-        constructorInstructions.append(new PUTFIELD(modifiedFieldRef)); // this.modifiedFields = newKeySet()
-
-        // Return
-        constructorInstructions.append(InstructionFactory.createReturn(Type.VOID));
-
-        //addAllArgsConstructor(javaClass, classGen, constantPool);
-        addAllArgsConstructor(javaClass, classGen, constantPool);
-
-        // Create and add constructor
-        MethodGen constructor = new MethodGen(
-                Constants.ACC_PUBLIC,
-                Type.VOID,
-                Type.NO_ARGS,
-                null,
-                "<init>",
-                classGen.getClassName(),
-                constructorInstructions,
+        ObjectType setType = new ObjectType("java.util.Set");
+        FieldGen modifiedFieldsField = new FieldGen(
+                Constants.ACC_PRIVATE,
+                setType,
+                modifiedFieldName,
                 constantPool
         );
-        constructor.setMaxStack();
-        classGen.addMethod(constructor.getMethod());
-        constructorInstructions.dispose();
+        classGen.addField(modifiedFieldsField.getField());
+
+        // Modify all constructors to include initialization
+        for (Method method : classGen.getMethods()) {
+            if (method.getName().equals("<init>")) {
+                modifyConstructor(classGen, method, constantPool, modifiedFieldName);
+            }
+        }
+
+
+        // Remove all existing methods except constructors
+        Method[] methods = classGen.getMethods();
+        for (Method method : methods) {
+            if (!method.getName().equals("<init>")) {
+                classGen.removeMethod(method);
+            }
+        }
 
         // Modify existing fields (adding getter, setter, and modification tracking)
+        addGettersSetters(classGen, constantPool);
+
+        // Add reset method to clear modifiedFields
+        addResetMethod(classGen, constantPool);
+
+        // Add isFieldModified method
+        addIsFieldModifiedMethod(classGen, constantPool);
+
+        // Write the modified class to byte array
+        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+            classGen.getJavaClass().dump(outputStream);
+            return outputStream.toByteArray();
+        }
+    }
+
+    /**
+     * Adds getter and setter methods for each field, excluding modifiedFields.
+     */
+    private void addGettersSetters(ClassGen classGen, ConstantPoolGen constantPool) {
         Field[] fields = classGen.getFields();
         for (Field field : fields) {
             String fieldName = field.getName();
@@ -222,6 +204,7 @@ public class EntityTransformer extends AbstractMojo {
             )));
             getter.getInstructionList().append(InstructionFactory.createReturn(fieldType));
             getter.setMaxStack();
+            getter.setMaxLocals();
             classGen.addMethod(getter.getMethod());
             getter.getInstructionList().dispose();
 
@@ -251,7 +234,7 @@ public class EntityTransformer extends AbstractMojo {
                     "modifiedFields",
                     "Ljava/util/Set;"))
             );
-            setter.getInstructionList().append(new LDC(constantPool.addString(fieldName))); // "fieldName"
+            setter.getInstructionList().append(new PUSH(constantPool, fieldName)); // "fieldName"
             setter.getInstructionList().append(new INVOKEINTERFACE(constantPool.addInterfaceMethodref(
                     "java/util/Set", "add", "(Ljava/lang/Object;)Z"), (short) 2));
             // Discard the boolean result of Set.add(...)
@@ -259,11 +242,16 @@ public class EntityTransformer extends AbstractMojo {
 
             setter.getInstructionList().append(InstructionFactory.createReturn(Type.VOID));
             setter.setMaxStack();
+            setter.setMaxLocals();
             classGen.addMethod(setter.getMethod());
             setter.getInstructionList().dispose();
         }
+    }
 
-        // Add reset method to clear modifiedFields
+    /**
+     * Adds a resetModifiedFields method to clear the modifiedFields set.
+     */
+    private void addResetMethod(ClassGen classGen, ConstantPoolGen constantPool) {
         MethodGen resetMethod = new MethodGen(
                 Constants.ACC_PUBLIC,
                 Type.VOID,
@@ -284,10 +272,15 @@ public class EntityTransformer extends AbstractMojo {
                 "java/util/Set", "clear", "()V"), (short) 1));
         resetMethod.getInstructionList().append(InstructionFactory.createReturn(Type.VOID));
         resetMethod.setMaxStack();
+        resetMethod.setMaxLocals();
         classGen.addMethod(resetMethod.getMethod());
         resetMethod.getInstructionList().dispose();
+    }
 
-        //Add isFieldModified method
+    /**
+     * Adds an isFieldModified method to check if a field has been modified.
+     */
+    private void addIsFieldModifiedMethod(ClassGen classGen, ConstantPoolGen constantPool) {
         MethodGen isFieldModifiedMethod = new MethodGen(
                 Constants.ACC_PUBLIC,
                 Type.BOOLEAN,
@@ -299,123 +292,82 @@ public class EntityTransformer extends AbstractMojo {
                 constantPool
         );
 
-        // this
+        // this.modifiedFields.contains(fieldName)
         isFieldModifiedMethod.getInstructionList().append(new ALOAD(0));
-
-        // get this.modifiedFields
         isFieldModifiedMethod.getInstructionList().append(
                 new GETFIELD(constantPool.addFieldref(
                         classGen.getClassName(),
                         "modifiedFields",
                         "Ljava/util/Set;"))
         );
-
-        // load the passed-in fieldName onto the stack
-        isFieldModifiedMethod.getInstructionList().append(new ALOAD(1));
-
-        // call Set.contains(Object)
+        isFieldModifiedMethod.getInstructionList().append(new ALOAD(1)); // fieldName
         isFieldModifiedMethod.getInstructionList().append(new INVOKEINTERFACE(
                 constantPool.addInterfaceMethodref("java/util/Set", "contains", "(Ljava/lang/Object;)Z"),
                 2 // the number of argument slots (Set itself + the fieldName)
         ));
-
-        // return the boolean result
         isFieldModifiedMethod.getInstructionList().append(InstructionFactory.createReturn(Type.BOOLEAN));
 
-        // finalize and add the method
+        // Finalize and add the method
         isFieldModifiedMethod.setMaxStack();
+        isFieldModifiedMethod.setMaxLocals();
         classGen.addMethod(isFieldModifiedMethod.getMethod());
         isFieldModifiedMethod.getInstructionList().dispose();
-
-
-        // Write the modified class to byte array
-        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
-            classGen.getJavaClass().dump(outputStream);
-            return outputStream.toByteArray();
-        }
     }
 
-    /**
-     * Helper to remove all existing no-arg constructors so that we do not generate duplicates.
-     */
-    private void removeNoArgConstructors(ClassGen classGen) {
-        Method[] methods = classGen.getMethods();
-        java.util.List<Method> toRemove = new ArrayList<>();
-        for (Method method : methods) {
-            // Look for ()V
-            if ("<init>".equals(method.getName()) && method.getArgumentTypes().length == 0) {
-                toRemove.add(method);
+    private void modifyConstructor(ClassGen classGen, Method method, ConstantPoolGen constantPool, String fieldName) {
+        MethodGen methodGen = new MethodGen(method, classGen.getClassName(), constantPool);
+        InstructionList instructionList = methodGen.getInstructionList();
+        InstructionFactory factory = new InstructionFactory(classGen, constantPool);
+
+        // Find the "super()" call in the constructor
+        InstructionHandle superCall = null;
+        for (InstructionHandle handle : instructionList.getInstructionHandles()) {
+            if (handle.getInstruction() instanceof INVOKESPECIAL) {
+                INVOKESPECIAL invokeSpecial = (INVOKESPECIAL) handle.getInstruction();
+                if (invokeSpecial.getMethodName(constantPool).equals("<init>")) {
+                    superCall = handle;
+                    break;
+                }
             }
         }
-        for (Method m : toRemove) {
-            classGen.removeMethod(m);
-        }
-    }
 
-    private void addAllArgsConstructor(JavaClass javaClass, ClassGen classGen, ConstantPoolGen constantPool) {
-        InstructionList constructorInstructions = new InstructionList();
-
-        // Gather all instance fields
-        Field[] fields = classGen.getFields();
-        List<Field> instanceFields = Arrays.stream(fields)
-                .filter(field -> !field.isStatic() && !field.isTransient())
-                .toList();
-
-        //Skip the changedFields field (Init in the constructor like the no-arg constructor)
-        // Generate constructor parameters and assign them
-        Type[] parameterTypes = new Type[instanceFields.size()-1];
-        String[] parameterNames = new String[instanceFields.size()-1];
-
-        for (int i = 0; i < instanceFields.size()-1; i++) {
-            Field field = instanceFields.get(i);
-            parameterTypes[i] = field.getType();
-            parameterNames[i] = field.getName();
-
-            // Assign the parameter to the field
-            constructorInstructions.append(new ALOAD(0)); // this
-            constructorInstructions.append(new ALOAD(i + 1)); // parameter
-            int fieldRef = constantPool.addFieldref(classGen.getClassName(), field.getName(), field.getSignature());
-            constructorInstructions.append(new PUTFIELD(fieldRef)); // this.field = parameter;
+        if (superCall == null) {
+            throw new IllegalStateException("No super() call found in constructor.");
         }
 
-        // Initialize "modifiedFields" using ConcurrentHashMap.newKeySet()
-        constructorInstructions.append(new ALOAD(0)); // this
-        int newKeySetRef = constantPool.addMethodref(
+        // Create instructions to initialize modifiedFields using Collections.newSetFromMap()
+        InstructionList initInstructions = new InstructionList();
+        initInstructions.append(InstructionConstants.ALOAD_0); // Push 'this' onto the stack
+        initInstructions.append(factory.createNew("java.util.concurrent.ConcurrentHashMap"));
+        initInstructions.append(InstructionConstants.DUP);
+        initInstructions.append(factory.createInvoke(
                 "java.util.concurrent.ConcurrentHashMap",
-                "newKeySet",
-                "()Ljava/util/Set;"
-        );
-        constructorInstructions.append(new INVOKESTATIC(newKeySetRef)); // Call static method
-        int modifiedFieldRef = constantPool.addFieldref(
-                classGen.getClassName(),
-                "modifiedFields",
-                "Ljava/util/Set;"
-        );
-        constructorInstructions.append(new PUTFIELD(modifiedFieldRef)); // this.modifiedFields = ConcurrentHashMap.newKeySet()
-
-
-
-        //Call super()
-        constructorInstructions.append(new ALOAD(0));
-        int superInit = constantPool.addMethodref(classGen.getSuperclassName(), "<init>", "()V");
-        constructorInstructions.append(new INVOKESPECIAL(superInit));
-
-        // Return
-        constructorInstructions.append(InstructionFactory.createReturn(Type.VOID));
-
-        // Create and add constructor
-        MethodGen constructor = new MethodGen(
-                Constants.ACC_PUBLIC,
-                Type.VOID,
-                parameterTypes,
-                parameterNames,
                 "<init>",
+                Type.VOID,
+                Type.NO_ARGS,
+                Constants.INVOKESPECIAL
+        ));
+        initInstructions.append(factory.createInvoke(
+                "java.util.Collections",
+                "newSetFromMap",
+                Type.getType("Ljava/util/Set;"),
+                new Type[]{Type.getType("Ljava/util/Map;")},
+                Constants.INVOKESTATIC
+        ));
+        initInstructions.append(factory.createPutField(
                 classGen.getClassName(),
-                constructorInstructions,
-                constantPool
-        );
-        constructor.setMaxStack();
-        classGen.addMethod(constructor.getMethod());
-        constructorInstructions.dispose();
+                fieldName,
+                Type.getType("Ljava/util/Set;")
+        ));
+
+        // Insert initialization instructions after the "super()" call
+        instructionList.insert(superCall, initInstructions);
+
+        // Update the method
+        methodGen.setInstructionList(instructionList);
+        methodGen.setMaxStack();
+        methodGen.setMaxLocals();
+        classGen.replaceMethod(method, methodGen.getMethod());
     }
+
 }
