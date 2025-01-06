@@ -519,7 +519,9 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
                     continue; // Skip unchanged fields
                 }
                 //No field found, we continue as usual
-            } catch (NoSuchMethodException ignored) {}
+            } catch (NoSuchMethodException ignored) {
+
+            }
 
             String columnName = entry.getValue();
 
@@ -545,6 +547,13 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
             return;
         }
 
+        //Reset modified fields
+        try {
+            Method resetModifiedFields = entity.getClass().getDeclaredMethod("resetModifiedFields");
+            resetModifiedFields.setAccessible(true);
+            resetModifiedFields.invoke(entity);
+        } catch (Exception ignored) {}
+
         String sql = "UPDATE " + entityMetadata.getTableName() + " SET " +
                 String.join(", ", setClauses) + " WHERE " +
                 entityMetadata.getPrimaryKeyColumn() + " = ?";
@@ -557,7 +566,6 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
         database.connect(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 setStatementParameters(statement, values);
-                System.out.println(statement.toString());
                 statement.executeUpdate();
             } catch (Exception e) {
                 System.err.println("Error executing update statement: " + sql);

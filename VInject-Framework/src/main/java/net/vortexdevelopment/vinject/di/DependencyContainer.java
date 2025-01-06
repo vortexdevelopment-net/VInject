@@ -512,7 +512,6 @@ public class DependencyContainer implements DependencyRepository {
                     System.err.println("Unable to register bean for " + bean.getReturnType().getName() + ". Value most not be null!");
                     continue;
                 }
-                System.err.println("Registered bean for " + bean.getReturnType().getName());
                 dependencies.put(bean.getReturnType(), beanInstance); //Add the instance to the dependencies map
 
                 Bean annotation = bean.getAnnotation(Bean.class);

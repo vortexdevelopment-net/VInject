@@ -20,6 +20,7 @@ public class Database implements DatabaseConnector {
     private Map<Class<?>, EntityMetadata> entityMetadataMap = new HashMap<>();
     private static String TABLE_PREFIX = "example_";
     private final List<String> FOREIGN_KEY_QUERIES = new ArrayList<>();
+    private String database;
 
     public Database(String host, String port, String database, String username, String password, int maxPoolSize) {
         HikariConfig config = new HikariConfig();
@@ -31,6 +32,7 @@ public class Database implements DatabaseConnector {
         config.addDataSourceProperty("prepStmtCacheSize", "250");
         config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
         hikari = new HikariDataSource(config);
+        this.database = database;
     }
 
     public static String getTablePrefix() {
@@ -69,7 +71,7 @@ public class Database implements DatabaseConnector {
         connect(connection -> {
             for (EntityMetadata metadata : entityMetadataMap.values()) {
                 try {
-                    if (!DBUtils.tableExists(connection, "plugincore", metadata.getTableName())) {
+                    if (!DBUtils.tableExists(connection, database, metadata.getTableName())) {
                         // Table doesn't exist; create it
                         createTable(connection, metadata);
                     } else {
@@ -269,5 +271,13 @@ public class Database implements DatabaseConnector {
             e.printStackTrace();
         }
         return null;
+    }
+
+    public void shutdown() {
+        try {
+            hikari.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 }

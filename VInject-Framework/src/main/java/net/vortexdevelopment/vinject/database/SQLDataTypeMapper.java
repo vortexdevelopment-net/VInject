@@ -87,7 +87,7 @@ public class SQLDataTypeMapper {
             case "String" -> "VARCHAR(" + (column.length() != -1 ? column.length() : 255) + ")" + nullableConstraint;
             case "Integer", "int" -> "INT(11)" + nullableConstraint;
             case "Long", "long" -> "BIGINT(20)" + nullableConstraint;
-            case "Double", "double" -> "DOUBLE PRECISION" + nullableConstraint;
+            case "Double", "double" -> "DOUBLE" + nullableConstraint;
             case "Float", "float" -> "FLOAT(" + (column.precision() != -1 ? column.precision() : 10) + ","
                     + (column.scale() != -1 ? column.scale() : 2) + ")" + nullableConstraint;
             case "Boolean", "boolean" -> "BOOLEAN" + nullableConstraint;
