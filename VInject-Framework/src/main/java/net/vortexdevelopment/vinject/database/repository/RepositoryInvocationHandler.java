@@ -121,48 +121,32 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
             return handleFindAllByMethod(method, args, startTime);
         }
 
+        if (methodName.startsWith("deleteBy")) {
+            return handleDeleteByMethod(method, args, startTime);
+        }
+
+        if (methodName.startsWith("deleteAllBy")) {
+            return handleDeleteAllByMethod(method, args, startTime);
+        }
+
         // Handle basic Object methods
         return handleObjectMethods(proxy, method, args);
     }
 
     /**
-     * Handles 'findByXxx' dynamic methods.
+     * Handles 'findByXxxAndYyy' dynamic methods.
      */
     private Object handleFindByMethod(Method method, Object[] args, long startTime) throws Exception {
         String methodName = method.getName();
         Class<?> returnType = method.getReturnType();
 
-        String fieldName = methodName.substring(6); // Extract "Name" from "findByName"
-        fieldName = Character.toLowerCase(fieldName.charAt(0)) + fieldName.substring(1);
-
-        // Check if method should return single entity or multiple
+        // Check if method should return a single entity or multiple entities
         boolean isIterable = Iterable.class.isAssignableFrom(returnType) ||
                 Collection.class.isAssignableFrom(returnType) ||
                 returnType.isArray();
 
-        Object result;
-        if (isIterable) {
-            result = executeFindMultiple(fieldName, fetchValue(args[0]));
-        } else {
-            result = executeFindSingle(fieldName, fetchValue(args[0]));
-        }
-
-        System.out.println("Query '" + methodName + "' took: " + (System.currentTimeMillis() - startTime) + "ms");
-        return result;
-    }
-
-    /**
-     * Handles 'findAllByXxx' dynamic methods.
-     */
-    private Object handleFindAllByMethod(Method method, Object[] args, long startTime) throws Exception {
-        String methodName = method.getName();
-
-        if (!methodName.startsWith("findAllBy")) {
-            throw new IllegalArgumentException("Invalid method name for findAllBy: " + methodName);
-        }
-
-        // Extract field names from findAllBy method
-        String[] fieldNames = methodName.substring(8) // Remove "findAllBy"
+        // Extract field names from the method name
+        String[] fieldNames = methodName.substring(6) // Remove "findBy"
                 .split("And"); // Split by "And" for multiple fields
 
         // Convert first character of each field name to lowercase
@@ -199,7 +183,90 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
                 " WHERE " + whereClause;
 
         // Execute query and retrieve results
-        System.out.println("Executing query: " + sql); // Debugging log
+        //System.out.println("Executing query: " + sql); // Debugging log
+        Object result;
+        if (isIterable) {
+            List<T> results = new ArrayList<>();
+            database.connect(connection -> {
+                try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                    setStatementParameters(statement, parameters);
+                    try (ResultSet rs = statement.executeQuery()) {
+                        while (rs.next()) {
+                            T entity = (T) mapEntity(connection, entityClass, rs);
+                            results.add(entity);
+                        }
+                    }
+                }
+                return null;
+            });
+            result = results;
+        } else {
+            result = database.connect(connection -> {
+                try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                    setStatementParameters(statement, parameters);
+                    try (ResultSet rs = statement.executeQuery()) {
+                        if (rs.next()) {
+                            return mapEntity(connection, entityClass, rs);
+                        }
+                    }
+                }
+                return null;
+            });
+        }
+
+        System.out.println("Query '" + methodName + "' took: " + (System.currentTimeMillis() - startTime) + "ms");
+        return result;
+    }
+
+    /**
+     * Handles 'findAllByXxxAndYyy' dynamic methods.
+     */
+    private Object handleFindAllByMethod(Method method, Object[] args, long startTime) throws Exception {
+        String methodName = method.getName();
+
+        if (!methodName.startsWith("findAllBy")) {
+            throw new IllegalArgumentException("Invalid method name for findAllBy: " + methodName);
+        }
+
+        // Extract field names from findAllBy method
+        String[] fieldNames = methodName.substring(9) // Remove "findAllBy"
+                .split("And"); // Split by "And" for multiple fields
+
+        // Convert first character of each field name to lowercase
+        fieldNames = java.util.Arrays.stream(fieldNames)
+                .map(f -> Character.toLowerCase(f.charAt(0)) + f.substring(1))
+                .toArray(String[]::new);
+
+        // Ensure the method arguments match the number of fields
+        if (fieldNames.length != args.length) {
+            throw new IllegalArgumentException("Mismatch between fields and arguments in method: " + methodName);
+        }
+
+        // Prepare WHERE clause with the field names and arguments
+        StringBuilder whereClause = new StringBuilder();
+        List<Object> parameters = new ArrayList<>();
+
+        for (int i = 0; i < fieldNames.length; i++) {
+            String fieldName = fieldNames[i];
+            String columnName = entityMetadata.getColumnName(fieldName);
+
+            if (columnName == null) {
+                throw new IllegalArgumentException("No such field: " + fieldName + " in entity " + entityClass.getName());
+            }
+
+            if (i > 0) {
+                whereClause.append(" AND ");
+            }
+            whereClause.append(columnName).append(" = ?");
+            parameters.add(fetchValue(args[i])); // Fetch value (handle foreign keys if needed)
+        }
+
+        // Build SQL query
+        String sql = "SELECT * FROM " + entityMetadata.getTableName() +
+                " WHERE " + whereClause;
+
+        // Execute query and retrieve results
+        //System.out.println("Executing query: " + sql); // Debugging log
         List<T> results = new ArrayList<>();
         database.connect(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
@@ -214,8 +281,130 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
             return null;
         });
 
-        System.out.println("Query '" + methodName + "' took: " + (System.currentTimeMillis() - startTime) + "ms");
+        //System.out.println("Query '" + methodName + "' took: " + (System.currentTimeMillis() - startTime) + "ms");
         return results; // Return the list of results
+    }
+
+    /**
+     * Handles 'deleteByXxxAndYyy' dynamic methods.
+     */
+    private Object handleDeleteByMethod(Method method, Object[] args, long startTime) throws Exception {
+        String methodName = method.getName();
+
+        if (!methodName.startsWith("deleteBy")) {
+            throw new IllegalArgumentException("Invalid method name for deleteBy: " + methodName);
+        }
+
+        // Extract field names from deleteBy method
+        String[] fieldNames = methodName.substring(8) // Remove "deleteBy"
+                .split("And"); // Split by "And" for multiple fields
+
+        // Convert first character of each field name to lowercase
+        fieldNames = java.util.Arrays.stream(fieldNames)
+                .map(f -> Character.toLowerCase(f.charAt(0)) + f.substring(1))
+                .toArray(String[]::new);
+
+        // Ensure the method arguments match the number of fields
+        if (fieldNames.length != args.length) {
+            throw new IllegalArgumentException("Mismatch between fields and arguments in method: " + methodName);
+        }
+
+        // Prepare WHERE clause with the field names and arguments
+        StringBuilder whereClause = new StringBuilder();
+        List<Object> parameters = new ArrayList<>();
+
+        for (int i = 0; i < fieldNames.length; i++) {
+            String fieldName = fieldNames[i];
+            String columnName = entityMetadata.getColumnName(fieldName);
+
+            if (columnName == null) {
+                throw new IllegalArgumentException("No such field: " + fieldName + " in entity " + entityClass.getName());
+            }
+
+            if (i > 0) {
+                whereClause.append(" AND ");
+            }
+            whereClause.append(columnName).append(" = ?");
+            parameters.add(fetchValue(args[i])); // Fetch value (handle foreign keys if needed)
+        }
+
+        // Build SQL query
+        String sql = "DELETE FROM " + entityMetadata.getTableName() +
+                " WHERE " + whereClause;
+
+        // Execute query
+        //System.out.println("Executing query: " + sql); // Debugging log
+        database.connect(connection -> {
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                setStatementParameters(statement, parameters);
+                statement.executeUpdate();
+            }
+            return null;
+        });
+
+        //System.out.println("Query '" + methodName + "' took: " + (System.currentTimeMillis() - startTime) + "ms");
+        return null; // Return void
+    }
+
+    /**
+     * Handles 'deleteAllByXxxAndYyy' dynamic methods.
+     */
+    private Object handleDeleteAllByMethod(Method method, Object[] args, long startTime) throws Exception {
+        String methodName = method.getName();
+
+        if (!methodName.startsWith("deleteAllBy")) {
+            throw new IllegalArgumentException("Invalid method name for deleteAllBy: " + methodName);
+        }
+
+        // Extract field names from deleteAllBy method
+        String[] fieldNames = methodName.substring(11) // Remove "deleteAllBy"
+                .split("And"); // Split by "And" for multiple fields
+
+        // Convert first character of each field name to lowercase
+        fieldNames = java.util.Arrays.stream(fieldNames)
+                .map(f -> Character.toLowerCase(f.charAt(0)) + f.substring(1))
+                .toArray(String[]::new);
+
+        // Ensure the method arguments match the number of fields
+        if (fieldNames.length != args.length) {
+            throw new IllegalArgumentException("Mismatch between fields and arguments in method: " + methodName);
+        }
+
+        // Prepare WHERE clause with the field names and arguments
+        StringBuilder whereClause = new StringBuilder();
+        List<Object> parameters = new ArrayList<>();
+
+        for (int i = 0; i < fieldNames.length; i++) {
+            String fieldName = fieldNames[i];
+            String columnName = entityMetadata.getColumnName(fieldName);
+
+            if (columnName == null) {
+                throw new IllegalArgumentException("No such field: " + fieldName + " in entity " + entityClass.getName());
+            }
+
+            if (i > 0) {
+                whereClause.append(" AND ");
+            }
+            whereClause.append(columnName).append(" = ?");
+            parameters.add(fetchValue(args[i])); // Fetch value (handle foreign keys if needed)
+        }
+
+        // Build SQL query
+        String sql = "DELETE FROM " + entityMetadata.getTableName() +
+                " WHERE " + whereClause;
+
+        // Execute query
+        //System.out.println("Executing query: " + sql); // Debugging log
+        database.connect(connection -> {
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                setStatementParameters(statement, parameters);
+                statement.executeUpdate();
+            }
+            return null;
+        });
+
+        //System.out.println("Query '" + methodName + "' took: " + (System.currentTimeMillis() - startTime) + "ms");
+        return null; // Return void
     }
 
     /**
