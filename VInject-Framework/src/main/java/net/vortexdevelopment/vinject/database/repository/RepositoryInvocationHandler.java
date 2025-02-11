@@ -267,22 +267,21 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
 
         // Execute query and retrieve results
         //System.out.println("Executing query: " + sql); // Debugging log
-        List<T> results = new ArrayList<>();
-        database.connect(connection -> {
+
+        //System.out.println("Query '" + methodName + "' took: " + (System.currentTimeMillis() - startTime) + "ms");
+        return database.connect(connection -> {
+            List<T> found = new ArrayList<>();
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 setStatementParameters(statement, parameters);
                 try (ResultSet rs = statement.executeQuery()) {
                     while (rs.next()) {
                         T entity = (T) mapEntity(connection, entityClass, rs);
-                        results.add(entity);
+                        found.add(entity);
                     }
                 }
             }
-            return null;
-        });
-
-        //System.out.println("Query '" + methodName + "' took: " + (System.currentTimeMillis() - startTime) + "ms");
-        return results; // Return the list of results
+            return found;
+        }); // Return the list of results
     }
 
     /**

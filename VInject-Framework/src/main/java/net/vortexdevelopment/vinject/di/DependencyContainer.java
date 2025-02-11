@@ -55,6 +55,7 @@ public class DependencyContainer implements DependencyRepository {
     @Getter
     private static DependencyContainer instance;
     public DependencyContainer(Root rootAnnotation, Class<?> rootClass, Object rootInstance, Database database, RepositoryContainer repositoryContainer) {
+        instance = this;
         dependencies = new ConcurrentHashMap<>();
         entities = ConcurrentHashMap.newKeySet();
         unsafe = getUnsafe();
@@ -179,9 +180,6 @@ public class DependencyContainer implements DependencyRepository {
                 annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
         });
-
-        //Set the instance of the container
-        instance = this;
     }
 
     private Class<? extends Annotation> getAnnotationFromHandler(AnnotationHandler handler) {
@@ -372,7 +370,7 @@ public class DependencyContainer implements DependencyRepository {
 
     public <T> T newInstance(Class<T> clazz) {
         Object component = dependencies.get(clazz);
-        if (component != null) {
+        if (component != null && !clazz.isAnnotationPresent(Entity.class)) {
             return (T) component;
         }
         try {
