@@ -21,4 +21,10 @@ public @interface RegisterTemplate {
      * @return the fully qualified class name of the annotation that has this template
      */
     String annotationFqcn();
+
+    /**
+     * Name displayed in the component list
+     * @return the name of the template
+     */
+    String name();
 }

@@ -44,4 +44,13 @@ public @interface Root {
      * @return The custom annotations to mark as components
      */
     Class<? extends Annotation>[] componentAnnotations() default {};
+
+    /**
+     * Used for the Intellij VInject Framework plugin to register<br>
+     * custom template paths from dependency projects for component creation.
+     * <p>Example: If you have a custom component in a dependency with a component file
+     * template you can register that artifact here</p>
+     * @return The template artifacts to look for templates
+     */
+    TemplateDependency[] templateDependencies() default {};
 }
