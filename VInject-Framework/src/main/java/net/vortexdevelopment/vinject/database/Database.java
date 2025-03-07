@@ -16,23 +16,27 @@ import java.util.*;
 
 public class Database implements DatabaseConnector {
 
-    private HikariDataSource hikari;
+    HikariConfig hikariConfig;
+    private HikariDataSource hikariDataSource;
     private Map<Class<?>, EntityMetadata> entityMetadataMap = new HashMap<>();
     private static String TABLE_PREFIX = "example_";
     private final List<String> FOREIGN_KEY_QUERIES = new ArrayList<>();
     private String database;
 
     public Database(String host, String port, String database, String username, String password, int maxPoolSize) {
-        HikariConfig config = new HikariConfig();
-        config.setJdbcUrl("jdbc:mariadb://" + host + ":" + port + "/" + database + "?autoReconnect=true&useSSL=false");
-        config.setUsername(username);
-        config.setPassword(password);
-        config.setMaximumPoolSize(maxPoolSize);
-        config.addDataSourceProperty("cachePrepStmts", "true");
-        config.addDataSourceProperty("prepStmtCacheSize", "250");
-        config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
-        hikari = new HikariDataSource(config);
+        hikariConfig = new HikariConfig();
+        hikariConfig.setJdbcUrl("jdbc:mariadb://" + host + ":" + port + "/" + database + "?autoReconnect=true&useSSL=false");
+        hikariConfig.setUsername(username);
+        hikariConfig.setPassword(password);
+        hikariConfig.setMaximumPoolSize(maxPoolSize);
+        hikariConfig.addDataSourceProperty("cachePrepStmts", "true");
+        hikariConfig.addDataSourceProperty("prepStmtCacheSize", "250");
+        hikariConfig.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
         this.database = database;
+    }
+
+    public void init() {
+        hikariDataSource = new HikariDataSource(hikariConfig);
     }
 
     public static String getTablePrefix() {
@@ -251,12 +255,12 @@ public class Database implements DatabaseConnector {
 
     @Override
     public Connection getConnection() throws Exception {
-        return hikari.getConnection();
+        return hikariDataSource.getConnection();
     }
 
     @Override
     public void connect(VoidConnection connection) {
-        try (Connection conn = hikari.getConnection()) {
+        try (Connection conn = hikariDataSource.getConnection()) {
             connection.connect(conn);
         } catch (Exception e) {
             e.printStackTrace();
@@ -265,7 +269,7 @@ public class Database implements DatabaseConnector {
 
     @Override
     public <T> T connect(ConnectionResult<T> connection) {
-        try (Connection conn = hikari.getConnection()) {
+        try (Connection conn = hikariDataSource.getConnection()) {
             return connection.connect(conn);
         } catch (Exception e) {
             e.printStackTrace();
@@ -275,7 +279,7 @@ public class Database implements DatabaseConnector {
 
     public void shutdown() {
         try {
-            hikari.close();
+            hikariDataSource.close();
         } catch (Exception e) {
             e.printStackTrace();
         }
