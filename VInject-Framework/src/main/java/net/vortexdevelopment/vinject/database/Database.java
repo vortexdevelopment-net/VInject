@@ -37,6 +37,7 @@ public class Database implements DatabaseConnector {
 
     public void init() {
         hikariDataSource = new HikariDataSource(hikariConfig);
+        verifyTables();
     }
 
     public static String getTablePrefix() {
@@ -67,7 +68,6 @@ public class Database implements DatabaseConnector {
                 e.printStackTrace();
             }
         }
-        verifyTables();
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -279,7 +279,9 @@ public class Database implements DatabaseConnector {
 
     public void shutdown() {
         try {
-            hikariDataSource.close();
+            if (this.hikariDataSource != null) {
+                this.hikariDataSource.close();
+            }
         } catch (Exception e) {
             e.printStackTrace();
         }

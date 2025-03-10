@@ -182,6 +182,13 @@ public class DependencyContainer implements DependencyRepository {
         });
     }
 
+    //Clear and set to null everything
+    public void release() {
+        dependencies.clear();
+        entities.clear();
+        annotationHandlerRegistry = null;
+    }
+
     private Class<? extends Annotation> getAnnotationFromHandler(AnnotationHandler handler) {
         //get the @Registry annotation from the handler and get the annotation
         Registry annotation = handler.getClass().getAnnotation(Registry.class);
