@@ -107,24 +107,24 @@
                             </includes>
                         </filter>
                     </filters>
-                    <relocations>
-                        <relocation>
-                            <pattern>org.reflections</pattern>
-                            <shadedPattern>net.vortexdevelopment.vinject.libs.reflections</shadedPattern>
-                        </relocation>
-                        <relocation>
-                            <pattern>com.zaxxer.hikari</pattern>
-                            <shadedPattern>net.vortexdevelopment.vinject.libs.hikari</shadedPattern>
-                        </relocation>
-                        <relocation>
-                            <pattern>com.mysql.cj</pattern>
-                            <shadedPattern>net.vortexdevelopment.vinject.libs.mysql</shadedPattern>
-                        </relocation>
-                        <relocation>
-                            <pattern>org.mariadb.jdbc</pattern>
-                            <shadedPattern>net.vortexdevelopment.vinject.libs.mariadb</shadedPattern>
-                        </relocation>
-                    </relocations>
+<!--                    <relocations>-->
+<!--                        <relocation>-->
+<!--                            <pattern>org.reflections</pattern>-->
+<!--                            <shadedPattern>net.vortexdevelopment.vinject.libs.reflections</shadedPattern>-->
+<!--                        </relocation>-->
+<!--                        <relocation>-->
+<!--                            <pattern>com.zaxxer.hikari</pattern>-->
+<!--                            <shadedPattern>net.vortexdevelopment.vinject.libs.hikari</shadedPattern>-->
+<!--                        </relocation>-->
+<!--                        <relocation>-->
+<!--                            <pattern>com.mysql.cj</pattern>-->
+<!--                            <shadedPattern>net.vortexdevelopment.vinject.libs.mysql</shadedPattern>-->
+<!--                        </relocation>-->
+<!--                        <relocation>-->
+<!--                            <pattern>org.mariadb.jdbc</pattern>-->
+<!--                            <shadedPattern>net.vortexdevelopment.vinject.libs.mariadb</shadedPattern>-->
+<!--                        </relocation>-->
+<!--                    </relocations>-->
                 </configuration>
             </plugin>
         </plugins>
