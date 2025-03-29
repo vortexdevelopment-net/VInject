@@ -56,12 +56,23 @@ public class DependencyContainer implements DependencyRepository {
 
     @Getter
     private static DependencyContainer instance;
-    public DependencyContainer(Root rootAnnotation, Class<?> rootClass, Object rootInstance, Database database, RepositoryContainer repositoryContainer, @Nullable Consumer<Void> onPreComponentLoad) {
+    public DependencyContainer(Root rootAnnotation, Class<?> rootClass, @Nullable Object rootInstance, Database database, RepositoryContainer repositoryContainer, @Nullable Consumer<Void> onPreComponentLoad) {
         instance = this;
         dependencies = new ConcurrentHashMap<>();
         entities = ConcurrentHashMap.newKeySet();
         unsafe = getUnsafe();
         annotationHandlerRegistry = new AnnotationHandlerRegistry();
+
+        if (rootInstance == null) {
+            //Create the root instance if it is null
+            try {
+                Constructor<?> constructor = rootClass.getDeclaredConstructor();
+                constructor.setAccessible(true);
+                rootInstance = constructor.newInstance();
+            } catch (Exception e) {
+                throw new RuntimeException("Unable to create root instance", e);
+            }
+        }
 
         //Add plugin as bean so components can inject it
         dependencies.put(rootClass, rootInstance);
