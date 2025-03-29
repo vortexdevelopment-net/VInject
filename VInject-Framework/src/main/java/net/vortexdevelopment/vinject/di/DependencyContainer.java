@@ -41,6 +41,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 public class DependencyContainer implements DependencyRepository {
@@ -51,10 +52,11 @@ public class DependencyContainer implements DependencyRepository {
     private final Object rootInstance;
     private final Set<Class<?>> entities;
     private AnnotationHandlerRegistry annotationHandlerRegistry;
+    private Consumer<Void> onPreComponentLoad;
 
     @Getter
     private static DependencyContainer instance;
-    public DependencyContainer(Root rootAnnotation, Class<?> rootClass, Object rootInstance, Database database, RepositoryContainer repositoryContainer) {
+    public DependencyContainer(Root rootAnnotation, Class<?> rootClass, Object rootInstance, Database database, RepositoryContainer repositoryContainer, @Nullable Consumer<Void> onPreComponentLoad) {
         instance = this;
         dependencies = new ConcurrentHashMap<>();
         entities = ConcurrentHashMap.newKeySet();
@@ -101,6 +103,40 @@ public class DependencyContainer implements DependencyRepository {
         //Find all classes which annotated as Service
         Reflections reflections = new Reflections(configuration);
 
+        //Get all entities first so we can initialize the database before components
+        entities.addAll(reflections.getTypesAnnotatedWith(Entity.class));
+
+        annotationHandlerRegistry.getHandlers(RegistryOrder.ENTITIES).forEach(annotationHandler -> {
+            Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
+            reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
+                annotationHandler.handle(aClass,  dependencies.get(aClass), this);
+            });
+        });
+
+        reflections.getTypesAnnotatedWith(Repository.class).forEach(repositoryClass -> {
+            // Check if the class implements CrudRepository
+            if (!ReflectionUtils.getAllSuperTypes(repositoryClass).contains(CrudRepository.class)) {
+                throw new RuntimeException("Class: " + repositoryClass.getName()
+                        + " annotated with @Repository does not implement CrudRepository");
+            }
+
+            // Find the generic type argument of CrudRepository
+            Class<?> entityClass = getGenericTypeFromCrudRepository(repositoryClass);
+            if (entityClass == null) {
+                throw new RuntimeException("Unable to determine generic type for CrudRepository in class: " + repositoryClass.getName());
+            }
+
+            // Register the repository and its entity type
+            RepositoryInvocationHandler<?, ?> proxy = repositoryContainer.registerRepository(repositoryClass, entityClass, this);
+            this.dependencies.put(repositoryClass, proxy.create());
+        });
+        //Run database initialization (Create, Update tables)
+        database.initializeEntityMetadata(this);
+
+        if (onPreComponentLoad != null) {
+            onPreComponentLoad.accept(null);
+        }
+
         //Collect all Registry annotations
         reflections.getTypesAnnotatedWith(Registry.class).forEach(aClass -> {
             //Check if extends AnnotationHandler class
@@ -132,36 +168,6 @@ public class DependencyContainer implements DependencyRepository {
                 annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
         });
-
-        //Get all entities
-        entities.addAll(reflections.getTypesAnnotatedWith(Entity.class));
-
-        annotationHandlerRegistry.getHandlers(RegistryOrder.ENTITIES).forEach(annotationHandler -> {
-            Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
-            reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
-                annotationHandler.handle(aClass,  dependencies.get(aClass), this);
-            });
-        });
-
-        reflections.getTypesAnnotatedWith(Repository.class).forEach(repositoryClass -> {
-            // Check if the class implements CrudRepository
-            if (!ReflectionUtils.getAllSuperTypes(repositoryClass).contains(CrudRepository.class)) {
-                throw new RuntimeException("Class: " + repositoryClass.getName()
-                        + " annotated with @Repository does not implement CrudRepository");
-            }
-
-            // Find the generic type argument of CrudRepository
-            Class<?> entityClass = getGenericTypeFromCrudRepository(repositoryClass);
-            if (entityClass == null) {
-                throw new RuntimeException("Unable to determine generic type for CrudRepository in class: " + repositoryClass.getName());
-            }
-
-            // Register the repository and its entity type
-            RepositoryInvocationHandler<?, ?> proxy = repositoryContainer.registerRepository(repositoryClass, entityClass, this);
-            this.dependencies.put(repositoryClass, proxy.create());
-        });
-        //Run database initialization (Create, Update tables)
-        database.initializeEntityMetadata(this);
 
         annotationHandlerRegistry.getHandlers(RegistryOrder.REPOSITORIES).forEach(annotationHandler -> {
             Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
@@ -394,6 +400,14 @@ public class DependencyContainer implements DependencyRepository {
                 injectStatic(clazz);
                 T instance = (T) clazz.getDeclaredConstructors()[0].newInstance(parameters);
                 inject(instance);
+
+                if (clazz.isAnnotationPresent(Component.class)) {
+                    Component componentAnnotation = clazz.getAnnotation(Component.class);
+                    for (Class<?> subclass : componentAnnotation.registerSubclasses()) {
+                        dependencies.put(subclass, instance);
+                    }
+                }
+
                 //Register the instance in the dependency container
                 dependencies.put(clazz, instance);
                 return instance;
@@ -405,6 +419,12 @@ public class DependencyContainer implements DependencyRepository {
             inject(instance);
             //Register the instance in the dependency container
             dependencies.put(clazz, instance);
+            if (clazz.isAnnotationPresent(Component.class)) {
+                Component componentAnnotation = clazz.getAnnotation(Component.class);
+                for (Class<?> subclass : componentAnnotation.registerSubclasses()) {
+                    dependencies.put(subclass, instance);
+                }
+            }
             return instance;
         } catch (Exception e) {
             throw new RuntimeException("Unable to create new instance of class: " + clazz.getName(), e);
@@ -481,12 +501,7 @@ public class DependencyContainer implements DependencyRepository {
             //Do not register non component classes
             return;
         }
-        Component component = clazz.getAnnotation(Component.class);
-        Object instance = newInstance(clazz);
-        dependencies.put(clazz, instance);
-        for (Class<?> subclass : component.registerSubclasses()) {
-            dependencies.put(subclass, instance);
-        }
+        newInstance(clazz); //This will auto register the component and subclasses if needed
     }
 
     public void registerBeans(Class<?> clazz) {

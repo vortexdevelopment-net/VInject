@@ -23,9 +23,9 @@ public class Database implements DatabaseConnector {
     private final List<String> FOREIGN_KEY_QUERIES = new ArrayList<>();
     private String database;
 
-    public Database(String host, String port, String database, String username, String password, int maxPoolSize) {
+    public Database(String host, String port, String database, String type, String username, String password, int maxPoolSize) {
         hikariConfig = new HikariConfig();
-        hikariConfig.setJdbcUrl("jdbc:mariadb://" + host + ":" + port + "/" + database + "?autoReconnect=true&useSSL=false");
+        hikariConfig.setJdbcUrl("jdbc:" + type + "://" + host + ":" + port + "/" + database + "?autoReconnect=true&useSSL=false");
         hikariConfig.setUsername(username);
         hikariConfig.setPassword(password);
         hikariConfig.setMaximumPoolSize(maxPoolSize);
@@ -36,8 +36,16 @@ public class Database implements DatabaseConnector {
     }
 
     public void init() {
+        System.out.println("Initializing database connection...");
         hikariDataSource = new HikariDataSource(hikariConfig);
+        System.out.println("Database connection initialized.");
+
+        //Init metadata
+        initializeEntityMetadata(DependencyContainer.getInstance());
+
+        System.out.println("Verifying tables...");
         verifyTables();
+        System.out.println("Tables verified.");
     }
 
     public static String getTablePrefix() {
@@ -70,17 +78,20 @@ public class Database implements DatabaseConnector {
         }
     }
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
     private void verifyTables() {
         connect(connection -> {
             for (EntityMetadata metadata : entityMetadataMap.values()) {
                 try {
                     if (!DBUtils.tableExists(connection, database, metadata.getTableName())) {
+                        System.out.println("Table does not exist: '" + metadata.getTableName() + "' creating...");
                         // Table doesn't exist; create it
                         createTable(connection, metadata);
+                        System.out.println("Table created: " + metadata.getTableName());
                     } else {
                         // Table exists; synchronize columns and relationships
+                        System.out.println("Syncing table: " + metadata.getTableName());
                         synchronizeTable(connection, metadata);
+                        System.out.println("Table synced: " + metadata.getTableName());
                     }
                 } catch (Exception e) {
                     System.err.println("Error processing table " + metadata.getTableName() + ": " + e.getMessage());

@@ -7,6 +7,7 @@ import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.database.TemporalType;
 import net.vortexdevelopment.vinject.database.meta.EntityMetadata;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
+import org.jetbrains.annotations.NotNull;
 import sun.misc.Unsafe;
 
 
@@ -492,7 +493,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
     /**
      * Retrieves all entities.
      */
-    private Iterable<T> findAll() throws Exception {
+    private @NotNull Iterable<T> findAll() throws Exception {
         return database.connect(connection -> {
             String sql = "SELECT * FROM " + entityMetadata.getTableName();
             List<T> results = new ArrayList<>();
