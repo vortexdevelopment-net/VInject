@@ -1,0 +1,10 @@
+This project includes dependencies licensed under the Apache License, Version 2.0:
+
+- Apache Maven Plugin API (org.apache.maven:maven-plugin-api)
+- Apache Maven Plugin Tools Annotations (org.apache.maven.plugin-tools:maven-plugin-annotations)
+- Apache Maven Core (org.apache.maven:maven-core)
+- Apache Commons BCEL (org.apache.bcel:bcel)
+
+Each of these components is licensed under the Apache License, Version 2.0.
+You may obtain a copy of the license at:
+http://www.apache.org/licenses/LICENSE-2.0

@@ -1,0 +1,36 @@
+VInject Framework  
+Copyright 2025 VortexDevelopment  
+
+This project uses software from the following third parties:  
+
+1. Reflections  
+   - Copyright 2009-2012 Ronmamo  
+   - Licensed under the Apache License, Version 2.0  
+   - https://github.com/ronmamo/reflections  
+
+2. Lombok  
+   - Copyright 2009-2025 The Project Lombok Authors  
+   - Licensed under the MIT License  
+   - https://github.com/projectlombok/lombok  
+
+3. HikariCP  
+   - Copyright 2013-2025 Brett Wooldridge  
+   - Licensed under the Apache License, Version 2.0  
+   - https://github.com/brettwooldridge/HikariCP  
+
+4. MySQL Connector/J *(Potential GPL Issue, see below)*  
+   - Copyright 2000-2025 Oracle and/or its affiliates  
+   - Licensed under the GNU General Public License, version 2  
+   - https://github.com/mysql/mysql-connector-j  
+
+5. MariaDB Connector/J *(Alternative to MySQL Connector/J for LGPL compatibility)*  
+   - Copyright 2015-2025 MariaDB Corporation Ab  
+   - Licensed under the GNU Lesser General Public License, version 2.1  
+   - https://github.com/mariadb-corporation/mariadb-connector-j  
+
+6. JitPack  
+   - Copyright 2015-2025 JitPack  
+   - Licensed under the MIT License  
+   - https://github.com/jitpack/jitpack.io  
+
+For full license texts, please refer to the respective project repositories.  
