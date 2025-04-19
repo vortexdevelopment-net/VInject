@@ -33,7 +33,17 @@ public class SQLDataTypeMapper {
 
         //Default value
         if (defaultValue != null && !column.autoIncrement()) {
-            sb.append(" DEFAULT '").append(defaultValue).append("'");
+            if (defaultValue instanceof Boolean) {
+                sb.append(" DEFAULT ").append((Boolean) defaultValue ? 1 : 0);
+            } else if (defaultValue instanceof Number) {
+                sb.append(" DEFAULT ").append(defaultValue);
+            } else if (defaultValue instanceof String) {
+                sb.append(" DEFAULT '").append(defaultValue).append("'");
+            } else if (isEnum) {
+                sb.append(" DEFAULT '").append(defaultValue.toString()).append("'");
+            } else {
+                sb.append(" DEFAULT '").append(defaultValue.toString()).append("'");
+            }
         } else if (defaultValue == null && !column.autoIncrement()) {
             sb.append(" DEFAULT NULL");
         }
@@ -94,6 +104,8 @@ public class SQLDataTypeMapper {
             case "Date" -> "DATETIME" + nullableConstraint;
             case "byte[]" -> "BLOB" + nullableConstraint;
             case "UUID" -> "UUID" + nullableConstraint;
+            case "BigDecimal" -> "DECIMAL(" + (column.precision() != -1 ? column.precision() : 10) + ","
+                    + (column.scale() != -1 ? column.scale() : 2) + ")" + nullableConstraint;
             default -> throw new UnsupportedOperationException("Unsupported field type: " + fieldType.getName());
         };
     }
