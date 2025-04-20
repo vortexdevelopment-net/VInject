@@ -149,10 +149,10 @@ public class EntityTransformer extends AbstractMojo {
         }
 
 
-        // Remove all existing methods except constructors
+        // Remove all existing methods except constructors or those that has @Persist annotaton
         Method[] methods = classGen.getMethods();
         for (Method method : methods) {
-            if (!method.getName().equals("<init>")) {
+            if (!method.getName().equals("<init>") && Arrays.stream(method.getAnnotationEntries()).noneMatch(annotation -> annotation.getAnnotationType().equals("Lnet/vortexdevelopment/vinject/annotation/Keep;"))) {
                 classGen.removeMethod(method);
             }
         }
