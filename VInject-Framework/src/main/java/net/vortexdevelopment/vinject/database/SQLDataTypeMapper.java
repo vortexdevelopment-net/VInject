@@ -100,7 +100,7 @@ public class SQLDataTypeMapper {
             case "Double", "double" -> "DOUBLE" + nullableConstraint;
             case "Float", "float" -> "FLOAT(" + (column.precision() != -1 ? column.precision() : 10) + ","
                     + (column.scale() != -1 ? column.scale() : 2) + ")" + nullableConstraint;
-            case "Boolean", "boolean" -> "BOOLEAN" + nullableConstraint;
+            case "Boolean", "boolean" -> "TINYINT(1)" + nullableConstraint;
             case "Date" -> "DATETIME" + nullableConstraint;
             case "byte[]" -> "BLOB" + nullableConstraint;
             case "UUID" -> "UUID" + nullableConstraint;
