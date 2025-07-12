@@ -1,5 +1,6 @@
 package net.vortexdevelopment.transformer;
 
+import org.apache.bcel.Const;
 import org.apache.bcel.Constants;
 import org.apache.bcel.classfile.ClassParser;
 import org.apache.bcel.classfile.Field;
@@ -210,7 +211,7 @@ public class EntityTransformer extends AbstractMojo {
 
             // Add setter
             MethodGen setter = new MethodGen(
-                    Constants.ACC_PUBLIC,
+                    Const.ACC_PUBLIC,
                     Type.VOID,
                     new Type[]{fieldType},
                     new String[]{fieldName},

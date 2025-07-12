@@ -10,8 +10,9 @@ public interface DependencyRepository {
      * @param dependency The class of the dependency
      * @return The dependency instance or null if it doesn't exist
      * @param <T> The type of the dependency
+     * @throws NullPointerException if the dependency is not found
      */
-    @Nullable <T> T getDependency(Class<T> dependency);
+    @NotNull <T> T getDependency(Class<T> dependency);
 
     /**
      * Inject the dependencies into the object
@@ -41,6 +42,12 @@ public interface DependencyRepository {
      * @param instance The instance of the dependency
      */
     void addBean(@NotNull Class<?> clazz, @NotNull Object instance);
+
+    /**
+     * Calls all event listener methods for the given event
+     * @param event The event to emit
+     */
+    void emitEvent(@NotNull String event);
 
     static @NotNull DependencyRepository getInstance() {
         return DependencyContainer.getInstance();

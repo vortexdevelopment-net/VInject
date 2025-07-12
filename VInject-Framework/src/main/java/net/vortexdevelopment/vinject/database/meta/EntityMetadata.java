@@ -3,7 +3,7 @@ package net.vortexdevelopment.vinject.database.meta;
 import lombok.Getter;
 import net.vortexdevelopment.vinject.annotation.database.Column;
 import net.vortexdevelopment.vinject.annotation.database.Temporal;
-import net.vortexdevelopment.vinject.database.SQLDataTypeMapper;
+import net.vortexdevelopment.vinject.database.Database;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -55,7 +55,7 @@ public class EntityMetadata {
                             if (f.isAnnotationPresent(Column.class)) {
                                 Column c = f.getAnnotation(Column.class);
                                 if (c.primaryKey()) {
-                                    pkField = new FieldMetadata(f.getName(), c.name().isEmpty() ? f.getName() : c.name(), SQLDataTypeMapper.getSQLType(f.getType(), c, null, null), true, c.nullable(), c.unique(), c.autoIncrement(), null, f, null);
+                                    pkField = new FieldMetadata(f.getName(), c.name().isEmpty() ? f.getName() : c.name(), Database.getSQLTypeMapper().getSQLType(f.getType(), c, null, null), true, c.nullable(), c.unique(), c.autoIncrement(), null, f, null);
                                     break;
                                 }
                             }
@@ -69,7 +69,7 @@ public class EntityMetadata {
                     foreignKey = new ForeignKeyMetadata(relatedMetadata.getTableName(), pkField.getColumnName());
                 } else {
                     // Regular column
-                    sqlType = SQLDataTypeMapper.getSQLType(field.getType(), column, temporal, field.get(entityInstance));
+                    sqlType = Database.getSQLTypeMapper().getSQLType(field.getType(), column, temporal, field.get(entityInstance));
                 }
 
                 FieldMetadata fieldMeta = new FieldMetadata(

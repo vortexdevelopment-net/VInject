@@ -12,27 +12,36 @@ import sun.misc.Unsafe;
 
 
 import java.lang.annotation.Annotation;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.lang.reflect.Type;
 import java.math.BigInteger;
+import java.sql.Blob;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Enhanced InvocationHandler to implement CRUD operations for CrudRepository interface.
@@ -79,6 +88,8 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
                 return save((T) args[0]);
             case "saveAll":
                 return saveAll((Iterable<T>) args[0]);
+            case "query":
+                return handleQuery(method, args, startTime);
             case "findById":
                 return findById((ID) args[0]);
             case "existsById":
@@ -112,8 +123,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
                 break;
         }
 
-        // Existing findByXxx and other dynamic methods
-        // If the method didn't match any CrudRepository methods, proceed with existing logic
+        // If the method didn't match any CrudRepository methods, proceed with dynamic methods
         if (methodName.startsWith("findBy")) {
             return handleFindByMethod(method, args, startTime);
         }
@@ -130,8 +140,174 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
             return handleDeleteAllByMethod(method, args, startTime);
         }
 
+        //Check if the interface has the default method
+        if (method.isDefault()) {
+            // Using Java 9+ MethodHandles to invoke the default method in the interface
+            final Class<?> declaringClass = method.getDeclaringClass();
+            // create a private lookup for the declaring interface
+            MethodHandles.Lookup lookup = MethodHandles.privateLookupIn(declaringClass, MethodHandles.lookup());
+            // unreflect the special method handle for the default method
+            MethodHandle handle = lookup.findSpecial(
+                    declaringClass,
+                    method.getName(),
+                    MethodType.methodType(method.getReturnType(), method.getParameterTypes()),
+                    declaringClass);
+            // invoke with proxy as the first argument (this/self), followed by args
+            return handle.bindTo(proxy).invokeWithArguments(args == null ? new Object[0] : args);
+        }
+
+
         // Handle basic Object methods
         return handleObjectMethods(proxy, method, args);
+    }
+
+    //It does not map to an entity
+    private Object handleQuery(Method method, Object[] args, long startTime) throws Exception {
+        if (args == null || args.length < 2) {
+            throw new IllegalArgumentException("Query string and result type must be provided!");
+        }
+        String sql = (String) args[0];
+        Class<?> returnType = (Class<?>) args[1];
+
+        int paramCount = 0;
+        for (char c : sql.toCharArray()) {
+            if (c == '?') {
+                paramCount++;
+            }
+        }
+        int passedParams = args.length - 2; // skip SQL and returnType
+        if (paramCount != passedParams) {
+            throw new IllegalArgumentException("Mismatch between query parameters and arguments. Query: " + sql +
+                    ", Parameters: " + passedParams + ", Expected: " + paramCount);
+        }
+
+        Object[] params;
+        if (args.length == 3 && args[2] instanceof Object[]) {
+            params = (Object[]) args[2];
+        } else if (args.length > 2) {
+            params = Arrays.copyOfRange(args, 2, args.length);
+        } else {
+            params = new Object[0];
+        }
+
+        try (Connection connection = database.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+
+            for (int i = 0; i < params.length; i++) {
+                Object param = params[i];
+                if (param == null) {
+                    statement.setObject(i + 1, null);
+                } else if (param instanceof Integer) {
+                    statement.setInt(i + 1, (Integer) param);
+                } else if (param instanceof Long) {
+                    statement.setLong(i + 1, (Long) param);
+                } else if (param instanceof Double) {
+                    statement.setDouble(i + 1, (Double) param);
+                } else if (param instanceof Float) {
+                    statement.setFloat(i + 1, (Float) param);
+                } else if (param instanceof Boolean) {
+                    statement.setBoolean(i + 1, (Boolean) param);
+                } else if (param instanceof String) {
+                    statement.setString(i + 1, (String) param);
+                } else if (param instanceof java.sql.Date) {
+                    statement.setDate(i + 1, (java.sql.Date) param);
+                } else if (param instanceof java.sql.Timestamp) {
+                    statement.setTimestamp(i + 1, (java.sql.Timestamp) param);
+                } else if (param instanceof Byte[] || param instanceof byte[]) {
+                    // Support for Byte[] and byte[] for BLOB
+                    if (param instanceof Byte[])
+                        statement.setBytes(i + 1, toPrimitiveByteArray((Byte[]) param));
+                    else // Already a primitive byte[]
+                        statement.setBytes(i + 1, (byte[]) param);
+                } else {
+                    System.err.println("Setting parameter of type " + param.getClass().getName() + " with value: " + param.toString() + " is not supported. Using setObject instead.");
+                    statement.setObject(i + 1, param);
+                }
+            }
+
+            boolean isSelect = sql.trim().toLowerCase().startsWith("select");
+
+            if (isSelect) {
+                try (ResultSet rs = statement.executeQuery()) {
+                    if (Iterable.class.isAssignableFrom(returnType) || returnType.isArray()) {
+                        // Build a List of the desired elements, then convert to array if needed
+                        List<Object> results = new ArrayList<>();
+                        while (rs.next()) {
+                            results.add(readResultSetValue(rs, 1, returnType.getComponentType() != null ? returnType.getComponentType() : Object.class));
+                        }
+                        if (returnType.isArray()) {
+                            // Convert to correct array type
+                            Object arr = java.lang.reflect.Array.newInstance(returnType.getComponentType(), results.size());
+                            for (int i = 0; i < results.size(); i++)
+                                java.lang.reflect.Array.set(arr, i, results.get(i));
+                            return arr;
+                        } else {
+                            return results;
+                        }
+                    } else if (Map.class.isAssignableFrom(returnType)) {
+                        // Return a Map<String, Object> (column name -> value) for the first row
+                        if (rs.next()) {
+                            Map<String, Object> resultMap = new LinkedHashMap<>();
+                            ResultSetMetaData meta = rs.getMetaData();
+                            for (int i = 1; i <= meta.getColumnCount(); i++) {
+                                resultMap.put(meta.getColumnName(i), rs.getObject(i));
+                            }
+                            return resultMap;
+                        }
+                        return null;
+                    } else {
+                        // Single result - support for primitives and entities
+                        if (rs.next()) {
+                            return readResultSetValue(rs, 1, returnType);
+                        } else {
+                            return null;
+                        }
+                    }
+                }
+            } else {
+                int updated = statement.executeUpdate();
+                if (returnType == int.class || returnType == Integer.class) {
+                    return updated;
+                }
+                return null;
+            }
+        }
+    }
+
+    // Utility method to unbox Byte[] to byte[]
+    private byte[] toPrimitiveByteArray(Byte[] bytes) {
+        if (bytes == null) return null;
+        byte[] result = new byte[bytes.length];
+        for (int i = 0; i < bytes.length; i++) {
+            result[i] = bytes[i];
+        }
+        return result;
+    }
+
+    // Utility for extracting and converting a ResultSet cell to the required Java type
+    private Object readResultSetValue(ResultSet rs, int col, Class<?> t) throws Exception {
+        if (t == null || t == Object.class) {
+            return rs.getObject(col);
+        }
+        if (t == String.class)   return rs.getString(col);
+        if (t == Integer.class || t == int.class) return rs.getInt(col);
+        if (t == Long.class || t == long.class)   return rs.getLong(col);
+        if (t == Double.class || t == double.class) return rs.getDouble(col);
+        if (t == Float.class || t == float.class) return rs.getFloat(col);
+        if (t == Boolean.class || t == boolean.class) return rs.getBoolean(col);
+        if (t == Byte.class || t == byte.class)   return rs.getByte(col);
+        if (t == Byte[].class) {
+            byte[] primitive = rs.getBytes(col);
+            if (primitive == null) return null;
+            Byte[] wrapper = new Byte[primitive.length];
+            for (int i = 0; i < primitive.length; i++) wrapper[i] = primitive[i];
+            return wrapper;
+        }
+        if (t == byte[].class) return rs.getBytes(col);
+        if (t == java.sql.Date.class) return rs.getDate(col);
+        if (t == java.sql.Timestamp.class) return rs.getTimestamp(col);
+        // Attempt to read as object, can expand to custom entity mapping if needed
+        return rs.getObject(col, t);
     }
 
     /**
@@ -707,9 +883,8 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
                 if (!(boolean) isFieldModified.invoke(entity, fieldName)) {
                     continue; // Skip unchanged fields
                 }
-                //No field found, we continue as usual
             } catch (NoSuchMethodException ignored) {
-
+                //No field found, we continue as usual
             }
 
             String columnName = entry.getValue();
@@ -930,6 +1105,18 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
                 if (field.getType().isEnum()) {
                     value = Enum.valueOf((Class<? extends Enum>) field.getType(), value.toString());
                 }
+
+                // Handle blob conversion
+                if (field.getType() == byte[].class && value instanceof Blob) {
+                    Blob blob = (Blob) value;
+                    if (blob.length() == 0) {
+                        field.set(entityInstance, new byte[0]);
+                    } else {
+                        field.set(entityInstance, blob.getBytes(1, (int) blob.length()));
+                    }
+                    continue;
+                }
+
 
                 field.set(entityInstance, value);
             }

@@ -4,11 +4,14 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import net.vortexdevelopment.vinject.annotation.database.Column;
 import net.vortexdevelopment.vinject.annotation.database.Entity;
+import net.vortexdevelopment.vinject.database.mapper.H2Mapper;
+import net.vortexdevelopment.vinject.database.mapper.MySQLMapper;
 import net.vortexdevelopment.vinject.database.meta.EntityMetadata;
 import net.vortexdevelopment.vinject.database.meta.FieldMetadata;
 import net.vortexdevelopment.vinject.database.meta.ForeignKeyMetadata;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
 
+import java.io.File;
 import java.lang.reflect.Field;
 import java.sql.Connection;
 import java.sql.Statement;
@@ -22,10 +25,22 @@ public class Database implements DatabaseConnector {
     private static String TABLE_PREFIX = "example_";
     private final List<String> FOREIGN_KEY_QUERIES = new ArrayList<>();
     private String database;
+    private static SQLTypeMapper sqlTypeMapper;
 
-    public Database(String host, String port, String database, String type, String username, String password, int maxPoolSize) {
+    public Database(String host, String port, String database, String type, String username, String password, int maxPoolSize, File h2File) {
         hikariConfig = new HikariConfig();
-        hikariConfig.setJdbcUrl("jdbc:" + type + "://" + host + ":" + port + "/" + database + "?autoReconnect=true&useSSL=false");
+
+        if (type.equals("h2")) {
+            //Set system propery vinject.database=h2
+            sqlTypeMapper = new H2Mapper();
+            System.setProperty("vinject.database", "h2");
+            hikariConfig.setDriverClassName("org.h2.Driver");
+            hikariConfig.setJdbcUrl("jdbc:h2:file:./" + h2File.getPath().replaceAll("\\\\", "/") + ";AUTO_RECONNECT=TRUE;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE");
+        } else {
+            sqlTypeMapper = new MySQLMapper();
+            hikariConfig.setJdbcUrl("jdbc:" + type + "://" + host + ":" + port + "/" + database + "?autoReconnect=true&useSSL=false");
+        }
+
         hikariConfig.setUsername(username);
         hikariConfig.setPassword(password);
         hikariConfig.setMaximumPoolSize(maxPoolSize);
@@ -33,6 +48,14 @@ public class Database implements DatabaseConnector {
         hikariConfig.addDataSourceProperty("prepStmtCacheSize", "250");
         hikariConfig.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
         this.database = database;
+    }
+
+    public static boolean isH2() {
+        return System.getProperty("vinject.database", "").equals("h2");
+    }
+
+    public static SQLTypeMapper getSQLTypeMapper() {
+        return sqlTypeMapper;
     }
 
     public void init() {
@@ -79,10 +102,11 @@ public class Database implements DatabaseConnector {
     }
 
     private void verifyTables() {
+        boolean isH2 = System.getProperty("vinject.database", "").equals("h2");
         connect(connection -> {
             for (EntityMetadata metadata : entityMetadataMap.values()) {
                 try {
-                    if (!DBUtils.tableExists(connection, database, metadata.getTableName())) {
+                    if (!DBUtils.tableExists(connection, metadata.getTableName())) {
                         System.out.println("Table does not exist: '" + metadata.getTableName() + "' creating...");
                         // Table doesn't exist; create it
                         createTable(connection, metadata);
@@ -112,144 +136,127 @@ public class Database implements DatabaseConnector {
     }
 
     private void createTable(Connection connection, EntityMetadata metadata) throws Exception {
+        boolean isH2 = isH2();
         StringBuilder createSQL = new StringBuilder("CREATE TABLE IF NOT EXISTS `")
-                .append(metadata.getTableName()).append("` (\n");
+                .append(metadata.getTableName())
+                .append("` (\n");
+
         List<String> pkColumns = new ArrayList<>();
         List<String> foreignKeys = new ArrayList<>();
 
         for (FieldMetadata fieldMeta : metadata.getFields()) {
-            createSQL.append("  `").append(fieldMeta.getColumnName()).append("` ")
-                    .append(fieldMeta.getSqlType());
-
-            if (!fieldMeta.isNullable()) {
-                createSQL.append(" NOT NULL");
-            }
-
-            if (fieldMeta.isUnique()) {
-                createSQL.append(" UNIQUE");
-            }
-
-            if (fieldMeta.isAutoIncrement()) {
-                createSQL.append(" AUTO_INCREMENT");
-            }
-
-            createSQL.append(",\n");
+            createSQL.append("  `")
+                    .append(fieldMeta.getColumnName())
+                    .append("` ")
+                    .append(fieldMeta.getSqlType())
+                    .append(",\n");
 
             if (fieldMeta.isPrimaryKey()) {
                 pkColumns.add("`" + fieldMeta.getColumnName() + "`");
             }
-
-            //TODO remove?
-            if (fieldMeta.isForeignKey()) {
-                // Handle foreign key logic (unchanged from your implementation)
-            }
+            // foreign key handling omitted…
         }
 
-        // Primary Key
         if (!pkColumns.isEmpty()) {
             createSQL.append("  PRIMARY KEY (")
                     .append(String.join(", ", pkColumns))
                     .append("),\n");
         }
 
-        // Foreign Keys
         if (!foreignKeys.isEmpty()) {
             createSQL.append(String.join(",\n", foreignKeys)).append("\n");
         } else {
-            // Remove the last comma and newline
+            // remove trailing comma
             createSQL.setLength(createSQL.length() - 2);
             createSQL.append("\n");
         }
 
         createSQL.append(") ENGINE=InnoDB;");
 
+        String sql = createSQL.toString();
+        if (isH2) {
+            sql = sql.replace("`", "");
+        }
+
         try (Statement stmt = connection.createStatement()) {
-            stmt.executeUpdate(createSQL.toString());
-            System.out.println("Created table: " + createSQL.toString());
+            stmt.executeUpdate(sql);
+            System.out.println("Created table: " + sql);
         } catch (Exception e) {
-            System.err.println("SQL: " + createSQL.toString());
+            System.err.println("SQL: " + sql);
             System.err.println("Error creating table " + metadata.getTableName() + ": " + e.getMessage());
-            e.printStackTrace();
             throw e;
         }
     }
 
     private void synchronizeTable(Connection connection, EntityMetadata metadata) throws Exception {
-        // Retrieve existing columns from DB
+        boolean isH2 = Database.isH2();
         Map<String, String> existingColumns = DBUtils.getExistingColumns(connection, metadata.getTableName());
         Map<String, String> entityColumnTypes = new HashMap<>();
         Map<String, FieldMetadata> fieldMetadataMap = new HashMap<>();
 
         for (FieldMetadata fieldMeta : metadata.getFields()) {
-            entityColumnTypes.put(fieldMeta.getColumnName().toLowerCase(), fieldMeta.getSqlType());
-            fieldMetadataMap.put(fieldMeta.getColumnName().toLowerCase(), fieldMeta);
+            String name = fieldMeta.getColumnName().toLowerCase(Locale.ENGLISH);
+            entityColumnTypes.put(name, fieldMeta.getSqlType());
+            fieldMetadataMap.put(name, fieldMeta);
         }
 
         List<String> addColumns = new ArrayList<>();
         List<String> modifyColumns = new ArrayList<>();
         List<String> dropColumns = new ArrayList<>();
-        List<String> addForeignKeys = new ArrayList<>();
 
-        // Determine columns to add or modify
         for (Map.Entry<String, String> entry : entityColumnTypes.entrySet()) {
-            String columnName = entry.getKey();
-            String desiredType = entry.getValue();
-
-            if (!existingColumns.containsKey(columnName)) {
-                // Column doesn't exist; add it
-                FieldMetadata fieldMeta = fieldMetadataMap.get(columnName);
-                addColumns.add("`" + fieldMeta.getColumnName() + "` " + desiredType);
-
-                // Handle foreign keys if any
+            String col = entry.getKey();
+            String desired = entry.getValue();
+            if (!existingColumns.containsKey(col)) {
+                addColumns.add(isH2 ? col + " " + desired : "`" + col + "` " + desired);
             } else {
-                String existingType = existingColumns.get(columnName).toUpperCase();
-                if (!existingType.equals(desiredType.toUpperCase())) {
-                    modifyColumns.add("`" + columnName + "` " + desiredType);
-                    System.out.println("Type missmatch for column: " + columnName + " Expected: " + desiredType + " Actual: " + existingType);
+                String actual = existingColumns.get(col).toUpperCase(Locale.ENGLISH);
+                if (!actual.equals(desired.toUpperCase(Locale.ENGLISH))) {
+                    modifyColumns.add(isH2 ? col + " " + desired : "`" + col + "` " + desired);
+                    System.out.println("Type mismatch for column: " + col + " Expected: " + desired + " Actual: " + actual);
                 }
             }
         }
 
-        // Determine columns to drop
-        for (String existingColumn : existingColumns.keySet()) {
-            if (!entityColumnTypes.containsKey(existingColumn)) {
-                dropColumns.add("`" + existingColumn + "`");
+        for (String existing : existingColumns.keySet()) {
+            if (!entityColumnTypes.containsKey(existing)) {
+                dropColumns.add("`" + existing + "`");
             }
         }
 
-        // Execute ALTER statements if needed
-        if (!addColumns.isEmpty() || !modifyColumns.isEmpty() || !dropColumns.isEmpty() || !addForeignKeys.isEmpty()) {
-            StringBuilder alterSQL = new StringBuilder("ALTER TABLE `")
-                    .append(metadata.getTableName())
-                    .append("`\n");
+        if (addColumns.isEmpty() && modifyColumns.isEmpty() && dropColumns.isEmpty()) {
+            return;
+        }
 
-            List<String> alterations = new ArrayList<>();
-
-            for (String add : addColumns) {
-                alterations.add("  ADD COLUMN " + add);
-            }
-
-            for (String modify : modifyColumns) {
-                alterations.add("  MODIFY COLUMN " + modify);
-            }
-
-            for (String drop : dropColumns) {
-                alterations.add("  DROP COLUMN " + drop);
-            }
-
-            alterations.addAll(addForeignKeys);
-
-            alterSQL.append(String.join(",\n", alterations)).append(";");
-
-            try (Statement stmt = connection.createStatement()) {
-                stmt.executeUpdate(alterSQL.toString());
-                System.out.println("Synchronized table: " + metadata.getTableName());
-                System.out.println("Alter SQL: " + alterSQL.toString());
-            } catch (Exception e) {
-                System.err.println("SQL: " + alterSQL.toString());
-                System.err.println("Error synchronizing table " + metadata.getTableName() + ": " + e.getMessage());
-                e.printStackTrace();
-                throw e;
+        try (Statement stmt = connection.createStatement()) {
+            if (isH2) {
+                for (String clause : addColumns) {
+                    String sql = "ALTER TABLE " + metadata.getTableName()
+                            + " ADD COLUMN " + clause.replaceAll("`", "")
+                            .replaceAll("(?i)AUTO_INCREMENT", "IDENTITY");
+                    stmt.executeUpdate(sql);
+                }
+                for (String clause : modifyColumns) {
+                    String sql = "ALTER TABLE " + metadata.getTableName()
+                            + " ALTER COLUMN " + clause.replaceAll("`", "")
+                            .replaceAll("(?i)AUTO_INCREMENT", "IDENTITY");
+                    stmt.executeUpdate(sql);
+                }
+                for (String drop : dropColumns) {
+                    String col = drop.replaceAll("`", "");
+                    String sql = "ALTER TABLE " + metadata.getTableName() + " DROP COLUMN " + col;
+                    stmt.executeUpdate(sql);
+                }
+            } else {
+                StringBuilder alter = new StringBuilder("ALTER TABLE `")
+                        .append(metadata.getTableName()).append("`\n");
+                List<String> clauses = new ArrayList<>();
+                for (String add : addColumns)    clauses.add("  ADD COLUMN " + add);
+                for (String mod : modifyColumns) clauses.add("  MODIFY COLUMN " + mod);
+                for (String drop : dropColumns)  clauses.add("  DROP COLUMN " + drop);
+                alter.append(String.join(",\n", clauses)).append(";");
+                stmt.executeUpdate(alter.toString());
+                System.out.println("Alter SQL: " + alter);
             }
         }
     }

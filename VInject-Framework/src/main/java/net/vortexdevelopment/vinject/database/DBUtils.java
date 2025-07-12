@@ -4,8 +4,11 @@ import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -20,44 +23,75 @@ public class DBUtils {
      * @throws Exception If a database access error occurs.
      */
     public static Map<String, String> getExistingColumns(Connection connection, String tableName) throws Exception {
+        boolean isH2 = Database.isH2();
         Map<String, String> columns = new HashMap<>();
 
-        // Query the INFORMATION_SCHEMA for detailed column info
-        String sql = "SELECT COLUMN_NAME, COLUMN_TYPE, COLUMN_DEFAULT, EXTRA, IS_NULLABLE " +
-                "FROM INFORMATION_SCHEMA.COLUMNS " +
-                "WHERE TABLE_NAME = ? AND TABLE_SCHEMA = DATABASE()";
+        String sql;
+        if (isH2) {
+            sql = "SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT, IS_IDENTITY " +
+                    "FROM INFORMATION_SCHEMA.COLUMNS " +
+                    "WHERE TABLE_NAME = ?";
+        } else {
+            sql = "SELECT COLUMN_NAME, COLUMN_TYPE, COLUMN_DEFAULT, EXTRA, IS_NULLABLE " +
+                    "FROM INFORMATION_SCHEMA.COLUMNS " +
+                    "WHERE TABLE_NAME = ? AND TABLE_SCHEMA = DATABASE()";
+        }
 
         try (PreparedStatement stmt = connection.prepareStatement(sql)) {
             stmt.setString(1, tableName);
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    String columnName = rs.getString("COLUMN_NAME").toLowerCase();
-                    String columnType = rs.getString("COLUMN_TYPE"); // Includes type + length (e.g., VARCHAR(255), DECIMAL(10,2))
-                    String columnDefault = rs.getString("COLUMN_DEFAULT"); // Default value (e.g., CURRENT_TIMESTAMP)
-                    String extra = rs.getString("EXTRA").toUpperCase(Locale.ENGLISH); // Includes additional info like ON UPDATE CURRENT_TIMESTAMP
-                    String isNullable = rs.getString("IS_NULLABLE"); // "YES" or "NO"
+                    String columnName = rs.getString("COLUMN_NAME").toLowerCase(Locale.ENGLISH);
+                    String columnType;
+                    String columnDefault = rs.getString("COLUMN_DEFAULT");
+                    String isNullable = rs.getString("IS_NULLABLE");
+                    String extra = "";
 
-                    // Build the full type definition
-                    StringBuilder typeDefinition = new StringBuilder(columnType.toUpperCase(Locale.ENGLISH));
+                    if (isH2) {
+                        String typeName = rs.getString("DATA_TYPE").toUpperCase(Locale.ENGLISH);
+                        int maxLength = rs.getInt("CHARACTER_MAXIMUM_LENGTH");
 
-                    // Check if the column is nullable
+                        if (maxLength > 0 && (typeName.contains("CHAR") || typeName.contains("BINARY"))) {
+                            columnType = typeName + "(" + maxLength + ")";
+                        } else {
+                            columnType = typeName;
+                        }
+                    } else {
+                        columnType = rs.getString("COLUMN_TYPE").toUpperCase(Locale.ENGLISH);
+                        extra = rs.getString("EXTRA").toUpperCase(Locale.ENGLISH);
+                    }
+
+                    StringBuilder typeDefinition = new StringBuilder(columnType);
+
+                    if (isH2 && columnType.equals("ENUM")) {
+                        //Query enum values
+                        typeDefinition.insert(4, getEnumValues(connection, tableName, columnName));
+                    }
+
                     if ("NO".equalsIgnoreCase(isNullable)) {
                         typeDefinition.append(" NOT NULL");
                     } else {
                         typeDefinition.append(" NULL");
                     }
 
-                    // Add default value if present
+                    if (isH2) {
+                        String isIdentity = rs.getString("IS_IDENTITY");
+                        if ("YES".equalsIgnoreCase(isIdentity)) {
+                            typeDefinition.append(" AUTO_INCREMENT");
+                        }
+                    }
+
                     if (columnDefault != null) {
+                        if (columnDefault.contains(".")) {
+                            columnDefault = columnDefault.replaceAll("\\.0+$", "");
+                        }
                         typeDefinition.append(" DEFAULT ").append(columnDefault);
                     }
 
-                    // Add extra info if present
                     if (!extra.isEmpty()) {
                         typeDefinition.append(" ").append(extra);
                     }
 
-                    // Add to the map
                     columns.put(columnName, typeDefinition.toString());
                 }
             }
@@ -65,7 +99,73 @@ public class DBUtils {
         return columns;
     }
 
+    private static int getEnumIdentifier(Connection connection, String tableName, String columnName) {
+        String sql = "SELECT DTD_IDENTIFIER FROM INFORMATION_SCHEMA.COLUMNS " +
+                "WHERE TABLE_NAME = ? AND COLUMN_NAME = ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, tableName.toUpperCase());
+            ps.setString(2, columnName.toUpperCase());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt("DTD_IDENTIFIER");
+                }
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+        return -1; // Not found or error
+    }
 
+    public static String getEnumValues(Connection connection, String tableName, String columnName) {
+        int enumIdentifier = getEnumIdentifier(connection, tableName, columnName);
+
+        String sql = "SELECT VALUE_NAME FROM INFORMATION_SCHEMA.ENUM_VALUES " +
+                "WHERE OBJECT_NAME = ? AND ENUM_IDENTIFIER = ? ORDER BY VALUE_ORDINAL";
+        List<String> values = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, tableName.toUpperCase());
+            ps.setInt(2, enumIdentifier);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    values.add("'" + rs.getString("VALUE_NAME") + "'");
+                }
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+        return "(" + String.join(",", values) + ")";
+    }
+
+
+
+    /**
+     * Map H2 DATA_TYPE codes to SQL types
+     */
+    private static String mapH2DataType(int dataTypeCode) {
+        switch (dataTypeCode) {
+            case java.sql.Types.VARCHAR:
+                return "VARCHAR";
+            case java.sql.Types.BIGINT:
+                return "BIGINT";
+            case java.sql.Types.INTEGER:
+                return "INT";
+            case java.sql.Types.DOUBLE:
+                return "DOUBLE";
+            case java.sql.Types.FLOAT:
+                return "FLOAT";
+            case java.sql.Types.TIMESTAMP:
+                return "TIMESTAMP";
+            case java.sql.Types.BOOLEAN:
+                return "BOOLEAN";
+            case java.sql.Types.BLOB:
+                return "BLOB";
+            case java.sql.Types.CLOB:
+                return "CLOB";
+            // Add any more types you need
+            default:
+                return "UNKNOWN";
+        }
+    }
 
     /**
      * Checks if a table exists in the database.
@@ -75,13 +175,15 @@ public class DBUtils {
      * @return True if the table exists, false otherwise.
      * @throws Exception If a database access error occurs.
      */
-    public static boolean tableExists(Connection connection, String databaseName, String tableName) throws Exception {
-        PreparedStatement ps = connection.prepareStatement("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ?");
-        ps.setString(1, databaseName);
-        ps.setString(2, tableName);
-        try (ResultSet rs = ps.executeQuery()) {
-            rs.next();
-            return rs.getInt(1) > 0;
+    public static boolean tableExists(Connection connection, String tableName) throws Exception {
+        String sql = "SELECT COUNT(*) FROM information_schema.tables WHERE UPPER(table_name) = ?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, tableName.toUpperCase());
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getInt(1) > 0;
+            }
         }
     }
+
 }

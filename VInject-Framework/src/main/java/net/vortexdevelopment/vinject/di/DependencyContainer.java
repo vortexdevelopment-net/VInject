@@ -4,6 +4,7 @@ import lombok.Getter;
 import net.vortexdevelopment.vinject.annotation.Bean;
 import net.vortexdevelopment.vinject.annotation.Component;
 import net.vortexdevelopment.vinject.annotation.Inject;
+import net.vortexdevelopment.vinject.annotation.OnEvent;
 import net.vortexdevelopment.vinject.annotation.Registry;
 import net.vortexdevelopment.vinject.annotation.Repository;
 import net.vortexdevelopment.vinject.annotation.Root;
@@ -24,6 +25,7 @@ import org.reflections.Reflections;
 import org.reflections.util.ConfigurationBuilder;
 import sun.misc.Unsafe;
 
+import java.beans.EventHandler;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -34,6 +36,7 @@ import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
@@ -53,11 +56,13 @@ public class DependencyContainer implements DependencyRepository {
     private final Set<Class<?>> entities;
     private AnnotationHandlerRegistry annotationHandlerRegistry;
     private Consumer<Void> onPreComponentLoad;
+    private Map<String, List<Method>> eventListeners;
 
     @Getter
     private static DependencyContainer instance;
     public DependencyContainer(Root rootAnnotation, Class<?> rootClass, @Nullable Object rootInstance, Database database, RepositoryContainer repositoryContainer, @Nullable Consumer<Void> onPreComponentLoad) {
         instance = this;
+        eventListeners = new ConcurrentHashMap<>();
         dependencies = new ConcurrentHashMap<>();
         entities = ConcurrentHashMap.newKeySet();
         unsafe = getUnsafe();
@@ -137,6 +142,8 @@ public class DependencyContainer implements DependencyRepository {
                 throw new RuntimeException("Unable to determine generic type for CrudRepository in class: " + repositoryClass.getName());
             }
 
+            registerEventListeners(repositoryClass);
+
             // Register the repository and its entity type
             RepositoryInvocationHandler<?, ?> proxy = repositoryContainer.registerRepository(repositoryClass, entityClass, this);
             this.dependencies.put(repositoryClass, proxy.create());
@@ -157,6 +164,9 @@ public class DependencyContainer implements DependencyRepository {
                 if (annotation == null) {
                     throw new RuntimeException("Annotation not found for class: " + aClass + ". Make sure to return a valid annotation in getAnnotation method");
                 }
+
+                registerEventListeners(aClass);
+
                 annotationHandlerRegistry.registerHandler(annotation, instance);
             } else {
                 throw new RuntimeException("Class: " + aClass.getName() + " annotated with @Registry does not extend AnnotationHandler");
@@ -171,7 +181,10 @@ public class DependencyContainer implements DependencyRepository {
         });
 
         //Register Beans and Services
-        reflections.getTypesAnnotatedWith(Service.class).forEach(this::registerBeans);
+        reflections.getTypesAnnotatedWith(Service.class).forEach(serviceClass -> {
+            registerEventListeners(serviceClass);
+            registerBeans(serviceClass);
+        });
 
         annotationHandlerRegistry.getHandlers(RegistryOrder.SERVICES).forEach(annotationHandler -> {
             Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
@@ -189,7 +202,16 @@ public class DependencyContainer implements DependencyRepository {
 
         //Register Components
         //Need to create a loading order to avoid circular dependencies and inject issues
-        createLoadingOrder(reflections.getTypesAnnotatedWith(Component.class)).forEach(this::registerComponent);
+        createLoadingOrder(reflections.getTypesAnnotatedWith(Component.class)).stream().sorted(Comparator.comparingInt(value -> {
+            Component component = value.getAnnotation(Component.class);
+            if (component != null) {
+                return component.priority();
+            }
+            return 10;
+        })).forEach(componentClass -> {
+            registerEventListeners(componentClass);
+            registerComponent(componentClass);
+        });
 
         annotationHandlerRegistry.getHandlers(RegistryOrder.COMPONENTS).forEach(annotationHandler -> {
             Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
@@ -197,6 +219,63 @@ public class DependencyContainer implements DependencyRepository {
                 annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
         });
+    }
+
+    @Override
+    public void emitEvent(@NotNull String eventName) {
+        List<Method> listeners = eventListeners.get(eventName);
+        if (listeners == null || listeners.isEmpty()) {
+            return; // No listeners for this event
+        }
+        for (Method listenerMethod : listeners) {
+            try {
+                Object instance = dependencies.get(listenerMethod.getDeclaringClass());
+                listenerMethod.setAccessible(true);
+
+                //If it has no parameters, invoke it directly
+                if (listenerMethod.getParameterCount() == 0) {
+                    listenerMethod.invoke(instance);
+                    continue;
+                }
+
+                //else check if we have all the types in the dependency container to invoke it, event listener methods only should have dependencies that are already registered
+                Class<?>[] parameterTypes = listenerMethod.getParameterTypes();
+                Object[] parameters = new Object[parameterTypes.length];
+                for (int i = 0; i < parameterTypes.length; i++) {
+                    Object dependency = dependencies.get(parameterTypes[i]);
+                    if (dependency == null) {
+                        System.err.println("Dependency not found for event listener method: " + listenerMethod.getName() + " with parameter type: " + parameterTypes[i].getName());
+                        continue;
+                    }
+                    parameters[i] = dependency;
+                }
+                listenerMethod.invoke(instance, parameters);
+            } catch (Exception e) {
+                System.err.println("Error invoking event listener: " + listenerMethod.getName() + " for event: " + eventName);
+                e.printStackTrace();
+            }
+        }
+    }
+
+    private void registerEventListeners(Class<?> clazz) {
+        for (Method method : clazz.getDeclaredMethods()) {
+            if (method.isAnnotationPresent(OnEvent.class)) {
+                //We either has a String value or a string array value with the event names
+                OnEvent onEvent = method.getAnnotation(OnEvent.class);
+                String[] values = onEvent.value();
+
+                if (values != null) {
+                    //Register the method for each event in the array
+                    for (String event : values) {
+                        if (event.isEmpty()) {
+                            System.err.println("Event name is empty in method: " + method.getName() + " in class: " + clazz.getName() + ". Skipping registration.");
+                            continue;
+                        }
+                        eventListeners.computeIfAbsent(event, k -> new ArrayList<>()).add(method);
+                    }
+                }
+            }
+        }
     }
 
     //Clear and set to null everything
@@ -452,8 +531,12 @@ public class DependencyContainer implements DependencyRepository {
     }
 
     @Override
-    public <T> @Nullable T getDependency(Class<T> dependency) {
-        return (T) dependencies.get(dependency);
+    public <T> @NotNull T getDependency(Class<T> dependency) {
+        Object result = dependencies.get(dependency);
+        if (result == null) {
+            throw new RuntimeException("Dependency not found for class: " + dependency.getName());
+        }
+        return (T) result;
     }
 
     //TODO: Show error when a non static field is injected and used in the constructor

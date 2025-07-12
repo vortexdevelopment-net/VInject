@@ -20,4 +20,10 @@ public @interface Component {
      * @return The classes to register the class as a subclass of.
      */
     public Class[] registerSubclasses() default {};
+
+    /**
+     * Register priority. Lower numbers are loaded first.
+     * @return The load priority of the component.
+     */
+    public int priority() default 10;
 }
