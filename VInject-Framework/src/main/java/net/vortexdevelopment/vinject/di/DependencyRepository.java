@@ -15,6 +15,14 @@ public interface DependencyRepository {
     @NotNull <T> T getDependency(Class<T> dependency);
 
     /**
+     * Get a dependency from the repository
+     * @param dependency The class of the dependency
+     * @return The dependency instance or null if it doesn't exist
+     * @param <T> The type of the dependency
+     */
+    @Nullable <T> T getDependencyOrNull(Class<T> dependency);
+
+    /**
      * Inject the dependencies into the object
      * <p>
      * Does not inject static dependencies, use {@link #injectStatic(Class)} for that

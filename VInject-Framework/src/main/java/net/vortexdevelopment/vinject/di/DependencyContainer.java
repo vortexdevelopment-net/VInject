@@ -2,8 +2,10 @@ package net.vortexdevelopment.vinject.di;
 
 import lombok.Getter;
 import net.vortexdevelopment.vinject.annotation.Bean;
+import net.vortexdevelopment.vinject.annotation.DependsOn;
 import net.vortexdevelopment.vinject.annotation.Component;
 import net.vortexdevelopment.vinject.annotation.Inject;
+import net.vortexdevelopment.vinject.annotation.OptionalDependency;
 import net.vortexdevelopment.vinject.annotation.OnEvent;
 import net.vortexdevelopment.vinject.annotation.Registry;
 import net.vortexdevelopment.vinject.annotation.Repository;
@@ -54,6 +56,8 @@ public class DependencyContainer implements DependencyRepository {
     private final Class<?> rootClass;
     private final Object rootInstance;
     private final Set<Class<?>> entities;
+    private final Set<Class<?>> skippedDueToDependsOn;
+    private final Map<Class<?>, List<String>> missingDependenciesByClass;
     private AnnotationHandlerRegistry annotationHandlerRegistry;
     private Consumer<Void> onPreComponentLoad;
     private Map<String, List<Method>> eventListeners;
@@ -65,6 +69,8 @@ public class DependencyContainer implements DependencyRepository {
         eventListeners = new ConcurrentHashMap<>();
         dependencies = new ConcurrentHashMap<>();
         entities = ConcurrentHashMap.newKeySet();
+        skippedDueToDependsOn = ConcurrentHashMap.newKeySet();
+        missingDependenciesByClass = new ConcurrentHashMap<>();
         unsafe = getUnsafe();
         annotationHandlerRegistry = new AnnotationHandlerRegistry();
 
@@ -125,11 +131,17 @@ public class DependencyContainer implements DependencyRepository {
         annotationHandlerRegistry.getHandlers(RegistryOrder.ENTITIES).forEach(annotationHandler -> {
             Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
             reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
+                if (!canLoadClass(aClass)) {
+                    return;
+                }
                 annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
         });
 
         reflections.getTypesAnnotatedWith(Repository.class).forEach(repositoryClass -> {
+            if (!canLoadClass(repositoryClass)) {
+                return;
+            }
             // Check if the class implements CrudRepository
             if (!ReflectionUtils.getAllSuperTypes(repositoryClass).contains(CrudRepository.class)) {
                 throw new RuntimeException("Class: " + repositoryClass.getName()
@@ -176,12 +188,18 @@ public class DependencyContainer implements DependencyRepository {
         annotationHandlerRegistry.getHandlers(RegistryOrder.FIRST).forEach(annotationHandler -> {
             Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
             reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
+                if (!canLoadClass(aClass)) {
+                    return;
+                }
                 annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
         });
 
         //Register Beans and Services
         reflections.getTypesAnnotatedWith(Service.class).forEach(serviceClass -> {
+            if (!canLoadClass(serviceClass)) {
+                return;
+            }
             registerEventListeners(serviceClass);
             registerBeans(serviceClass);
         });
@@ -189,6 +207,9 @@ public class DependencyContainer implements DependencyRepository {
         annotationHandlerRegistry.getHandlers(RegistryOrder.SERVICES).forEach(annotationHandler -> {
             Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
             reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
+                if (!canLoadClass(aClass)) {
+                    return;
+                }
                 annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
         });
@@ -196,13 +217,18 @@ public class DependencyContainer implements DependencyRepository {
         annotationHandlerRegistry.getHandlers(RegistryOrder.REPOSITORIES).forEach(annotationHandler -> {
             Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
             reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
+                if (!canLoadClass(aClass)) {
+                    return;
+                }
                 annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
         });
 
         //Register Components
         //Need to create a loading order to avoid circular dependencies and inject issues
-        createLoadingOrder(reflections.getTypesAnnotatedWith(Component.class)).stream().sorted(Comparator.comparingInt(value -> {
+        Set<Class<?>> allComponents = reflections.getTypesAnnotatedWith(Component.class);
+        Set<Class<?>> loadableComponents = allComponents.stream().filter(this::canLoadClass).collect(Collectors.toSet());
+        createLoadingOrder(loadableComponents).stream().sorted(Comparator.comparingInt(value -> {
             Component component = value.getAnnotation(Component.class);
             if (component != null) {
                 return component.priority();
@@ -216,6 +242,9 @@ public class DependencyContainer implements DependencyRepository {
         annotationHandlerRegistry.getHandlers(RegistryOrder.COMPONENTS).forEach(annotationHandler -> {
             Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
             reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
+                if (!canLoadClass(aClass)) {
+                    return;
+                }
                 annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
         });
@@ -361,7 +390,15 @@ public class DependencyContainer implements DependencyRepository {
                             || parameter.equals(this.rootClass)
                             || parameter.isAnnotationPresent(Repository.class)
                     ) {
-                        dependencies.add(parameter);
+                        if (components.contains(parameter)) {
+                            dependencies.add(parameter);
+                        } else {
+                            Class<?> providingClass = getProvidingClass(components, parameter);
+                            if (providingClass != null) {
+                                dependencies.add(providingClass);
+                                provided.add(providingClass);
+                            }
+                        }
                     } else {
                         //if the parameter type does not have a component annotation in its class declaration, something is providing it, skip it
                         Class<?> providingClass = getProvidingClass(components, parameter);
@@ -370,7 +407,7 @@ public class DependencyContainer implements DependencyRepository {
                             provided.add(providingClass);
                             continue;
                         } else {
-                            throw new RuntimeException("Dependency not found for constructor parameter: " + parameter.getName() + " in class: " + component.getName() + " while creating loading order. Forget to add Bean?");
+                            // leave unresolved to be handled at injection time
                         }
                     }
                 }
@@ -397,11 +434,18 @@ public class DependencyContainer implements DependencyRepository {
                                 provided.add(providingClass);
                                 continue;
                             } else {
-                                System.err.println("field iteration");
-                                throw new RuntimeException("Dependency not found for field: " + fieldType.getName() + " in class: " + component.getName() + " while creating load order. Forget to add Bean?");
+                                // leave unresolved to be handled at injection time
                             }
                         }
-                        dependencies.add(fieldType);
+                        if (components.contains(fieldType)) {
+                            dependencies.add(fieldType);
+                        } else {
+                            Class<?> providingClass = getProvidingClass(components, fieldType);
+                            if (providingClass != null) {
+                                dependencies.add(providingClass);
+                                provided.add(providingClass);
+                            }
+                        }
                     }
                 }
             }
@@ -479,12 +523,26 @@ public class DependencyContainer implements DependencyRepository {
         try {
             //Check if we need to inject dependencies into the constructor
             if (!hasDefaultConstructor(clazz)) {
-                Class<?>[] parameterTypes = clazz.getDeclaredConstructors()[0].getParameterTypes();
+                Constructor<?> constructor = clazz.getDeclaredConstructors()[0];
+                Class<?>[] parameterTypes = constructor.getParameterTypes();
+                Annotation[][] parameterAnnotations = constructor.getParameterAnnotations();
                 Object[] parameters = new Object[parameterTypes.length];
                 for (int i = 0; i < parameterTypes.length; i++) {
-                    parameters[i] = dependencies.get(parameterTypes[i]);
-                    if (parameters[i] == null) {
-                        throw new RuntimeException("Dependency not found for constructor parameter: " + parameterTypes[i].getName() + " in class: " + clazz.getName() + ". Forget to add Bean?");
+                    Object dependency = dependencies.get(parameterTypes[i]);
+                    if (dependency == null) {
+                        boolean isOptional = Arrays.stream(parameterAnnotations[i])
+                                .anyMatch(a -> a.annotationType().equals(OptionalDependency.class));
+                        if (isOptional) {
+                            parameters[i] = null;
+                        } else {
+                            if (skippedDueToDependsOn != null && skippedDueToDependsOn.contains(parameterTypes[i])) {
+                                List<String> missing = missingDependenciesByClass != null ? missingDependenciesByClass.getOrDefault(parameterTypes[i], Collections.emptyList()) : Collections.emptyList();
+                                throw new RuntimeException("Dependency not loaded for constructor parameter: " + parameterTypes[i].getName() + " in class: " + clazz.getName() + ". Missing runtime dependencies: " + String.join(", ", missing) + ". Consider annotating the parameter with @OptionalDependency to inject null.");
+                            }
+                            throw new RuntimeException("Dependency not found for constructor parameter: " + parameterTypes[i].getName() + " in class: " + clazz.getName() + ". Forget to add Bean?");
+                        }
+                    } else {
+                        parameters[i] = dependency;
                     }
                 }
                 injectStatic(clazz);
@@ -539,6 +597,11 @@ public class DependencyContainer implements DependencyRepository {
         return (T) result;
     }
 
+    @Override
+    public <T> @Nullable T getDependencyOrNull(Class<T> dependency) {
+        return (T) dependencies.get(dependency);
+    }
+
     //TODO: Show error when a non static field is injected and used in the constructor
     @Override
     public void inject(@NotNull Object object) {
@@ -547,10 +610,23 @@ public class DependencyContainer implements DependencyRepository {
             if (field.isAnnotationPresent(Inject.class) && !Modifier.isStatic(field.getModifiers())) {
                 Object dependency = dependencies.get(field.getType());
                 if (dependency == null) {
+                    boolean isOptional = field.isAnnotationPresent(OptionalDependency.class);
+                    if (isOptional) {
+                        try {
+                            unsafe.putObject(object, unsafe.objectFieldOffset(field), null);
+                        } catch (Exception e) {
+                            throw new RuntimeException("Unable to inject optional dependency: " + field.getType() + " " + field.getName() + " in class: " + object.getClass().getName(), e);
+                        }
+                        continue;
+                    }
                     //Check if the object is a @Service class
                     if (object.getClass().isAnnotationPresent(Service.class)) {
                         throw new RuntimeException("Only @Root class can be injected to @Service classes! Class: " + object.getClass().getName());
                     } else {
+                        if (skippedDueToDependsOn != null && skippedDueToDependsOn.contains(field.getType())) {
+                            List<String> missing = missingDependenciesByClass != null ? missingDependenciesByClass.getOrDefault(field.getType(), Collections.emptyList()) : Collections.emptyList();
+                            throw new RuntimeException("Dependency not loaded for field: " + field.getType().getName() + " " + field.getName() + " in class: " + object.getClass().getName() + ". Missing runtime dependencies: " + String.join(", ", missing) + ". Consider annotating the field with @OptionalDependency to inject null.");
+                        }
                         throw new RuntimeException("Dependency not found for field: " + field.getType() + " " + field.getName() + " in class: " + object.getClass().getName() + " while injecting dependencies. Forget to add Bean?");
                     }
                 }
@@ -575,6 +651,19 @@ public class DependencyContainer implements DependencyRepository {
             if (field.isAnnotationPresent(Inject.class) && Modifier.isStatic(field.getModifiers())) {
                 Object dependency = dependencies.get(field.getType());
                 if (dependency == null) {
+                    boolean isOptional = field.isAnnotationPresent(OptionalDependency.class);
+                    if (isOptional) {
+                        try {
+                            unsafe.putObject(target, unsafe.staticFieldOffset(field), null);
+                        } catch (Exception e) {
+                            throw new RuntimeException("Unable to inject optional dependency: " + field.getType() + " " + field.getName() + " in class: " + target.getName(), e);
+                        }
+                        continue;
+                    }
+                    if (skippedDueToDependsOn != null && skippedDueToDependsOn.contains(field.getType())) {
+                        List<String> missing = missingDependenciesByClass != null ? missingDependenciesByClass.getOrDefault(field.getType(), Collections.emptyList()) : Collections.emptyList();
+                        throw new RuntimeException("Dependency not loaded for field: " + field.getType().getName() + " " + field.getName() + " in class: " + target.getName() + ". Missing runtime dependencies: " + String.join(", ", missing) + ". Consider annotating the field with @OptionalDependency to inject null.");
+                    }
                     throw new RuntimeException("Dependency not found for field: " + field.getType() +" " + field.getName() + " in class: " + target.getName() + " while injecting static dependencies. Forget to add Bean?");
                 }
                 try {
@@ -653,4 +742,59 @@ public class DependencyContainer implements DependencyRepository {
         return entities.toArray(new Class[0]);
     }
 
+    private boolean canLoadClass(Class<?> clazz) {
+        DependsOn dependsOn = clazz.getAnnotation(DependsOn.class);
+        if (dependsOn == null) {
+            return true;
+        }
+        List<String> missing = new ArrayList<>();
+        ClassLoader loader = clazz.getClassLoader();
+        try {
+            Class<?> val = dependsOn.value();
+            if (val != null && val != Void.class) {
+                if (!isClassPresent(val.getName(), loader)) {
+                    missing.add(val.getName());
+                }
+            }
+        } catch (Throwable ignored) {
+            missing.add("<unavailable:value>");
+        }
+        try {
+            for (Class<?> c : dependsOn.values()) {
+                if (c != null && !isClassPresent(c.getName(), loader)) {
+                    missing.add(c.getName());
+                }
+            }
+        } catch (Throwable ignored) {
+            missing.add("<unavailable:values>");
+        }
+        String className = dependsOn.className();
+        if (className != null && !className.isEmpty() && !isClassPresent(className, loader)) {
+            missing.add(className);
+        }
+        for (String name : dependsOn.classNames()) {
+            if (name != null && !name.isEmpty() && !isClassPresent(name, loader)) {
+                missing.add(name);
+            }
+        }
+        if (!missing.isEmpty()) {
+            if (!dependsOn.soft()) {
+                // Hard dependency: throw immediately with details
+                throw new RuntimeException("Hard DependsOn failure for class: " + clazz.getName() + ". Missing classes: " + String.join(", ", missing));
+            }
+            skippedDueToDependsOn.add(clazz);
+            missingDependenciesByClass.put(clazz, missing);
+            return false;
+        }
+        return true;
+    }
+
+    private boolean isClassPresent(String name, ClassLoader loader) {
+        try {
+            Class.forName(name, false, loader);
+            return true;
+        } catch (Throwable e) {
+            return false;
+        }
+    }
 }
