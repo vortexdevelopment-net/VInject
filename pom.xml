@@ -35,4 +35,12 @@
             <scope>provided</scope>
         </dependency>
     </dependencies>
+
+    <distributionManagement>
+        <repository>
+            <id>vortex-repo</id>
+            <name>vortex-repo</name>
+            <url>https://repo.vortexdevelopment.net/repository</url>
+        </repository>
+    </distributionManagement>
 </project>
