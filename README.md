@@ -2,6 +2,26 @@
 
 A lightweight and powerful dependency injection framework for Java applications, designed to simplify dependency management and improve code organization. Originally created for Minecraft plugin development, it provides seamless integration with the Bukkit/Spigot ecosystem while also supporting standalone Java applications.
 
+## Getting Started
+
+### Adding to Your Project
+
+Add the following to your `pom.xml`:
+
+```xml
+<repository>
+    <id>vortex-repo</id>
+    <url>https://repo.vortexdevelopment.net/repository/maven-public/</url>
+</repository>
+
+<dependency>
+    <groupId>net.vortexdevelopment</groupId>
+    <artifactId>VInject-Framework</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <scope>compile</scope>
+</dependency>
+```
+
 ## Features
 
 ### Primarily designed for Minecraft plugin development
@@ -106,29 +126,6 @@ A lightweight and powerful dependency injection framework for Java applications,
   - Package scanning with inclusion/exclusion support
   - Custom annotation handlers
   - Dependency order management
-
-## Getting Started
-
-### Adding to Your Project
-
-Add the following to your `pom.xml`:
-
-```xml
-<repositories>
-    <repository>
-        <id>jitpack.io</id>
-        <url>https://jitpack.io</url>
-    </repository>
-</repositories>
-
-<dependencies>
-    <dependency>
-        <groupId>com.github.VortexDevelopment</groupId>
-        <artifactId>VInject-Framework</artifactId>
-        <version>1.0.0</version>
-    </dependency>
-</dependencies>
-```
 
 ### Basic Usage
 
