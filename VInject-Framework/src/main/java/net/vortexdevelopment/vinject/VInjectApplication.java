@@ -84,16 +84,19 @@ public class VInjectApplication {
                                           String dbType, String dbUsername, String dbPassword,
                                           int maxPoolSize, @Nullable File h2File,
                                           String... args) {
-        // Initialize Environment FIRST - load application.properties and set system properties
-        // This must happen before dependency injection so @Value annotations can resolve properties
-        Environment.initialize();
-        
+
+        Root rootAnnotation = rootClass.getAnnotation(Root.class);
+
         // Validate root class annotation
         if (!rootClass.isAnnotationPresent(Root.class)) {
             throw new RuntimeException("Class " + rootClass.getName() + " must be annotated with @Root");
         }
 
-        Root rootAnnotation = rootClass.getAnnotation(Root.class);
+        if (rootAnnotation.loadProperties()) {
+            // Initialize Environment FIRST - load application.properties and set system properties
+            // This must happen before dependency injection so @Value annotations can resolve properties
+            Environment.initialize();
+        }
 
         // Initialize database if configuration provided
         if (dbHost != null && dbType != null) {

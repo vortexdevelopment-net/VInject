@@ -26,6 +26,12 @@ public @interface Root {
     boolean createInstance() default true;
 
     /**
+     * Automatically load application.properties from the working directory
+     * @return true if properties should be loaded
+     */
+    boolean loadProperties() default true;
+
+    /**
      * Packages to ignore when scanning for classes in the root package
      * @return ignored packages
      */
