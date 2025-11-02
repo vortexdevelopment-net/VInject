@@ -101,7 +101,7 @@ public class VInjectApplication {
         // Initialize database if configuration provided
         if (dbHost != null && dbType != null) {
             database = new Database(dbHost, dbPort, dbName, dbType, dbUsername, dbPassword, maxPoolSize, 
-                    h2File != null ? h2File : new File("./h2Data"));
+                    h2File != null ? h2File : new File("./" + rootClass.getName()));
             database.init();
             repositoryContainer = new RepositoryContainer(database);
         } else {
