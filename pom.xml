@@ -5,8 +5,8 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>net.vortexdevelopment</groupId>
-    <artifactId>VInject</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <artifactId>VInject-Parent</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>VInject</name>

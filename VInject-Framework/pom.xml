@@ -5,11 +5,11 @@
     <modelVersion>4.0.0</modelVersion>
     <parent>
         <groupId>net.vortexdevelopment</groupId>
-        <artifactId>VInject</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <artifactId>VInject-Parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>VInject-Framework</artifactId>
+    <artifactId>VInject</artifactId>
 
     <properties>
         <maven.compiler.source>21</maven.compiler.source>
