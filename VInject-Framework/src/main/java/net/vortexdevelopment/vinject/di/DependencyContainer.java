@@ -5,7 +5,6 @@ import net.vortexdevelopment.vinject.annotation.Bean;
 import net.vortexdevelopment.vinject.annotation.DependsOn;
 import net.vortexdevelopment.vinject.annotation.Component;
 import net.vortexdevelopment.vinject.annotation.Inject;
-import net.vortexdevelopment.vinject.annotation.OptionalDependency;
 import net.vortexdevelopment.vinject.annotation.OnDestroy;
 import net.vortexdevelopment.vinject.annotation.OnEvent;
 import net.vortexdevelopment.vinject.annotation.PostConstruct;
@@ -868,30 +867,16 @@ public class DependencyContainer implements DependencyRepository {
                         continue;
                     }
                     
-                    // Fallback to existing logic for backward compatibility
-                    // Check for @Value annotation first
+                    // Fallback to existing logic for backward compatibility (only for @Value if resolver didn't handle it)
+                    // Note: @Inject is now fully handled by InjectArgumentResolver
                     Value valueAnnotation = findAnnotation(parameterAnnotations[i], Value.class);
                     if (valueAnnotation != null) {
                         parameters[i] = resolveValue(valueAnnotation.value(), parameterTypes[i]);
                         continue;
                     }
                     
-                    Object dependency = dependencies.get(parameterTypes[i]);
-                    if (dependency == null) {
-                        boolean isOptional = Arrays.stream(parameterAnnotations[i])
-                                .anyMatch(a -> a.annotationType().equals(OptionalDependency.class));
-                        if (isOptional) {
-                            parameters[i] = null;
-                        } else {
-                            if (skippedDueToDependsOn != null && skippedDueToDependsOn.contains(parameterTypes[i])) {
-                                List<String> missing = missingDependenciesByClass != null ? missingDependenciesByClass.getOrDefault(parameterTypes[i], Collections.emptyList()) : Collections.emptyList();
-                                throw new RuntimeException("Dependency not loaded for constructor parameter: " + parameterTypes[i].getName() + " in class: " + clazz.getName() + ". Missing runtime dependencies: " + String.join(", ", missing) + ". Consider annotating the parameter with @OptionalDependency to inject null.");
-                            }
-                            throw new RuntimeException("Dependency not found for constructor parameter: " + parameterTypes[i].getName() + " in class: " + clazz.getName() + ". Forget to add Bean?");
-                        }
-                    } else {
-                        parameters[i] = dependency;
-                    }
+                    // If no resolver handled it and it's not @Value, throw an error
+                    throw new RuntimeException("Unable to resolve constructor parameter: " + parameterTypes[i].getName() + " in class: " + clazz.getName() + ". Use @Inject, @Value, or @OptionalDependency annotation.");
                 }
                 injectStatic(clazz);
                 T instance = (T) clazz.getDeclaredConstructors()[0].newInstance(parameters);
@@ -988,44 +973,19 @@ public class DependencyContainer implements DependencyRepository {
                             continue;
                         }
                         
-                        // Fallback to existing logic for backward compatibility
-                        // Check for @Value annotation first
+                        // Fallback to existing logic for backward compatibility (only for @Value if resolver didn't handle it)
+                        // Note: @Inject is now fully handled by InjectArgumentResolver
                         Value valueAnnotation = findAnnotation(parameterAnnotations[i], Value.class);
                         if (valueAnnotation != null) {
                             parameters[i] = resolveValue(valueAnnotation.value(), parameterTypes[i]);
                             continue;
                         }
                         
-                        // Check for @Inject annotation or default dependency injection
-                        boolean hasInject = Arrays.stream(parameterAnnotations[i])
-                                .anyMatch(a -> a.annotationType().equals(Inject.class));
-                        
-                        if (hasInject || parameterTypes[i].isAnnotationPresent(Component.class) 
-                                || parameterTypes[i].isAnnotationPresent(Service.class)
-                                || parameterTypes[i].isAnnotationPresent(Repository.class)
-                                || dependencies.containsKey(parameterTypes[i])) {
-                            // Try to get from dependencies
-                            Object dependency = dependencies.get(parameterTypes[i]);
-                            if (dependency == null) {
-                                boolean isOptional = Arrays.stream(parameterAnnotations[i])
-                                        .anyMatch(a -> a.annotationType().equals(OptionalDependency.class));
-                                if (isOptional) {
-                                    parameters[i] = null;
-                                } else {
-                                    throw new RuntimeException("Dependency not found for @PostConstruct method parameter: " + 
-                                            parameterTypes[i].getName() + " in method: " + method.getName() + 
-                                            " of class: " + clazz.getName());
-                                }
-                            } else {
-                                parameters[i] = dependency;
-                            }
-                        } else {
-                            // No injection annotation and not a known component type
-                            throw new RuntimeException("@PostConstruct method " + method.getName() + 
-                                    " in class " + clazz.getName() + 
-                                    " has parameter " + parameterTypes[i].getName() + 
-                                    " that cannot be injected. Use @Inject or @Value annotation, or mark with @OptionalDependency.");
-                        }
+                        // If no resolver handled it and it's not @Value, throw an error
+                        throw new RuntimeException("@PostConstruct method " + method.getName() + 
+                                " in class " + clazz.getName() + 
+                                " has parameter " + parameterTypes[i].getName() + 
+                                " that cannot be injected. Use @Inject or @Value annotation, or mark with @OptionalDependency.");
                     }
                     
                     // Invoke the method with resolved parameters
@@ -1050,6 +1010,38 @@ public class DependencyContainer implements DependencyRepository {
     @Override
     public <T> @Nullable T getDependencyOrNull(Class<T> dependency) {
         return (T) dependencies.get(dependency);
+    }
+
+    /**
+     * Check if a class was skipped due to missing DependsOn dependencies.
+     * Used by argument resolvers for error reporting.
+     * 
+     * @param clazz The class to check
+     * @return true if the class was skipped
+     */
+    public boolean isSkippedDueToDependsOn(Class<?> clazz) {
+        return skippedDueToDependsOn != null && skippedDueToDependsOn.contains(clazz);
+    }
+
+    /**
+     * Get missing dependencies for a class that was skipped due to DependsOn.
+     * Used by argument resolvers for error reporting.
+     * 
+     * @param clazz The class to check
+     * @return List of missing dependency class names, or empty list if none
+     */
+    public List<String> getMissingDependencies(Class<?> clazz) {
+        return missingDependenciesByClass != null ? missingDependenciesByClass.getOrDefault(clazz, Collections.emptyList()) : Collections.emptyList();
+    }
+
+    /**
+     * Get the root class.
+     * Used by argument resolvers for validation.
+     * 
+     * @return The root class
+     */
+    public Class<?> getRootClass() {
+        return rootClass;
     }
 
     //TODO: Show error when a non static field is injected and used in the constructor
@@ -1081,8 +1073,8 @@ public class DependencyContainer implements DependencyRepository {
                 }
             }
             
-            // Fallback to existing logic for backward compatibility
-            // Check for @Value annotation
+            // Fallback to existing logic for backward compatibility (only for @Value if resolver didn't handle it)
+            // Note: @Inject is now fully handled by InjectArgumentResolver
             if (field.isAnnotationPresent(Value.class)) {
                 Value valueAnnotation = field.getAnnotation(Value.class);
                 try {
@@ -1090,37 +1082,6 @@ public class DependencyContainer implements DependencyRepository {
                     unsafe.putObject(object, unsafe.objectFieldOffset(field), value);
                 } catch (Exception e) {
                     throw new RuntimeException("Unable to inject @Value for field: " + field.getName() + " in class: " + object.getClass().getName(), e);
-                }
-                continue;
-            }
-            
-            if (field.isAnnotationPresent(Inject.class)) {
-                Object dependency = dependencies.get(field.getType());
-                if (dependency == null) {
-                    boolean isOptional = field.isAnnotationPresent(OptionalDependency.class);
-                    if (isOptional) {
-                        try {
-                            unsafe.putObject(object, unsafe.objectFieldOffset(field), null);
-                        } catch (Exception e) {
-                            throw new RuntimeException("Unable to inject optional dependency: " + field.getType() + " " + field.getName() + " in class: " + object.getClass().getName(), e);
-                        }
-                        continue;
-                    }
-                    //Check if the object is a @Service class
-                    if (object.getClass().isAnnotationPresent(Service.class)) {
-                        throw new RuntimeException("Only @Root class can be injected to @Service classes! Class: " + object.getClass().getName());
-                    } else {
-                        if (skippedDueToDependsOn != null && skippedDueToDependsOn.contains(field.getType())) {
-                            List<String> missing = missingDependenciesByClass != null ? missingDependenciesByClass.getOrDefault(field.getType(), Collections.emptyList()) : Collections.emptyList();
-                            throw new RuntimeException("Dependency not loaded for field: " + field.getType().getName() + " " + field.getName() + " in class: " + object.getClass().getName() + ". Missing runtime dependencies: " + String.join(", ", missing) + ". Consider annotating the field with @OptionalDependency to inject null.");
-                        }
-                        throw new RuntimeException("Dependency not found for field: " + field.getType() + " " + field.getName() + " in class: " + object.getClass().getName() + " while injecting dependencies. Forget to add Bean?");
-                    }
-                }
-                try {
-                    unsafe.putObject(object, unsafe.objectFieldOffset(field), dependency);
-                } catch (Exception e) {
-                    throw new RuntimeException("Unable to inject dependency: " + field.getType() + " " + field.getName() + " in class: " + object.getClass().getName(), e);
                 }
             }
         }
@@ -1159,8 +1120,8 @@ public class DependencyContainer implements DependencyRepository {
                 }
             }
             
-            // Fallback to existing logic for backward compatibility
-            // Check for @Value annotation
+            // Fallback to existing logic for backward compatibility (only for @Value if resolver didn't handle it)
+            // Note: @Inject is now fully handled by InjectArgumentResolver
             if (field.isAnnotationPresent(Value.class)) {
                 Value valueAnnotation = field.getAnnotation(Value.class);
                 try {
@@ -1168,32 +1129,6 @@ public class DependencyContainer implements DependencyRepository {
                     unsafe.putObject(target, unsafe.staticFieldOffset(field), value);
                 } catch (Exception e) {
                     throw new RuntimeException("Unable to inject @Value for static field: " + field.getName() + " in class: " + target.getName(), e);
-                }
-                continue;
-            }
-            
-            if (field.isAnnotationPresent(Inject.class)) {
-                Object dependency = dependencies.get(field.getType());
-                if (dependency == null) {
-                    boolean isOptional = field.isAnnotationPresent(OptionalDependency.class);
-                    if (isOptional) {
-                        try {
-                            unsafe.putObject(target, unsafe.staticFieldOffset(field), null);
-                        } catch (Exception e) {
-                            throw new RuntimeException("Unable to inject optional dependency: " + field.getType() + " " + field.getName() + " in class: " + target.getName(), e);
-                        }
-                        continue;
-                    }
-                    if (skippedDueToDependsOn != null && skippedDueToDependsOn.contains(field.getType())) {
-                        List<String> missing = missingDependenciesByClass != null ? missingDependenciesByClass.getOrDefault(field.getType(), Collections.emptyList()) : Collections.emptyList();
-                        throw new RuntimeException("Dependency not loaded for field: " + field.getType().getName() + " " + field.getName() + " in class: " + target.getName() + ". Missing runtime dependencies: " + String.join(", ", missing) + ". Consider annotating the field with @OptionalDependency to inject null.");
-                    }
-                    throw new RuntimeException("Dependency not found for field: " + field.getType() +" " + field.getName() + " in class: " + target.getName() + " while injecting static dependencies. Forget to add Bean?");
-                }
-                try {
-                    unsafe.putObject(target, unsafe.staticFieldOffset(field), dependency);
-                } catch (Exception e) {
-                    throw new RuntimeException("Unable to inject dependency: " + field.getType() + " " + field.getName() + " in class: " + target.getName(), e);
                 }
             }
         }
@@ -1259,27 +1194,18 @@ public class DependencyContainer implements DependencyRepository {
                         continue;
                     }
                     
-                    // Fallback to existing logic for backward compatibility
-                    // Check for @Value annotation first
+                    // Fallback to existing logic for backward compatibility (only for @Value if resolver didn't handle it)
+                    // Note: @Inject is now fully handled by InjectArgumentResolver
                     Value valueAnnotation = findAnnotation(parameterAnnotations[i], Value.class);
                     if (valueAnnotation != null) {
                         parameters[i] = resolveValue(valueAnnotation.value(), parameterTypes[i]);
                         continue;
                     }
                     
-                    // Otherwise, try to get from dependencies
-                    Object dependency = dependencies.get(parameterTypes[i]);
-                    if (dependency == null) {
-                        boolean isOptional = Arrays.stream(parameterAnnotations[i])
-                                .anyMatch(a -> a.annotationType().equals(OptionalDependency.class));
-                        if (isOptional) {
-                            parameters[i] = null;
-                        } else {
-                            throw new RuntimeException("Dependency not found for @Bean method parameter: " + parameterTypes[i].getName() + " in method: " + bean.getName() + " of class: " + clazz.getName());
-                        }
-                    } else {
-                        parameters[i] = dependency;
-                    }
+                    // If no resolver handled it and it's not @Value, throw an error
+                    throw new RuntimeException("Unable to resolve @Bean method parameter: " + parameterTypes[i].getName() + 
+                            " in method: " + bean.getName() + " of class: " + clazz.getName() + 
+                            ". Use @Inject, @Value, or @OptionalDependency annotation.");
                 }
                 
                 Object beanInstance = bean.invoke(instance, parameters); //Invoke the method with resolved parameters
