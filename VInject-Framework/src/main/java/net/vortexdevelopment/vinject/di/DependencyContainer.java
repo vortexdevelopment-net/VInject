@@ -6,11 +6,15 @@ import net.vortexdevelopment.vinject.annotation.DependsOn;
 import net.vortexdevelopment.vinject.annotation.Component;
 import net.vortexdevelopment.vinject.annotation.Inject;
 import net.vortexdevelopment.vinject.annotation.OptionalDependency;
+import net.vortexdevelopment.vinject.annotation.OnDestroy;
 import net.vortexdevelopment.vinject.annotation.OnEvent;
+import net.vortexdevelopment.vinject.annotation.PostConstruct;
 import net.vortexdevelopment.vinject.annotation.Registry;
 import net.vortexdevelopment.vinject.annotation.Repository;
 import net.vortexdevelopment.vinject.annotation.Root;
 import net.vortexdevelopment.vinject.annotation.Service;
+import net.vortexdevelopment.vinject.annotation.Value;
+import net.vortexdevelopment.vinject.config.Environment;
 import net.vortexdevelopment.vinject.annotation.database.Entity;
 import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.database.repository.CrudRepository;
@@ -61,6 +65,7 @@ public class DependencyContainer implements DependencyRepository {
     private AnnotationHandlerRegistry annotationHandlerRegistry;
     private Consumer<Void> onPreComponentLoad;
     private Map<String, List<Method>> eventListeners;
+    private List<Method> destroyMethods;
 
     @Getter
     private static DependencyContainer instance;
@@ -71,6 +76,7 @@ public class DependencyContainer implements DependencyRepository {
         entities = ConcurrentHashMap.newKeySet();
         skippedDueToDependsOn = ConcurrentHashMap.newKeySet();
         missingDependenciesByClass = new ConcurrentHashMap<>();
+        destroyMethods = new ArrayList<>();
         unsafe = getUnsafe();
         annotationHandlerRegistry = new AnnotationHandlerRegistry();
 
@@ -96,37 +102,49 @@ public class DependencyContainer implements DependencyRepository {
 
         //included packages override ignored packages
         String[] includedPackages = rootAnnotation.includedPackages();
+        String rootPackage = getEffectivePackageName(rootAnnotation, rootClass);
+        // Convert package name to path format (e.g., "net.vortexdevelopment.vinject.app" -> "net/vortexdevelopment/vinject/app")
+        String rootPackagePath = rootPackage.replace('.', '/');
 
         Configuration configuration = new ConfigurationBuilder()
-                .forPackage(rootAnnotation.packageName())
+                .forPackage(rootPackage)
                 .filterInputsBy(s -> {
                     if (s == null) return false;
                     if (s.startsWith("META-INF")) return false;
+                    if (!s.endsWith(".class")) return false;
 
-                    boolean include = true;
+                    // First check: Only include classes that are under the root package
+                    if (!s.startsWith(rootPackagePath + "/") && !s.equals(rootPackagePath + ".class")) {
+                        return false;
+                    }
 
+                    // Check ignored packages (must match the path format)
                     for (String ignoredPackage : ignoredPackages) {
-                        if (s.startsWith(ignoredPackage)) {
-                            include = false;
-                            break;
+                        String ignoredPath = ignoredPackage.replace('.', '/');
+                        if (s.startsWith(ignoredPath)) {
+                            return false;
                         }
                     }
 
+                    // Check included packages (override ignored packages)
                     for (String includedPackage : includedPackages) {
-                        if (s.startsWith(includedPackage)) {
-                            include = true;
-                            break;
+                        String includedPath = includedPackage.replace('.', '/');
+                        if (s.startsWith(includedPath)) {
+                            return true;
                         }
                     }
 
-                    return include && s.endsWith(".class");
+                    // Default: include if under root package (already checked above)
+                    return true;
                 });
 
         //Find all classes which annotated as Service
         Reflections reflections = new Reflections(configuration);
 
         //Get all entities first so we can initialize the database before components
-        entities.addAll(reflections.getTypesAnnotatedWith(Entity.class));
+        if (database != null) {
+            entities.addAll(reflections.getTypesAnnotatedWith(Entity.class));
+        }
 
         annotationHandlerRegistry.getHandlers(RegistryOrder.ENTITIES).forEach(annotationHandler -> {
             Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
@@ -161,7 +179,9 @@ public class DependencyContainer implements DependencyRepository {
             this.dependencies.put(repositoryClass, proxy.create());
         });
         //Run database initialization (Create, Update tables)
-        database.initializeEntityMetadata(this);
+        if (database != null) {
+            database.initializeEntityMetadata(this);
+        }
 
         if (onPreComponentLoad != null) {
             onPreComponentLoad.accept(null);
@@ -248,6 +268,9 @@ public class DependencyContainer implements DependencyRepository {
                 annotationHandler.handle(aClass,  dependencies.get(aClass), this);
             });
         });
+
+        // Scan for @OnDestroy methods (including root instance)
+        scanDestroyMethods();
     }
 
     @Override
@@ -305,6 +328,225 @@ public class DependencyContainer implements DependencyRepository {
                 }
             }
         }
+    }
+
+    /**
+     * Scan all components in the dependency container for @OnDestroy annotated methods.
+     * This includes all components, services, beans, and the root instance.
+     */
+    private void scanDestroyMethods() {
+        destroyMethods.clear();
+
+        // FIRST: Always scan root class immediately, before scanning other components
+        // This ensures the root class is scanned even if something goes wrong later
+        if (rootClass != null) {
+            // Get the root instance from dependencies map (it should be there)
+            Object rootInstanceToScan = dependencies.get(rootClass);
+            if (rootInstanceToScan == null && rootInstance != null) {
+                rootInstanceToScan = rootInstance;
+            }
+            
+            // Scan the root class - use instance if available, otherwise scan class methods only
+            if (rootInstanceToScan != null) {
+                scanDestroyMethodsForClass(rootClass, rootInstanceToScan);
+            } else {
+                // Scan class methods even without instance (instance will be found during invocation)
+                scanDestroyMethodsForClassOnly(rootClass);
+            }
+        }
+
+        // Then scan all other registered components for @OnDestroy methods
+        for (Map.Entry<Class<?>, Object> entry : dependencies.entrySet()) {
+            Class<?> componentClass = entry.getKey();
+            Object componentInstance = entry.getValue();
+
+            // Skip if instance is null
+            if (componentInstance == null) {
+                continue;
+            }
+
+            // Check if this is the root class (skip if already scanned)
+            if (rootClass != null && componentClass.equals(rootClass)) {
+                // Skip scanning again (already done above)
+                continue;
+            }
+
+            // Find all methods annotated with @OnDestroy
+            scanDestroyMethodsForClass(componentClass, componentInstance);
+        }
+    }
+
+    /**
+     * Scan a specific class/instance for @OnDestroy methods and add them to the destroyMethods list.
+     *
+     * @param clazz The class to scan
+     * @param instance The instance (used for validation)
+     */
+    private void scanDestroyMethodsForClass(Class<?> clazz, Object instance) {
+        if (clazz == null) {
+            return;
+        }
+        // Note: instance can be null - we'll scan the class methods anyway
+
+        // Find all methods annotated with @OnDestroy
+        // Check both declared methods and all methods (to catch inherited ones)
+        Method[] allMethods = clazz.getMethods(); // Gets public methods including inherited
+        Method[] declaredMethods = clazz.getDeclaredMethods(); // Gets all methods declared in this class
+        
+        // First check declared methods
+        for (Method method : declaredMethods) {
+            if (method.isAnnotationPresent(OnDestroy.class)) {
+                // Check if this method is already in the list (avoid duplicates)
+                boolean alreadyAdded = destroyMethods.stream().anyMatch(m -> 
+                    m.getDeclaringClass().equals(method.getDeclaringClass()) && 
+                    m.getName().equals(method.getName())
+                );
+                if (alreadyAdded) {
+                    continue;
+                }
+
+                // Validate method signature: should have no parameters and return void
+                if (method.getParameterCount() != 0) {
+                    System.err.println("Warning: @OnDestroy method " + method.getName() + 
+                            " in class " + clazz.getName() + 
+                            " has parameters. It should have no parameters.");
+                    continue;
+                }
+                if (!method.getReturnType().equals(void.class) && !method.getReturnType().equals(Void.class)) {
+                    System.err.println("Warning: @OnDestroy method " + method.getName() + 
+                            " in class " + clazz.getName() + 
+                            " does not return void. It should return void.");
+                    continue;
+                }
+
+                method.setAccessible(true);
+                destroyMethods.add(method);
+            }
+        }
+        
+        // Also check public methods (to catch inherited @OnDestroy methods)
+        for (Method method : allMethods) {
+            // Skip if already processed as declared method
+            boolean isDeclared = false;
+            for (Method declared : declaredMethods) {
+                if (declared.equals(method)) {
+                    isDeclared = true;
+                    break;
+                }
+            }
+            if (isDeclared) {
+                continue;
+            }
+            
+            if (method.isAnnotationPresent(OnDestroy.class)) {
+                // Check if this method is already in the list (avoid duplicates)
+                boolean alreadyAdded = destroyMethods.stream().anyMatch(m -> 
+                    m.getDeclaringClass().equals(method.getDeclaringClass()) && 
+                    m.getName().equals(method.getName())
+                );
+                if (alreadyAdded) {
+                    continue;
+                }
+
+                // Validate method signature: should have no parameters and return void
+                if (method.getParameterCount() != 0) {
+                    System.err.println("Warning: @OnDestroy method " + method.getName() + 
+                            " in class " + clazz.getName() + 
+                            " has parameters. It should have no parameters.");
+                    continue;
+                }
+                if (!method.getReturnType().equals(void.class) && !method.getReturnType().equals(Void.class)) {
+                    System.err.println("Warning: @OnDestroy method " + method.getName() + 
+                            " in class " + clazz.getName() + 
+                            " does not return void. It should return void.");
+                    continue;
+                }
+
+                method.setAccessible(true);
+                destroyMethods.add(method);
+            }
+        }
+    }
+
+    /**
+     * Scan a class for @OnDestroy methods without requiring an instance.
+     * Used when we need to scan the root class but instance might not exist yet.
+     *
+     * @param clazz The class to scan
+     */
+    private void scanDestroyMethodsForClassOnly(Class<?> clazz) {
+        scanDestroyMethodsForClass(clazz, null);
+    }
+
+    /**
+     * Invoke all methods annotated with @OnDestroy on their respective component instances.
+     */
+    public void invokeDestroyMethods() {
+        // If no destroy methods were found during startup scanning, try scanning again
+        // This is a fallback in case scanning didn't happen or was incomplete
+        if (destroyMethods.isEmpty()) {
+            // Re-scan, especially the root class
+            if (rootClass != null) {
+                scanDestroyMethodsForClassOnly(rootClass);
+            }
+            
+            // Also try to get root instance from dependencies and scan it
+            if (rootClass != null) {
+                Object rootInst = dependencies.get(rootClass);
+                if (rootInst != null) {
+                    scanDestroyMethodsForClass(rootClass, rootInst);
+                }
+            }
+        }
+        
+        if (destroyMethods.isEmpty()) {
+            return;
+        }
+
+        // Invoke destroy methods in reverse order (LIFO - last created, first destroyed)
+        for (int i = destroyMethods.size() - 1; i >= 0; i--) {
+            Method method = destroyMethods.get(i);
+            Class<?> componentClass = method.getDeclaringClass();
+            Object componentInstance = dependencies.get(componentClass);
+
+            if (componentInstance == null) {
+                // Try to find the instance by checking registered subclasses
+                componentInstance = findComponentInstance(componentClass);
+            }
+
+            // If still not found, check if it's the root instance
+            if (componentInstance == null && rootInstance != null && rootClass != null) {
+                if (componentClass.equals(rootClass) || rootClass.isAssignableFrom(componentClass)) {
+                    componentInstance = rootInstance;
+                }
+            }
+
+            if (componentInstance != null) {
+                try {
+                    method.invoke(componentInstance);
+                } catch (Exception e) {
+                    System.err.println("Error invoking @OnDestroy method " + method.getName() + 
+                            " on " + componentClass.getName() + ": " + e.getMessage());
+                    e.printStackTrace();
+                }
+            } else {
+                System.err.println("Warning: Could not find instance for component " + 
+                        componentClass.getName() + " to invoke @OnDestroy method " + method.getName());
+            }
+        }
+    }
+
+    /**
+     * Find component instance by checking if any registered component implements or extends the given class.
+     */
+    private Object findComponentInstance(Class<?> targetClass) {
+        for (Map.Entry<Class<?>, Object> entry : dependencies.entrySet()) {
+            Class<?> componentClass = entry.getKey();
+            if (targetClass.isAssignableFrom(componentClass)) {
+                return entry.getValue();
+            }
+        }
+        return null;
     }
 
     //Clear and set to null everything
@@ -528,6 +770,13 @@ public class DependencyContainer implements DependencyRepository {
                 Annotation[][] parameterAnnotations = constructor.getParameterAnnotations();
                 Object[] parameters = new Object[parameterTypes.length];
                 for (int i = 0; i < parameterTypes.length; i++) {
+                    // Check for @Value annotation first
+                    Value valueAnnotation = findAnnotation(parameterAnnotations[i], Value.class);
+                    if (valueAnnotation != null) {
+                        parameters[i] = resolveValue(valueAnnotation.value(), parameterTypes[i]);
+                        continue;
+                    }
+                    
                     Object dependency = dependencies.get(parameterTypes[i]);
                     if (dependency == null) {
                         boolean isOptional = Arrays.stream(parameterAnnotations[i])
@@ -548,6 +797,7 @@ public class DependencyContainer implements DependencyRepository {
                 injectStatic(clazz);
                 T instance = (T) clazz.getDeclaredConstructors()[0].newInstance(parameters);
                 inject(instance);
+                invokePostConstruct(instance);
 
                 if (clazz.isAnnotationPresent(Component.class)) {
                     Component componentAnnotation = clazz.getAnnotation(Component.class);
@@ -565,6 +815,7 @@ public class DependencyContainer implements DependencyRepository {
             injectStatic(clazz);
             T instance = constructor.newInstance();
             inject(instance);
+            invokePostConstruct(instance);
             //Register the instance in the dependency container
             dependencies.put(clazz, instance);
             if (clazz.isAnnotationPresent(Component.class)) {
@@ -588,6 +839,87 @@ public class DependencyContainer implements DependencyRepository {
         }
     }
 
+    /**
+     * Invoke all methods annotated with @PostConstruct on the given instance.
+     * PostConstruct methods are called after constructor execution and dependency injection.
+     * Supports dependency injection for method parameters via @Inject or @Value annotations.
+     *
+     * @param instance The instance to invoke PostConstruct methods on
+     */
+    public void invokePostConstruct(Object instance) {
+        if (instance == null) {
+            return;
+        }
+
+        Class<?> clazz = instance.getClass();
+        for (Method method : clazz.getDeclaredMethods()) {
+            if (method.isAnnotationPresent(PostConstruct.class)) {
+                // Validate return type: should return void
+                if (!method.getReturnType().equals(void.class) && !method.getReturnType().equals(Void.class)) {
+                    System.err.println("Warning: @PostConstruct method " + method.getName() +
+                            " in class " + clazz.getName() +
+                            " does not return void. It should return void.");
+                    continue;
+                }
+
+                try {
+                    method.setAccessible(true);
+                    
+                    // Resolve method parameters with dependency injection support
+                    Class<?>[] parameterTypes = method.getParameterTypes();
+                    Annotation[][] parameterAnnotations = method.getParameterAnnotations();
+                    Object[] parameters = new Object[parameterTypes.length];
+                    
+                    for (int i = 0; i < parameterTypes.length; i++) {
+                        // Check for @Value annotation first
+                        Value valueAnnotation = findAnnotation(parameterAnnotations[i], Value.class);
+                        if (valueAnnotation != null) {
+                            parameters[i] = resolveValue(valueAnnotation.value(), parameterTypes[i]);
+                            continue;
+                        }
+                        
+                        // Check for @Inject annotation or default dependency injection
+                        boolean hasInject = Arrays.stream(parameterAnnotations[i])
+                                .anyMatch(a -> a.annotationType().equals(Inject.class));
+                        
+                        if (hasInject || parameterTypes[i].isAnnotationPresent(Component.class) 
+                                || parameterTypes[i].isAnnotationPresent(Service.class)
+                                || parameterTypes[i].isAnnotationPresent(Repository.class)
+                                || dependencies.containsKey(parameterTypes[i])) {
+                            // Try to get from dependencies
+                            Object dependency = dependencies.get(parameterTypes[i]);
+                            if (dependency == null) {
+                                boolean isOptional = Arrays.stream(parameterAnnotations[i])
+                                        .anyMatch(a -> a.annotationType().equals(OptionalDependency.class));
+                                if (isOptional) {
+                                    parameters[i] = null;
+                                } else {
+                                    throw new RuntimeException("Dependency not found for @PostConstruct method parameter: " + 
+                                            parameterTypes[i].getName() + " in method: " + method.getName() + 
+                                            " of class: " + clazz.getName());
+                                }
+                            } else {
+                                parameters[i] = dependency;
+                            }
+                        } else {
+                            // No injection annotation and not a known component type
+                            throw new RuntimeException("@PostConstruct method " + method.getName() + 
+                                    " in class " + clazz.getName() + 
+                                    " has parameter " + parameterTypes[i].getName() + 
+                                    " that cannot be injected. Use @Inject or @Value annotation, or mark with @OptionalDependency.");
+                        }
+                    }
+                    
+                    // Invoke the method with resolved parameters
+                    method.invoke(instance, parameters);
+                } catch (Exception e) {
+                    throw new RuntimeException("Error invoking @PostConstruct method " + method.getName() +
+                            " on " + clazz.getName(), e);
+                }
+            }
+        }
+    }
+
     @Override
     public <T> @NotNull T getDependency(Class<T> dependency) {
         Object result = dependencies.get(dependency);
@@ -605,8 +937,20 @@ public class DependencyContainer implements DependencyRepository {
     //TODO: Show error when a non static field is injected and used in the constructor
     @Override
     public void inject(@NotNull Object object) {
-        //Inject object where @Inject annotation is present
+        //Inject object where @Inject or @Value annotation is present
         for (Field field : object.getClass().getDeclaredFields()) {
+            // Check for @Value annotation
+            if (field.isAnnotationPresent(Value.class) && !Modifier.isStatic(field.getModifiers())) {
+                Value valueAnnotation = field.getAnnotation(Value.class);
+                try {
+                    Object value = resolveValue(valueAnnotation.value(), field.getType());
+                    unsafe.putObject(object, unsafe.objectFieldOffset(field), value);
+                } catch (Exception e) {
+                    throw new RuntimeException("Unable to inject @Value for field: " + field.getName() + " in class: " + object.getClass().getName(), e);
+                }
+                continue;
+            }
+            
             if (field.isAnnotationPresent(Inject.class) && !Modifier.isStatic(field.getModifiers())) {
                 Object dependency = dependencies.get(field.getType());
                 if (dependency == null) {
@@ -648,6 +992,18 @@ public class DependencyContainer implements DependencyRepository {
     public void injectStatic(@NotNull Class<?> target) {
         //inject static fields before the class is loaded so injected fields are available in static blocks
         for (Field field : target.getDeclaredFields()) {
+            // Check for @Value annotation
+            if (field.isAnnotationPresent(Value.class) && Modifier.isStatic(field.getModifiers())) {
+                Value valueAnnotation = field.getAnnotation(Value.class);
+                try {
+                    Object value = resolveValue(valueAnnotation.value(), field.getType());
+                    unsafe.putObject(target, unsafe.staticFieldOffset(field), value);
+                } catch (Exception e) {
+                    throw new RuntimeException("Unable to inject @Value for static field: " + field.getName() + " in class: " + target.getName(), e);
+                }
+                continue;
+            }
+            
             if (field.isAnnotationPresent(Inject.class) && Modifier.isStatic(field.getModifiers())) {
                 Object dependency = dependencies.get(field.getType());
                 if (dependency == null) {
@@ -710,11 +1066,42 @@ public class DependencyContainer implements DependencyRepository {
 
             for (Method bean : beans) {
                 bean.setAccessible(true);
-                Object beanInstance = bean.invoke(instance); //Invoke the method and get an instance of the class
+                
+                // Resolve method parameters with @Value annotation support
+                Class<?>[] parameterTypes = bean.getParameterTypes();
+                Annotation[][] parameterAnnotations = bean.getParameterAnnotations();
+                Object[] parameters = new Object[parameterTypes.length];
+                
+                for (int i = 0; i < parameterTypes.length; i++) {
+                    // Check for @Value annotation first
+                    Value valueAnnotation = findAnnotation(parameterAnnotations[i], Value.class);
+                    if (valueAnnotation != null) {
+                        parameters[i] = resolveValue(valueAnnotation.value(), parameterTypes[i]);
+                        continue;
+                    }
+                    
+                    // Otherwise, try to get from dependencies
+                    Object dependency = dependencies.get(parameterTypes[i]);
+                    if (dependency == null) {
+                        boolean isOptional = Arrays.stream(parameterAnnotations[i])
+                                .anyMatch(a -> a.annotationType().equals(OptionalDependency.class));
+                        if (isOptional) {
+                            parameters[i] = null;
+                        } else {
+                            throw new RuntimeException("Dependency not found for @Bean method parameter: " + parameterTypes[i].getName() + " in method: " + bean.getName() + " of class: " + clazz.getName());
+                        }
+                    } else {
+                        parameters[i] = dependency;
+                    }
+                }
+                
+                Object beanInstance = bean.invoke(instance, parameters); //Invoke the method with resolved parameters
                 if (beanInstance == null) {
                     System.err.println("Unable to register bean for " + bean.getReturnType().getName() + ". Value most not be null!");
                     continue;
                 }
+                // Invoke PostConstruct on bean instance if present
+                invokePostConstruct(beanInstance);
                 dependencies.put(bean.getReturnType(), beanInstance); //Add the instance to the dependencies map
 
                 Bean annotation = bean.getAnnotation(Bean.class);
@@ -795,6 +1182,104 @@ public class DependencyContainer implements DependencyRepository {
             return true;
         } catch (Throwable e) {
             return false;
+        }
+    }
+
+    /**
+     * Get the effective package name from the root annotation or detect it from the root class.
+     * If packageName is specified in the annotation (non-empty), it will be used.
+     * Otherwise, the package name will be detected from the root class.
+     *
+     * @param rootAnnotation The @Root annotation
+     * @param rootClass The root class
+     * @return The effective package name to scan
+     */
+    private String getEffectivePackageName(Root rootAnnotation, Class<?> rootClass) {
+        String packageName = rootAnnotation.packageName();
+        if (packageName == null || packageName.isEmpty()) {
+            // Auto-detect package name from root class
+            Package pkg = rootClass.getPackage();
+            if (pkg != null) {
+                packageName = pkg.getName();
+            } else {
+                // Fallback: extract package name from class name
+                String className = rootClass.getName();
+                int lastDot = className.lastIndexOf('.');
+                if (lastDot > 0) {
+                    packageName = className.substring(0, lastDot);
+                } else {
+                    // Default package - use empty string
+                    packageName = "";
+                }
+            }
+        }
+        return packageName;
+    }
+
+    /**
+     * Find an annotation of the specified type in an array of annotations.
+     * 
+     * @param annotations The array of annotations to search
+     * @param annotationType The annotation type to find
+     * @param <T> The annotation type
+     * @return The annotation instance, or null if not found
+     */
+    @SuppressWarnings("unchecked")
+    private <T extends Annotation> T findAnnotation(Annotation[] annotations, Class<T> annotationType) {
+        if (annotations == null) {
+            return null;
+        }
+        for (Annotation annotation : annotations) {
+            if (annotationType.isInstance(annotation)) {
+                return (T) annotation;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Resolve a @Value annotation expression to the appropriate type.
+     * Supports Spring Boot-style property resolution with default values.
+     * 
+     * @param expression The property expression (e.g., "${app.timeout:5000}")
+     * @param targetType The target type to convert to
+     * @return The resolved and converted value
+     */
+    private Object resolveValue(String expression, Class<?> targetType) {
+        Environment env = Environment.getInstance();
+        String resolvedValue = env.resolveProperty(expression);
+        
+        // Convert to target type
+        if (targetType == String.class) {
+            return resolvedValue;
+        } else if (targetType == int.class || targetType == Integer.class) {
+            try {
+                return Integer.parseInt(resolvedValue);
+            } catch (NumberFormatException e) {
+                throw new RuntimeException("Cannot convert property value '" + resolvedValue + "' to int for expression: " + expression, e);
+            }
+        } else if (targetType == long.class || targetType == Long.class) {
+            try {
+                return Long.parseLong(resolvedValue);
+            } catch (NumberFormatException e) {
+                throw new RuntimeException("Cannot convert property value '" + resolvedValue + "' to long for expression: " + expression, e);
+            }
+        } else if (targetType == boolean.class || targetType == Boolean.class) {
+            return Boolean.parseBoolean(resolvedValue);
+        } else if (targetType == double.class || targetType == Double.class) {
+            try {
+                return Double.parseDouble(resolvedValue);
+            } catch (NumberFormatException e) {
+                throw new RuntimeException("Cannot convert property value '" + resolvedValue + "' to double for expression: " + expression, e);
+            }
+        } else if (targetType == float.class || targetType == Float.class) {
+            try {
+                return Float.parseFloat(resolvedValue);
+            } catch (NumberFormatException e) {
+                throw new RuntimeException("Cannot convert property value '" + resolvedValue + "' to float for expression: " + expression, e);
+            }
+        } else {
+            throw new RuntimeException("Unsupported type for @Value injection: " + targetType.getName() + " for expression: " + expression);
         }
     }
 }

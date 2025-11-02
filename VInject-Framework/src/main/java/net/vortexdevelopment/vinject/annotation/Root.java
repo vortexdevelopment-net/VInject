@@ -12,10 +12,11 @@ import java.lang.annotation.Target;
 public @interface Root {
 
     /**
-     * The root package name to scan
-     * @return root package name
+     * The root package name to scan.
+     * If not specified (empty string), the package name will be automatically detected from the root class.
+     * @return root package name, or empty string to auto-detect from root class
      */
-    String packageName();
+    String packageName() default "";
 
     /**
      * Should a new instance created of the root class?
