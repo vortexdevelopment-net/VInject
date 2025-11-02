@@ -23,6 +23,12 @@ import net.vortexdevelopment.vinject.database.repository.RepositoryInvocationHan
 import net.vortexdevelopment.vinject.di.registry.AnnotationHandler;
 import net.vortexdevelopment.vinject.di.registry.AnnotationHandlerRegistry;
 import net.vortexdevelopment.vinject.di.registry.RegistryOrder;
+import net.vortexdevelopment.vinject.di.resolver.ArgumentResolverProcessor;
+import net.vortexdevelopment.vinject.di.resolver.ArgumentResolverContext;
+import net.vortexdevelopment.vinject.di.resolver.ArgumentResolverRegistry;
+import net.vortexdevelopment.vinject.di.resolver.ValueArgumentResolver;
+import net.vortexdevelopment.vinject.di.resolver.InjectArgumentResolver;
+import net.vortexdevelopment.vinject.annotation.ArgumentResolver;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.reflections.Configuration;
@@ -37,6 +43,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Parameter;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
@@ -63,6 +70,7 @@ public class DependencyContainer implements DependencyRepository {
     private final Set<Class<?>> skippedDueToDependsOn;
     private final Map<Class<?>, List<String>> missingDependenciesByClass;
     private AnnotationHandlerRegistry annotationHandlerRegistry;
+    private ArgumentResolverRegistry argumentResolverRegistry;
     private Consumer<Void> onPreComponentLoad;
     private Map<String, List<Method>> eventListeners;
     private List<Method> destroyMethods;
@@ -79,6 +87,10 @@ public class DependencyContainer implements DependencyRepository {
         destroyMethods = new ArrayList<>();
         unsafe = getUnsafe();
         annotationHandlerRegistry = new AnnotationHandlerRegistry();
+        argumentResolverRegistry = new ArgumentResolverRegistry();
+        
+        // Register built-in resolvers
+        registerBuiltInResolvers();
 
         if (rootInstance == null) {
             //Create the root instance if it is null
@@ -202,6 +214,40 @@ public class DependencyContainer implements DependencyRepository {
                 annotationHandlerRegistry.registerHandler(annotation, instance);
             } else {
                 throw new RuntimeException("Class: " + aClass.getName() + " annotated with @Registry does not extend AnnotationHandler");
+            }
+        });
+        
+        //Collect all ArgumentResolver annotations
+        reflections.getTypesAnnotatedWith(ArgumentResolver.class).forEach(aClass -> {
+            //Check if implements ArgumentResolverProcessor interface
+            if (ArgumentResolverProcessor.class.isAssignableFrom(aClass)) {
+                try {
+                    ArgumentResolverProcessor instance = (ArgumentResolverProcessor) newInstance(aClass);
+                    ArgumentResolver annotation = aClass.getAnnotation(ArgumentResolver.class);
+                    if (annotation == null) {
+                        throw new RuntimeException("Annotation not found for class: " + aClass.getName());
+                    }
+                    
+                    int priority = annotation.priority();
+                    registerEventListeners(aClass);
+                    
+                    // Handle multiple annotations via values(), or single annotation via value()
+                    Class<? extends Annotation>[] values = annotation.values();
+                    if (values != null && values.length > 0) {
+                        // Register for each annotation in values()
+                        for (Class<? extends Annotation> supportedAnnotation : values) {
+                            argumentResolverRegistry.registerResolver(supportedAnnotation, instance, priority);
+                        }
+                    } else {
+                        // Use single value() (required field)
+                        Class<? extends Annotation> supportedAnnotation = annotation.value();
+                        argumentResolverRegistry.registerResolver(supportedAnnotation, instance, priority);
+                    }
+                } catch (Exception e) {
+                    throw new RuntimeException("Unable to register ArgumentResolverProcessor: " + aClass.getName(), e);
+                }
+            } else {
+                throw new RuntimeException("Class: " + aClass.getName() + " annotated with @ArgumentResolver does not implement ArgumentResolverProcessor");
             }
         });
 
@@ -561,6 +607,40 @@ public class DependencyContainer implements DependencyRepository {
         Registry annotation = handler.getClass().getAnnotation(Registry.class);
         return annotation.annotation();
     }
+    
+    /**
+     * Register built-in argument resolvers (@Value and @Inject).
+     */
+    private void registerBuiltInResolvers() {
+        // Register @Value resolver with priority 100 (highest)
+        ValueArgumentResolver valueResolver = new ValueArgumentResolver();
+        argumentResolverRegistry.registerResolver(Value.class, valueResolver, 100);
+        
+        // Register @Inject resolver with priority 50
+        InjectArgumentResolver injectResolver = new InjectArgumentResolver();
+        argumentResolverRegistry.registerResolver(Inject.class, injectResolver, 50);
+    }
+    
+    /**
+     * Resolve an argument using the argument resolver system.
+     * Falls back to existing logic if no resolver handles it.
+     * 
+     * @param context The resolver context
+     * @return The resolved value, or null if no resolver handled it
+     */
+    @Nullable
+    private Object resolveArgument(ArgumentResolverContext context) {
+        // Try all resolvers in priority order
+        for (ArgumentResolverProcessor resolver : argumentResolverRegistry.getAllResolvers()) {
+            if (resolver.canResolve(context)) {
+                Object value = resolver.resolve(context);
+                if (value != null) {
+                    return value;
+                }
+            }
+        }
+        return null;
+    }
 
     private void injectRoot(Object rootInstance) {
         //Find field with the same class as the root class and inject it
@@ -770,6 +850,25 @@ public class DependencyContainer implements DependencyRepository {
                 Annotation[][] parameterAnnotations = constructor.getParameterAnnotations();
                 Object[] parameters = new Object[parameterTypes.length];
                 for (int i = 0; i < parameterTypes.length; i++) {
+                    // Try resolver system first
+                    Parameter parameter = constructor.getParameters()[i];
+                    ArgumentResolverContext context = new ArgumentResolverContext.Builder()
+                            .targetType(parameterTypes[i])
+                            .annotations(parameterAnnotations[i])
+                            .parameter(parameter)
+                            .declaringClass(clazz)
+                            .constructor(constructor)
+                            .container(this)
+                            .instance(null) // Constructor doesn't have instance yet
+                            .build();
+                    
+                    Object resolvedValue = resolveArgument(context);
+                    if (resolvedValue != null) {
+                        parameters[i] = resolvedValue;
+                        continue;
+                    }
+                    
+                    // Fallback to existing logic for backward compatibility
                     // Check for @Value annotation first
                     Value valueAnnotation = findAnnotation(parameterAnnotations[i], Value.class);
                     if (valueAnnotation != null) {
@@ -871,6 +970,25 @@ public class DependencyContainer implements DependencyRepository {
                     Object[] parameters = new Object[parameterTypes.length];
                     
                     for (int i = 0; i < parameterTypes.length; i++) {
+                        // Try resolver system first
+                        Parameter parameter = method.getParameters()[i];
+                        ArgumentResolverContext context = new ArgumentResolverContext.Builder()
+                                .targetType(parameterTypes[i])
+                                .annotations(parameterAnnotations[i])
+                                .parameter(parameter)
+                                .declaringClass(clazz)
+                                .method(method)
+                                .container(this)
+                                .instance(instance)
+                                .build();
+                        
+                        Object resolvedValue = resolveArgument(context);
+                        if (resolvedValue != null) {
+                            parameters[i] = resolvedValue;
+                            continue;
+                        }
+                        
+                        // Fallback to existing logic for backward compatibility
                         // Check for @Value annotation first
                         Value valueAnnotation = findAnnotation(parameterAnnotations[i], Value.class);
                         if (valueAnnotation != null) {
@@ -939,8 +1057,33 @@ public class DependencyContainer implements DependencyRepository {
     public void inject(@NotNull Object object) {
         //Inject object where @Inject or @Value annotation is present
         for (Field field : object.getClass().getDeclaredFields()) {
+            if (Modifier.isStatic(field.getModifiers())) {
+                continue; // Skip static fields (handled by injectStatic)
+            }
+            
+            // Try resolver system first
+            ArgumentResolverContext context = new ArgumentResolverContext.Builder()
+                    .targetType(field.getType())
+                    .annotations(field.getAnnotations())
+                    .field(field)
+                    .declaringClass(field.getDeclaringClass())
+                    .container(this)
+                    .instance(object)
+                    .build();
+            
+            Object resolvedValue = resolveArgument(context);
+            if (resolvedValue != null) {
+                try {
+                    unsafe.putObject(object, unsafe.objectFieldOffset(field), resolvedValue);
+                    continue;
+                } catch (Exception e) {
+                    throw new RuntimeException("Unable to inject resolved value for field: " + field.getName() + " in class: " + object.getClass().getName(), e);
+                }
+            }
+            
+            // Fallback to existing logic for backward compatibility
             // Check for @Value annotation
-            if (field.isAnnotationPresent(Value.class) && !Modifier.isStatic(field.getModifiers())) {
+            if (field.isAnnotationPresent(Value.class)) {
                 Value valueAnnotation = field.getAnnotation(Value.class);
                 try {
                     Object value = resolveValue(valueAnnotation.value(), field.getType());
@@ -951,7 +1094,7 @@ public class DependencyContainer implements DependencyRepository {
                 continue;
             }
             
-            if (field.isAnnotationPresent(Inject.class) && !Modifier.isStatic(field.getModifiers())) {
+            if (field.isAnnotationPresent(Inject.class)) {
                 Object dependency = dependencies.get(field.getType());
                 if (dependency == null) {
                     boolean isOptional = field.isAnnotationPresent(OptionalDependency.class);
@@ -992,8 +1135,33 @@ public class DependencyContainer implements DependencyRepository {
     public void injectStatic(@NotNull Class<?> target) {
         //inject static fields before the class is loaded so injected fields are available in static blocks
         for (Field field : target.getDeclaredFields()) {
+            if (!Modifier.isStatic(field.getModifiers())) {
+                continue; // Skip non-static fields (handled by inject)
+            }
+            
+            // Try resolver system first
+            ArgumentResolverContext context = new ArgumentResolverContext.Builder()
+                    .targetType(field.getType())
+                    .annotations(field.getAnnotations())
+                    .field(field)
+                    .declaringClass(field.getDeclaringClass())
+                    .container(this)
+                    .instance(null) // Static fields have no instance
+                    .build();
+            
+            Object resolvedValue = resolveArgument(context);
+            if (resolvedValue != null) {
+                try {
+                    unsafe.putObject(target, unsafe.staticFieldOffset(field), resolvedValue);
+                    continue;
+                } catch (Exception e) {
+                    throw new RuntimeException("Unable to inject resolved value for static field: " + field.getName() + " in class: " + target.getName(), e);
+                }
+            }
+            
+            // Fallback to existing logic for backward compatibility
             // Check for @Value annotation
-            if (field.isAnnotationPresent(Value.class) && Modifier.isStatic(field.getModifiers())) {
+            if (field.isAnnotationPresent(Value.class)) {
                 Value valueAnnotation = field.getAnnotation(Value.class);
                 try {
                     Object value = resolveValue(valueAnnotation.value(), field.getType());
@@ -1004,7 +1172,7 @@ public class DependencyContainer implements DependencyRepository {
                 continue;
             }
             
-            if (field.isAnnotationPresent(Inject.class) && Modifier.isStatic(field.getModifiers())) {
+            if (field.isAnnotationPresent(Inject.class)) {
                 Object dependency = dependencies.get(field.getType());
                 if (dependency == null) {
                     boolean isOptional = field.isAnnotationPresent(OptionalDependency.class);
@@ -1073,6 +1241,25 @@ public class DependencyContainer implements DependencyRepository {
                 Object[] parameters = new Object[parameterTypes.length];
                 
                 for (int i = 0; i < parameterTypes.length; i++) {
+                    // Try resolver system first
+                    Parameter parameter = bean.getParameters()[i];
+                    ArgumentResolverContext context = new ArgumentResolverContext.Builder()
+                            .targetType(parameterTypes[i])
+                            .annotations(parameterAnnotations[i])
+                            .parameter(parameter)
+                            .declaringClass(clazz)
+                            .method(bean)
+                            .container(this)
+                            .instance(instance)
+                            .build();
+                    
+                    Object resolvedValue = resolveArgument(context);
+                    if (resolvedValue != null) {
+                        parameters[i] = resolvedValue;
+                        continue;
+                    }
+                    
+                    // Fallback to existing logic for backward compatibility
                     // Check for @Value annotation first
                     Value valueAnnotation = findAnnotation(parameterAnnotations[i], Value.class);
                     if (valueAnnotation != null) {
