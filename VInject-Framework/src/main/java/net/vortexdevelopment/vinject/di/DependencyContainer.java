@@ -13,8 +13,10 @@ import net.vortexdevelopment.vinject.annotation.Repository;
 import net.vortexdevelopment.vinject.annotation.Root;
 import net.vortexdevelopment.vinject.annotation.Service;
 import net.vortexdevelopment.vinject.annotation.Value;
+import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
 import net.vortexdevelopment.vinject.config.Environment;
 import net.vortexdevelopment.vinject.annotation.database.Entity;
+import net.vortexdevelopment.vinject.config.serializer.YamlSerializerBase;
 import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.database.repository.CrudRepository;
 import net.vortexdevelopment.vinject.database.repository.RepositoryContainer;
@@ -36,7 +38,6 @@ import org.reflections.Reflections;
 import org.reflections.util.ConfigurationBuilder;
 import sun.misc.Unsafe;
 
-import java.beans.EventHandler;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -157,6 +158,22 @@ public class DependencyContainer implements DependencyRepository {
             entities.addAll(reflections.getTypesAnnotatedWith(Entity.class));
         }
 
+        //Load YAML configuration classes so components/services can depend on them
+        //We collect only classes that can be loaded (respect DependsOn)
+        Set<Class<?>> yamlConfigClasses = reflections.getTypesAnnotatedWith(YamlConfiguration.class)
+                .stream().filter(this::canLoadClass).collect(Collectors.toSet());
+        final ConfigurationContainer configurationContainer;
+        if (!yamlConfigClasses.isEmpty()) {
+            // Create the configuration container and register configs into this dependency container
+            configurationContainer = new ConfigurationContainer(this, yamlConfigClasses);
+        } else {
+            configurationContainer = null;
+        }
+        // Register the ConfigurationContainer itself so it can be injected
+        if (configurationContainer != null) {
+            this.dependencies.put(ConfigurationContainer.class, configurationContainer);
+        }
+
         annotationHandlerRegistry.getHandlers(RegistryOrder.ENTITIES).forEach(annotationHandler -> {
             Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
             reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
@@ -249,6 +266,27 @@ public class DependencyContainer implements DependencyRepository {
                 throw new RuntimeException("Class: " + aClass.getName() + " annotated with @ArgumentResolver does not implement ArgumentResolverProcessor");
             }
         });
+
+        // Auto-register YamlSerializerBase implementations into the configuration container
+        if (configurationContainer != null) {
+            reflections.getTypesAnnotatedWith(net.vortexdevelopment.vinject.annotation.yaml.YamlSerializer.class).forEach(serializerClass -> {
+                if (!canLoadClass(serializerClass)) return;
+                try {
+                    Object instance = newInstance(serializerClass);
+                    if (instance instanceof YamlSerializerBase<?> ys) {
+                        configurationContainer.registerSerializer(ys);
+                    }
+                } catch (Exception e) {
+                    throw new RuntimeException("Unable to register YamlSerializerBase: " + serializerClass.getName(), e);
+                }
+            });
+            // After registering serializers, load any annotated batch directories
+            try {
+                configurationContainer.loadBatches(reflections, this);
+            } catch (Exception e) {
+                throw new RuntimeException("Unable to load YAML batch directories", e);
+            }
+        }
 
         annotationHandlerRegistry.getHandlers(RegistryOrder.FIRST).forEach(annotationHandler -> {
             Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
