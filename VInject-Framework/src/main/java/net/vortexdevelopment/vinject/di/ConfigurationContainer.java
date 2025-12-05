@@ -2,6 +2,7 @@ package net.vortexdevelopment.vinject.di;
 
 import net.vortexdevelopment.vinject.annotation.Injectable;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
+import net.vortexdevelopment.vinject.annotation.yaml.YamlItem;
 import net.vortexdevelopment.vinject.annotation.yaml.Key;
 import net.vortexdevelopment.vinject.config.serializer.YamlSerializerBase;
 import org.yaml.snakeyaml.Yaml;
@@ -50,6 +51,7 @@ public class ConfigurationContainer {
     // Root directory for relative config paths. Defaults to current working dir
     private static volatile java.nio.file.Path rootDirectory = java.nio.file.Paths.get(System.getProperty("user.dir"));
 
+    private final DependencyContainer container;
     private final Map<Class<?>, ConfigEntry> configs = new ConcurrentHashMap<>();
     private final Map<Class<?>, YamlSerializerBase<?>> serializers = new ConcurrentHashMap<>();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -66,6 +68,7 @@ public class ConfigurationContainer {
     private static final String SYNTHETIC_FILE_FIELD = "__vinject_yaml_file";
 
     public ConfigurationContainer(DependencyContainer container, Set<Class<?>> yamlConfigClasses) {
+        this.container = container;
         // Configure YAML loader/dumper to preserve comments
         this.dumperOptions = new DumperOptions();
         this.dumperOptions.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
@@ -167,12 +170,13 @@ public class ConfigurationContainer {
                 if (file.exists()) {
                     try (InputStream in = new FileInputStream(file)) {
                         Object data = yaml.load(in);
-                                if (data instanceof Map) {
-                                    @SuppressWarnings("unchecked")
-                                    Map<String, Object> root = (Map<String, Object>) data;
-                                    mapToInstance(root, instance, cfgClass, annotation.path());
+                        if (data instanceof Map) {
+                            @SuppressWarnings("unchecked")
+                            Map<String, Object> root = (Map<String, Object>) data;
+                            mapToInstance(root, instance, cfgClass, annotation.path());
                             try {
-                                // Only save if merging added keys: compare original map's keys with serialized map
+                                // Only save if merging added keys: compare original map's keys with serialized
+                                // map
                                 Map<String, Object> existing = root;
                                 Map<String, Object> serialized = objectToMap(instance, cfgClass, annotation.path());
                                 if (!serializedEquals(existing, serialized)) {
@@ -190,9 +194,9 @@ public class ConfigurationContainer {
                         parent.mkdirs();
                     }
                     // Write defaults to disk so file exists for future runs
-                        try {
-                            saveToFile(instance, cfgClass, file.getPath(), charset, annotation);
-                        } catch (Exception ignored) {
+                    try {
+                        saveToFile(instance, cfgClass, file.getPath(), charset, annotation);
+                    } catch (Exception ignored) {
                         // ignore errors writing defaults; they will surface later
                     }
                 }
@@ -365,6 +369,48 @@ public class ConfigurationContainer {
         return value;
     }
 
+    /**
+     * Writes class-level comments to the writer.
+     * Handles lines that already start with '#' (writes as-is),
+     * empty strings (writes blank line), and regular lines (adds '# ' prefix).
+     */
+    private void writeClassLevelComments(java.io.Writer writer, Class<?> inspectedClass) throws java.io.IOException {
+        try {
+            java.lang.annotation.Annotation a = inspectedClass
+                    .getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.Comment.class);
+            if (a instanceof net.vortexdevelopment.vinject.annotation.yaml.Comment) {
+                net.vortexdevelopment.vinject.annotation.yaml.Comment classComment = (net.vortexdevelopment.vinject.annotation.yaml.Comment) a;
+                String[] lines = classComment.value();
+                if (lines != null) {
+                    for (String cl : lines) {
+                        if (cl == null)
+                            continue;
+                        // Trim leading/trailing whitespace for comparison, but preserve original for
+                        // output
+                        String trimmed = cl.trim();
+                        // If line is empty (after trimming), write just a newline (blank line)
+                        if (trimmed.isEmpty()) {
+                            writer.write(System.lineSeparator());
+                        }
+                        // If line already starts with '#', write it as-is (preserve original
+                        // formatting)
+                        else if (trimmed.startsWith("#")) {
+                            writer.write(cl);
+                            writer.write(System.lineSeparator());
+                        }
+                        // Otherwise, add '# ' prefix
+                        else {
+                            writer.write("# ");
+                            writer.write(cl);
+                            writer.write(System.lineSeparator());
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignore) {
+            // Non-fatal; continue
+        }
+    }
 
     private Field findFieldInHierarchy(Class<?> clazz, String name) {
         Class<?> cur = clazz;
@@ -387,134 +433,101 @@ public class ConfigurationContainer {
     private void saveToFile(Object instance, Class<?> inspectedClass, String filePath, Charset charset, YamlConfiguration annotation) {
         try {
             Map<String, Object> dump = objectToMap(instance, inspectedClass, annotation.path());
-            File file = new File(filePath);
-            file.getParentFile(); // no-op to avoid warnings
 
-            if (file.exists()) {
-                // Compose existing document into Node tree so we can update only schema keys
+            // Resolve the file path (handles relative paths)
+            java.nio.file.Path resolvedPath = resolvePath(filePath);
+            File file = resolvedPath.toFile();
+
+            // Check if file exists and has valid YAML content
+            java.nio.file.Path nioPath = resolvedPath;
+            boolean fileHasValidContent = false;
+            MappingNode mapping = null;
+            boolean needsHeader = false;
+
+            System.out.println("DEBUG: saveToFile - original path: " + filePath + ", resolved path: " + resolvedPath
+                    + ", exists: " + file.exists() + ", length: " + (file.exists() ? file.length() : 0));
+
+            if (file.exists() && file.length() > 0) {
+                // Try to parse the file
                 try (InputStreamReader ir = new InputStreamReader(new FileInputStream(file), charset)) {
                     Node root = yaml.compose(ir);
-                    MappingNode mapping;
-                    if (root == null) {
-                        mapping = new MappingNode(Tag.MAP, new ArrayList<>(), DumperOptions.FlowStyle.BLOCK);
-                    } else if (root instanceof MappingNode mn) {
+                    if (root instanceof MappingNode mn) {
                         mapping = mn;
-                    } else {
-                        // Not a mapping document - fall back to full dump
-                        try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(file), charset)) {
-                            // Write class-level comments (if any) above the YAML document
-                            try {
-                                java.lang.annotation.Annotation a = inspectedClass.getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.Comment.class);
-                                if (a instanceof net.vortexdevelopment.vinject.annotation.yaml.Comment) {
-                                    net.vortexdevelopment.vinject.annotation.yaml.Comment classComment = (net.vortexdevelopment.vinject.annotation.yaml.Comment) a;
-                                    String[] lines = classComment.value();
-                                    if (lines != null) {
-                                        for (String cl : lines) {
-                                            if (cl == null) continue;
-                                            writer.write("# ");
-                                            writer.write(cl);
-                                            writer.write(System.lineSeparator());
-                                        }
-                                    }
-                                }
-                            } catch (Throwable ignore) {
-                                // Non-fatal
-                            }
-                            yaml.dump(dump, writer);
-                        }
-                        return;
+                        fileHasValidContent = true;
+                        // Check if the mapping has block comments (header)
+                        List<CommentLine> existingComments = mn.getBlockComments();
+                        needsHeader = (existingComments == null || existingComments.isEmpty());
+                    } else if (root == null) {
+                        // File exists but is empty or contains only whitespace/comments
+                        // Treat it as a new file and do a full dump
+                        fileHasValidContent = false;
+                    }
+                } catch (Exception e) {
+                    // File exists but parsing failed (invalid YAML, empty, etc.)
+                    // Treat it as a new file and do a full dump
+                    fileHasValidContent = false;
+                }
+            }
+
+            if (!fileHasValidContent) {
+                // File doesn't exist, is empty, has only whitespace, or has invalid YAML
+                // Create a new node tree with all default values, comments, and proper
+                // formatting
+                try {
+                    // Ensure parent directory exists
+                    java.nio.file.Path parentDir = nioPath.getParent();
+                    if (parentDir != null && !java.nio.file.Files.exists(parentDir)) {
+                        java.nio.file.Files.createDirectories(parentDir);
                     }
 
-                    try {
-                        updateMappingNodeWithMap(mapping, dump, this.representer, instance, inspectedClass, annotation.path());
-                    } catch (Throwable t) {
-                        // On failure, log the error and fall back to full dump
-                        System.err.println("Warning: Failed to update YAML node tree, falling back to full dump. This may lose comments and unknown keys.");
-                        System.err.println("Error: " + t.getMessage());
-                        t.printStackTrace();
-                        try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(file), charset)) {
-                            try {
-                                java.lang.annotation.Annotation a = inspectedClass.getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.Comment.class);
-                                if (a instanceof net.vortexdevelopment.vinject.annotation.yaml.Comment) {
-                                    net.vortexdevelopment.vinject.annotation.yaml.Comment classComment = (net.vortexdevelopment.vinject.annotation.yaml.Comment) a;
-                                    String[] lines = classComment.value();
-                                    if (lines != null) {
-                                        for (String cl : lines) {
-                                            if (cl == null) continue;
-                                            writer.write("# ");
-                                            writer.write(cl);
-                                            writer.write(System.lineSeparator());
-                                        }
-                                    }
-                                }
-                            } catch (Throwable ignore) {}
-                            yaml.dump(dump, writer);
-                        }
-                        return;
-                    }
+                    // Create a new mapping node and populate it with data and comments
+                    MappingNode newMapping = new MappingNode(Tag.MAP, new ArrayList<>(), DumperOptions.FlowStyle.BLOCK);
+                    updateMappingNodeWithMap(newMapping, dump, this.representer, instance, inspectedClass,
+                            annotation.path());
 
-                    // Serialize updated node (preserves comments and unknown keys)
-                    try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(file), charset)) {
-                        yaml.serialize(mapping, writer);
+                    try (java.io.BufferedWriter writer = java.nio.file.Files.newBufferedWriter(nioPath, charset,
+                            java.nio.file.StandardOpenOption.CREATE,
+                            java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
+                            java.nio.file.StandardOpenOption.WRITE)) {
+                        writeClassLevelComments(writer, inspectedClass);
+                        yaml.serialize(newMapping, writer);
+                        writer.flush();
                     }
+                    System.out.println("DEBUG: Created/updated config file: " + resolvedPath
+                            + " (file was empty or didn't exist)");
+                } catch (Exception writeException) {
+                    System.err.println("ERROR: Failed to write config file: " + filePath);
+                    System.err.println("Error: " + writeException.getMessage());
+                    writeException.printStackTrace();
+                    throw writeException; // Re-throw to be caught by outer catch
                 }
                 return;
             }
 
-            // File doesn't exist: create new Node tree with comments and serialize
-            MappingNode mapping = new MappingNode(Tag.MAP, new ArrayList<>(), DumperOptions.FlowStyle.BLOCK);
+            // File has valid content - update the mapping
             try {
-                // Use updateMappingNodeWithMap to populate the mapping with data and comments
-                updateMappingNodeWithMap(mapping, dump, this.representer, instance, inspectedClass, annotation.path());
-                
-                // Write class-level comments (if any) above the YAML document
-                try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(file), charset)) {
-                    try {
-                        java.lang.annotation.Annotation a = inspectedClass.getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.Comment.class);
-                        if (a instanceof net.vortexdevelopment.vinject.annotation.yaml.Comment) {
-                            net.vortexdevelopment.vinject.annotation.yaml.Comment classComment = (net.vortexdevelopment.vinject.annotation.yaml.Comment) a;
-                            String[] lines = classComment.value();
-                            if (lines != null) {
-                                for (String cl : lines) {
-                                    if (cl == null) continue;
-                                    writer.write("# ");
-                                    writer.write(cl);
-                                    writer.write(System.lineSeparator());
-                                }
-                            }
-                        }
-                    } catch (Throwable ignore) {
-                        // Non-fatal; continue
-                    }
-                    
-                    // Serialize the node tree (preserves comments)
-                    yaml.serialize(mapping, writer);
-                }
+                updateMappingNodeWithMap(mapping, dump, this.representer, instance, inspectedClass,
+                        annotation.path());
             } catch (Throwable t) {
-                // On failure, fall back to full dump
-                System.err.println("Warning: Failed to create YAML node tree, falling back to full dump. Comments may be lost.");
+                // On failure, log the error and fall back to full dump
+                System.err.println(
+                        "Warning: Failed to update YAML node tree, falling back to full dump. This may lose comments and unknown keys.");
                 System.err.println("Error: " + t.getMessage());
                 t.printStackTrace();
                 try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(file), charset)) {
-                    try {
-                        java.lang.annotation.Annotation a = inspectedClass.getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.Comment.class);
-                        if (a instanceof net.vortexdevelopment.vinject.annotation.yaml.Comment) {
-                            net.vortexdevelopment.vinject.annotation.yaml.Comment classComment = (net.vortexdevelopment.vinject.annotation.yaml.Comment) a;
-                            String[] lines = classComment.value();
-                            if (lines != null) {
-                                for (String cl : lines) {
-                                    if (cl == null) continue;
-                                    writer.write("# ");
-                                    writer.write(cl);
-                                    writer.write(System.lineSeparator());
-                                }
-                            }
-                        }
-                    } catch (Throwable ignore) {
-                        // Non-fatal; continue
-                    }
+                    writeClassLevelComments(writer, inspectedClass);
                     yaml.dump(dump, writer);
                 }
+                return;
+            }
+
+            // Write phase: serialize updated node (preserves comments and unknown keys)
+            try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(file), charset)) {
+                // Write class-level comments if the mapping doesn't have them
+                if (needsHeader) {
+                    writeClassLevelComments(writer, inspectedClass);
+                }
+                yaml.serialize(mapping, writer);
             }
         } catch (Exception e) {
             System.err.println("Unable to save YAML configuration: " + e.getMessage());
@@ -529,19 +542,31 @@ public class ConfigurationContainer {
     public void saveAllSync() {
         for (ConfigEntry entry : configs.values()) {
             try {
-                saveToFile(entry, entry.configClass, entry.filePath, entry.charset, entry.annotation);
+                // Get the actual instance from the dependency container
+                Object instance = container.getDependencyOrNull(entry.configClass);
+                if (instance == null) {
+                    System.err.println(
+                            "ERROR: saveAllSync - Could not get instance for class: " + entry.configClass.getName());
+                    continue;
+                }
+                saveToFile(instance, entry.configClass, entry.filePath, entry.charset, entry.annotation);
             } catch (Exception e) {
-                System.err.println("Error saving configuration for " + entry.getClass().getName() + ": " + e.getMessage());
+                System.err.println(
+                        "Error saving configuration for " + entry.configClass.getName() + ": " + e.getMessage());
                 e.printStackTrace();
             }
         }
     }
 
     @SuppressWarnings("unchecked")
-    private void updateMappingNodeWithMap(MappingNode mapping, Map<String, Object> map, Representer representer, 
-                                          Object instance, Class<?> inspectedClass, String basePath) {
+    private void updateMappingNodeWithMap(MappingNode mapping, Map<String, Object> map, Representer representer,
+            Object instance, Class<?> inspectedClass, String basePath) {
         List<NodeTuple> tuples = mapping.getValue();
-        
+
+        // Check if this class is a @YamlItem (compact data object) - skip blank lines
+        // for these
+        boolean isYamlItem = inspectedClass != null && inspectedClass.isAnnotationPresent(YamlItem.class);
+
         // First, collect all existing keys in the mapping to preserve them
         Map<String, NodeTuple> existingTuples = new LinkedHashMap<>();
         for (NodeTuple nt : tuples) {
@@ -551,18 +576,21 @@ public class ConfigurationContainer {
                 existingTuples.put(key, nt);
             }
         }
-        
+
         // Build a map of full key paths to fields for comment lookup and ordering
         // This handles nested keys like "App.Welcome Message"
         Map<String, Field> fullKeyToField = new LinkedHashMap<>();
         Map<String, String> topLevelKeyToFullKey = new LinkedHashMap<>();
-        // Also build a map for nested keys: for "App.Welcome Message", map "App" -> field
+        // Also build a map for nested keys: for "App.Welcome Message", map "App" ->
+        // field
         Map<String, Field> topLevelKeyToField = new LinkedHashMap<>();
         if (instance != null && inspectedClass != null) {
             Class<?> clazz = inspectedClass;
             for (Field field : clazz.getDeclaredFields()) {
-                if (Modifier.isStatic(field.getModifiers())) continue;
-                String key = field.isAnnotationPresent(Key.class) ? field.getAnnotation(Key.class).value() : field.getName();
+                if (Modifier.isStatic(field.getModifiers()))
+                    continue;
+                String key = field.isAnnotationPresent(Key.class) ? field.getAnnotation(Key.class).value()
+                        : field.getName();
                 // The field's key is already the full path (e.g., "App.Welcome Message")
                 // We should use it as-is, not prepend basePath
                 String fullKey = key;
@@ -579,19 +607,22 @@ public class ConfigurationContainer {
                 }
             }
         }
-        
-        // Process keys in field order (for both top-level and nested keys) to maintain order
+
+        // Process keys in field order (for both top-level and nested keys) to maintain
+        // order
         List<String> orderedKeys = new ArrayList<>();
         Set<String> processedKeys = new HashSet<>();
-        
+
         // First, add keys in field order based on the order they appear in the class
         if (inspectedClass != null) {
             for (Field field : inspectedClass.getDeclaredFields()) {
-                if (Modifier.isStatic(field.getModifiers())) continue;
-                String key = field.isAnnotationPresent(Key.class) ? field.getAnnotation(Key.class).value() : field.getName();
+                if (Modifier.isStatic(field.getModifiers()))
+                    continue;
+                String key = field.isAnnotationPresent(Key.class) ? field.getAnnotation(Key.class).value()
+                        : field.getName();
                 // The field's key is already the full path (e.g., "App.Welcome Message")
                 String fullKey = key;
-                
+
                 // Determine which key in the map this field corresponds to
                 String mapKey = null;
                 if (basePath == null || basePath.isEmpty()) {
@@ -601,7 +632,8 @@ public class ConfigurationContainer {
                         mapKey = parts[0];
                     }
                 } else {
-                    // Nested context: extract the part after basePath (e.g., "Welcome Message" from "App.Welcome Message" when basePath is "App")
+                    // Nested context: extract the part after basePath (e.g., "Welcome Message" from
+                    // "App.Welcome Message" when basePath is "App")
                     if (fullKey.startsWith(basePath + ".")) {
                         mapKey = fullKey.substring(basePath.length() + 1);
                     } else if (fullKey.equals(basePath)) {
@@ -609,64 +641,107 @@ public class ConfigurationContainer {
                         mapKey = basePath;
                     }
                 }
-                
+
                 if (mapKey != null && map.containsKey(mapKey) && !processedKeys.contains(mapKey)) {
                     orderedKeys.add(mapKey);
                     processedKeys.add(mapKey);
                 }
             }
         }
-        
+
         // Then add any remaining keys from map that weren't in field order
         for (String key : map.keySet()) {
             if (!processedKeys.contains(key)) {
                 orderedKeys.add(key);
             }
         }
-        
+
         // Rebuild tuples list in the correct order
         List<NodeTuple> newTuples = new ArrayList<>();
         Set<String> processedKeysInOrder = new HashSet<>();
-        
+        int keyIndex = 0; // Track position to add blank lines before commented keys (but not the first)
+
         // First, process keys in field order
         for (String key : orderedKeys) {
             Object val = map.get(key);
             NodeTuple existingTuple = existingTuples.get(key);
             String fullKey = topLevelKeyToFullKey.get(key);
             Field field = topLevelKeyToField.get(key);
-            
+
+            // Debug: log key processing
+            System.out.println("DEBUG: Processing key: '" + key + "', basePath: '" + basePath + "', field: "
+                    + (field != null ? field.getName() : "null"));
+
             // For nested keys, we need to find the field that matches the nested structure
             // If this is a nested key (like "Welcome Message" within "App"), find the field
-            if (field == null && basePath != null && !basePath.isEmpty()) {
+            boolean foundNestedField = false;
+            if (basePath != null && !basePath.isEmpty()) {
                 // We're in a nested context, look for fields that match the nested path
+                // First try the exact match: basePath + "." + key
                 String searchKey = basePath + "." + key;
-                field = fullKeyToField.get(searchKey);
+                Field nestedField = fullKeyToField.get(searchKey);
+                if (nestedField != null) {
+                    field = nestedField;
+                    String fieldKey = nestedField.isAnnotationPresent(Key.class)
+                            ? nestedField.getAnnotation(Key.class).value()
+                            : nestedField.getName();
+                    fullKey = fieldKey;
+                    foundNestedField = true;
+                } else {
+                    // Fallback: search through all fields to find a match
+                    // This handles cases where the key might have different formatting
+                    if (inspectedClass != null) {
+                        for (Field f : inspectedClass.getDeclaredFields()) {
+                            if (Modifier.isStatic(f.getModifiers()))
+                                continue;
+                            String fieldKey = f.isAnnotationPresent(Key.class) ? f.getAnnotation(Key.class).value()
+                                    : f.getName();
+                            if (fieldKey.equals(searchKey)) {
+                                field = f;
+                                fullKey = fieldKey;
+                                foundNestedField = true;
+                                break;
+                            }
+                        }
+                    }
+                }
             }
-            
-            // Check if this is a nested parent key (e.g., "App" when field has key "App.Welcome Message")
-            // For nested keys like "App.Welcome Message", when processing "App" at top level,
-            // we should NOT add comments to "App" - they should be added to "Welcome Message" in the recursive call
+
+            // Check if this is a nested parent key (e.g., "App" when field has key
+            // "App.Welcome Message")
+            // For nested keys like "App.Welcome Message", when processing "App" at top
+            // level,
+            // we should NOT add comments to "App" - they should be added to "Welcome
+            // Message" in the recursive call
             // isNestedParent is true if:
             // 1. We're at the top level (basePath is null/empty)
             // 2. The field's key contains "." and doesn't match the current key
-            // If we're in a nested context and found a field, it's the final key, not a parent
+            // If we're in a nested context and found a field, it's the final key, not a
+            // parent
             boolean isNestedParent = false;
-            if (field != null) {
-                String fieldKey = field.isAnnotationPresent(Key.class) ? field.getAnnotation(Key.class).value() : field.getName();
-                // Only consider it a nested parent if we're at the top level
-                // In nested contexts, if we found a field, it's the final key
-                if (basePath == null || basePath.isEmpty()) {
+            if (basePath != null && !basePath.isEmpty()) {
+                // We're in a nested context - any field we find here is for the current key
+                // level, not a parent
+                // So isNestedParent should be false
+                isNestedParent = false;
+            } else {
+                // We're at the top level - check if this is a nested parent
+                if (field != null) {
+                    String fieldKey = field.isAnnotationPresent(Key.class) ? field.getAnnotation(Key.class).value()
+                            : field.getName();
+                    // It's a nested parent if the field key contains "." and doesn't match the
+                    // current key
                     isNestedParent = fieldKey.contains(".") && !fieldKey.equals(key);
+                } else if (fullKey != null) {
+                    isNestedParent = fullKey.contains(".") && !fullKey.equals(key);
                 }
-            } else if (fullKey != null) {
-                isNestedParent = fullKey.contains(".") && !fullKey.equals(key);
             }
-            
+
             if (existingTuple != null) {
                 // Key exists - update it
                 Node kNode = existingTuple.getKeyNode();
                 Node vNode = existingTuple.getValueNode();
-                
+
                 // Preserve inline comment from existing value node
                 // Try to get inline comment using reflection since API may vary
                 String inlineComment = null;
@@ -679,43 +754,63 @@ public class ConfigurationContainer {
                 } catch (Exception ignored) {
                     // Method doesn't exist or failed, ignore
                 }
-                
-                // Add @Comment annotation on key node if present on field AND key doesn't already have comments
-                // BUT only if this is the final key (not a nested parent key)
-                // For nested keys like "App.Welcome Message", don't add comment to "App" - add it to "Welcome Message"
-                if (field != null && field.isAnnotationPresent(net.vortexdevelopment.vinject.annotation.yaml.Comment.class) && !isNestedParent) {
-                    // Check if key already has block comments
-                    List<CommentLine> existingBlockComments = null;
-                    try {
-                        java.lang.reflect.Method getBlockCommentsMethod = kNode.getClass().getMethod("getBlockComments");
-                        Object existingComments = getBlockCommentsMethod.invoke(kNode);
-                        if (existingComments instanceof List) {
-                            @SuppressWarnings("unchecked")
-                            List<CommentLine> comments = (List<CommentLine>) existingComments;
-                            existingBlockComments = comments;
-                        }
-                    } catch (Exception ignored) {
-                        // Method doesn't exist or failed, assume no comments
+
+                // Add blank line and @Comment annotation on key node
+                // Blank lines are added between field-defined keys to separate config sections
+                // but not for dynamic properties from serializers (field == null)
+                // and not for @YamlItem classes (compact data objects)
+                // Comments are only added to final/leaf keys (not nested parent keys)
+                if (field != null && !isYamlItem) {
+                    List<CommentLine> blockComments = new ArrayList<>();
+
+                    // Add a blank line before this key if it's not the first key at this level
+                    if (keyIndex > 0) {
+                        blockComments.add(new CommentLine(null, null, "", CommentType.BLANK_LINE));
                     }
-                    
-                    // Only add comments if key doesn't already have them
-                    if (existingBlockComments == null || existingBlockComments.isEmpty()) {
-                        net.vortexdevelopment.vinject.annotation.yaml.Comment comment = field.getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.Comment.class);
-                        String[] lines = comment.value();
-                        if (lines != null && lines.length > 0) {
-                            List<CommentLine> blockComments = new ArrayList<>();
-                            for (String line : lines) {
-                                if (line != null && !line.isEmpty()) {
-                                    blockComments.add(new CommentLine(null, null, line, CommentType.BLOCK));
+
+                    // Add @Comment annotation lines if present
+                    // BUT only if this is the final key (not a nested parent key)
+                    // For nested keys like "Debug.Enabled", don't add comment to "Debug" - add it
+                    // to "Enabled"
+                    if (!isNestedParent
+                            && field.isAnnotationPresent(net.vortexdevelopment.vinject.annotation.yaml.Comment.class)) {
+                        System.out.println("DEBUG: Adding comment for field: " + field.getName() + ", key: " + key
+                                + ", isNestedParent: " + isNestedParent);
+                        net.vortexdevelopment.vinject.annotation.yaml.Comment comment = field
+                                .getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.Comment.class);
+                        if (comment != null) {
+                            String[] lines = comment.value();
+                            if (lines != null && lines.length > 0) {
+                                for (String line : lines) {
+                                    if (line != null && !line.isEmpty()) {
+                                        // SnakeYAML adds '#' prefix automatically, but we need to ensure there's a
+                                        // space after it
+                                        // Remove any existing # prefix and trim, then add a leading space
+                                        String trimmed = line.trim();
+                                        String commentText = trimmed.startsWith("#") ? trimmed.substring(1).trim()
+                                                : trimmed;
+                                        if (!commentText.isEmpty()) {
+                                            // Ensure there's a space after # by prepending a space
+                                            blockComments
+                                                    .add(new CommentLine(null, null, " " + commentText,
+                                                            CommentType.BLOCK));
+                                        }
+                                    }
                                 }
                             }
-                            if (!blockComments.isEmpty()) {
-                                kNode.setBlockComments(blockComments);
-                            }
                         }
+                    } else if (isNestedParent) {
+                        System.out.println("DEBUG: Skipping comment for key: " + key + " (isNestedParent=true)");
+                    } else if (field != null && !field
+                            .isAnnotationPresent(net.vortexdevelopment.vinject.annotation.yaml.Comment.class)) {
+                        System.out.println("DEBUG: No @Comment annotation on field: " + field.getName());
+                    }
+
+                    if (!blockComments.isEmpty()) {
+                        kNode.setBlockComments(blockComments);
                     }
                 }
-                
+
                 if (val instanceof Map && vNode instanceof MappingNode) {
                     // Recursively update nested mapping, preserving existing keys
                     Map<String, Object> sub = (Map<String, Object>) val;
@@ -731,25 +826,39 @@ public class ConfigurationContainer {
                             } else if (!isPrimitiveOrString(field.getType())) {
                                 nestedClass = field.getType();
                             }
-                        } catch (Exception ignored) {}
+                        } catch (Exception ignored) {
+                        }
                     }
-                    // For nested keys like "App.Welcome Message", when processing "App" at top level,
-                    // we need to find the field that has a key starting with "App."
-                    // Build a new basePath for nested keys
+                    // Determine whether this is a nested key path or a direct nested object
+                    // - Nested key path: @Key("App.Welcome Message") - key is "App", fullKey
+                    // contains "."
+                    // - Direct nested object: @Key("Settings") - key matches fullKey, no dots
                     String nestedBasePath = null;
+                    Object recursiveInstance = instance;
+                    Class<?> recursiveClass = inspectedClass;
+
                     if (fullKey != null && fullKey.contains(".")) {
                         // This is a nested key like "App.Welcome Message"
-                        // When recursively processing, the basePath should be "App" so we can find "App.Welcome Message"
+                        // When recursively processing, the basePath should be "App" so we can find
+                        // "App.Welcome Message"
                         nestedBasePath = fullKey.substring(0, fullKey.indexOf('.'));
+                        // Keep using parent instance/class to find fields with nested key paths
                     } else if (basePath != null && !basePath.isEmpty()) {
                         // We're already in a nested context, continue with the basePath
                         nestedBasePath = basePath;
+                    } else if (nestedClass != null && !isNestedParent) {
+                        // This is a direct nested object (like Settings)
+                        // Use the nested object's class to find its fields
+                        recursiveInstance = nestedInstance;
+                        recursiveClass = nestedClass;
+                        nestedBasePath = null; // Reset basePath for the nested class
                     }
-                    // For nested keys, we need to pass the original instance and class so we can find fields
-                    // that match the nested path (e.g., "App.Welcome Message")
-                    updateMappingNodeWithMap((MappingNode) vNode, sub, representer, 
-                                            instance, inspectedClass, nestedBasePath);
-                    // Add to new tuples list in order (the nested mapping has been updated in place)
+
+                    // Recursive call with appropriate instance and class
+                    updateMappingNodeWithMap((MappingNode) vNode, sub, representer,
+                            recursiveInstance, recursiveClass, nestedBasePath);
+                    // Add to new tuples list in order (the nested mapping has been updated in
+                    // place)
                     newTuples.add(new NodeTuple(kNode, vNode));
                     processedKeysInOrder.add(key);
                 } else {
@@ -757,7 +866,8 @@ public class ConfigurationContainer {
                     Node newVal = representer.represent(val);
                     if (inlineComment != null) {
                         try {
-                            java.lang.reflect.Method setInlineMethod = newVal.getClass().getMethod("setInLineComment", String.class);
+                            java.lang.reflect.Method setInlineMethod = newVal.getClass().getMethod("setInLineComment",
+                                    String.class);
                             setInlineMethod.invoke(newVal, inlineComment);
                         } catch (Exception ignored) {
                             // Method doesn't exist or failed, ignore
@@ -771,30 +881,118 @@ public class ConfigurationContainer {
                 // Key doesn't exist - add it
                 Node kNode = representer.represent(key);
                 Node vNode = representer.represent(val);
-                
-                // Add @Comment annotation if present on field (new keys don't have comments yet)
-                if (field != null && field.isAnnotationPresent(net.vortexdevelopment.vinject.annotation.yaml.Comment.class)) {
-                    net.vortexdevelopment.vinject.annotation.yaml.Comment comment = field.getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.Comment.class);
-                    String[] lines = comment.value();
-                    if (lines != null && lines.length > 0) {
-                        List<CommentLine> blockComments = new ArrayList<>();
-                        for (String line : lines) {
-                            if (line != null && !line.isEmpty()) {
-                                blockComments.add(new CommentLine(null, null, line, CommentType.BLOCK));
+
+                // Add blank line and @Comment annotation on key node
+                // Blank lines are added between field-defined keys to separate config sections
+                // but not for dynamic properties from serializers (field == null)
+                // and not for @YamlItem classes (compact data objects)
+                // Comments are only added to final/leaf keys (not nested parent keys)
+                if (field != null && !isYamlItem) {
+                    List<CommentLine> blockComments = new ArrayList<>();
+
+                    // Add a blank line before this key if it's not the first key at this level
+                    if (keyIndex > 0) {
+                        blockComments.add(new CommentLine(null, null, "", CommentType.BLANK_LINE));
+                    }
+
+                    // Add @Comment annotation lines if present
+                    // BUT only if this is the final key (not a nested parent key)
+                    // For nested keys like \"Debug.Enabled\", don't add comment to \"Debug\" - add
+                    // it to \"Enabled\"
+                    if (!isNestedParent
+                            && field.isAnnotationPresent(net.vortexdevelopment.vinject.annotation.yaml.Comment.class)) {
+                        System.out.println("DEBUG: [NEW KEY] Adding comment for field: " + field.getName() + ", key: "
+                                + key + ", isNestedParent: " + isNestedParent);
+                        net.vortexdevelopment.vinject.annotation.yaml.Comment comment = field
+                                .getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.Comment.class);
+                        if (comment != null) {
+                            String[] lines = comment.value();
+                            if (lines != null && lines.length > 0) {
+                                for (String line : lines) {
+                                    if (line != null && !line.isEmpty()) {
+                                        // SnakeYAML adds '#' prefix automatically, but we need to ensure there's a
+                                        // space after it
+                                        // Remove any existing # prefix and trim, then add a leading space
+                                        String trimmed = line.trim();
+                                        String commentText = trimmed.startsWith("#") ? trimmed.substring(1).trim()
+                                                : trimmed;
+                                        if (!commentText.isEmpty()) {
+                                            // Ensure there's a space after # by prepending a space
+                                            blockComments
+                                                    .add(new CommentLine(null, null, " " + commentText,
+                                                            CommentType.BLOCK));
+                                        }
+                                    }
+                                }
                             }
                         }
-                        if (!blockComments.isEmpty()) {
-                            kNode.setBlockComments(blockComments);
-                        }
+                    } else if (isNestedParent) {
+                        System.out.println(
+                                "DEBUG: [NEW KEY] Skipping comment for key: " + key + " (isNestedParent=true)");
+                    } else if (field != null && !field
+                            .isAnnotationPresent(net.vortexdevelopment.vinject.annotation.yaml.Comment.class)) {
+                        System.out.println("DEBUG: [NEW KEY] No @Comment annotation on field: " + field.getName());
+                    }
+
+                    if (!blockComments.isEmpty()) {
+                        kNode.setBlockComments(blockComments);
                     }
                 }
-                
+
+                // If the value is a nested Map, recursively process it to add comments to
+                // nested fields
+                if (val instanceof Map && vNode instanceof MappingNode) {
+                    Map<String, Object> sub = (Map<String, Object>) val;
+                    // Get nested instance and class for recursive call
+                    Object nestedInstance = null;
+                    Class<?> nestedClass = null;
+                    if (field != null) {
+                        try {
+                            field.setAccessible(true);
+                            nestedInstance = field.get(instance);
+                            if (nestedInstance != null) {
+                                nestedClass = nestedInstance.getClass();
+                            } else if (!isPrimitiveOrString(field.getType())) {
+                                nestedClass = field.getType();
+                            }
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    // Determine whether this is a nested key path or a direct nested object
+                    String nestedBasePath = null;
+                    Object recursiveInstance = instance;
+                    Class<?> recursiveClass = inspectedClass;
+
+                    if (fullKey != null && fullKey.contains(".")) {
+                        // This is a nested key like "App.Welcome Message"
+                        nestedBasePath = fullKey.substring(0, fullKey.indexOf('.'));
+                    } else if (basePath != null && !basePath.isEmpty()) {
+                        nestedBasePath = basePath;
+                    } else if (nestedClass != null && !isNestedParent) {
+                        // This is a direct nested object (like Settings)
+                        // Use the nested object's class to find its fields
+                        recursiveInstance = nestedInstance;
+                        recursiveClass = nestedClass;
+                        nestedBasePath = null; // Reset basePath for the nested class
+                    } else {
+                        // Top-level key, use it as basePath for nested processing
+                        nestedBasePath = key;
+                    }
+
+                    // Recursively update the new mapping node with comments
+                    updateMappingNodeWithMap((MappingNode) vNode, sub, representer,
+                            recursiveInstance, recursiveClass, nestedBasePath);
+                }
+
                 // Add to new tuples list in order
                 newTuples.add(new NodeTuple(kNode, vNode));
                 processedKeysInOrder.add(key);
             }
+            // Increment keyIndex AFTER processing (so next key will have blank line if
+            // needed)
+            keyIndex++;
         }
-        
+
         // Add any existing keys that weren't in the map (preserve unknown keys)
         for (NodeTuple nt : tuples) {
             Node kNode = nt.getKeyNode();
@@ -805,14 +1003,15 @@ public class ConfigurationContainer {
                 }
             }
         }
-        
+
         // Replace the old tuples list with the new ordered one
         tuples.clear();
         tuples.addAll(newTuples);
     }
 
     public void registerSerializer(YamlSerializerBase<?> serializer) {
-        if (serializer == null) return;
+        if (serializer == null)
+            return;
         Class<?> target = serializer.getTargetType();
         if (target != null) {
             serializers.put(target, serializer);
@@ -824,19 +1023,52 @@ public class ConfigurationContainer {
      */
     public void markDirty(Class<?> configClass) {
         ConfigEntry e = configs.get(configClass);
-        if (e != null) e.dirty = true;
+        if (e != null)
+            e.dirty = true;
     }
 
     /**
-     * Save specific configuration if it has unsaved changes. If force is true, save regardless of dirty flag.
+     * Save specific configuration if it has unsaved changes. If force is true, save
+     * regardless of dirty flag.
      */
     public void saveConfig(Class<?> configClass, boolean force) {
         ConfigEntry e = configs.get(configClass);
-        if (e == null) return;
+        if (e == null) {
+            System.err.println("DEBUG: saveConfig - ConfigEntry not found for class: " + configClass.getName());
+            return;
+        }
         synchronized (e) {
-            if (!force && !e.dirty) return;
-            saveToFile(e, e.configClass, e.filePath, e.charset, e.annotation);
+            // Check if file is empty or doesn't exist - if so, always save regardless of
+            // dirty flag
+            java.nio.file.Path resolvedPath = resolvePath(e.filePath);
+            File file = resolvedPath.toFile();
+            boolean fileIsEmpty = !file.exists() || file.length() == 0;
+
+            System.out.println("DEBUG: saveConfig - class: " + configClass.getName() + ", force: " + force + ", dirty: "
+                    + e.dirty + ", filePath: " + e.filePath + ", resolved: " + resolvedPath + ", fileIsEmpty: "
+                    + fileIsEmpty);
+
+            if (!force && !e.dirty && !fileIsEmpty) {
+                System.out.println("DEBUG: saveConfig - Skipping save (not dirty, not forced, and file has content)");
+                return;
+            }
+
+            if (fileIsEmpty) {
+                System.out.println("DEBUG: saveConfig - File is empty or doesn't exist, forcing save");
+            }
+
+            // Get the actual instance from the dependency container
+            Object instance = container.getDependencyOrNull(e.configClass);
+            if (instance == null) {
+                System.err.println("ERROR: saveConfig - Could not get instance for class: " + e.configClass.getName());
+                return;
+            }
+
+            System.out.println("DEBUG: saveConfig - Calling saveToFile for: " + e.filePath + ", instance: "
+                    + instance.getClass().getName());
+            saveToFile(instance, e.configClass, e.filePath, e.charset, e.annotation);
             e.dirty = false;
+            System.out.println("DEBUG: saveConfig - Save completed for: " + configClass.getName());
         }
     }
 
@@ -860,12 +1092,14 @@ public class ConfigurationContainer {
     }
 
     /**
-     * Reload a configuration from disk, re-reading the YAML file and updating the instance fields.
+     * Reload a configuration from disk, re-reading the YAML file and updating the
+     * instance fields.
      * The instance reference is preserved so injected dependencies remain valid.
      * 
      * @param configClass The configuration class to reload
      * @throws IllegalArgumentException if the config class is not found
-     * @throws RuntimeException if the YAML file is invalid or cannot be read
+     * @throws RuntimeException         if the YAML file is invalid or cannot be
+     *                                  read
      */
     public void reloadConfig(Class<?> configClass) {
         ConfigEntry entry = configs.get(configClass);
@@ -880,10 +1114,11 @@ public class ConfigurationContainer {
                 if (container == null) {
                     throw new RuntimeException("DependencyContainer instance not available");
                 }
-                
+
                 Object instance = container.getDependencyOrNull(configClass);
                 if (instance == null) {
-                    throw new RuntimeException("Configuration instance not found in DependencyContainer for class: " + configClass.getName());
+                    throw new RuntimeException("Configuration instance not found in DependencyContainer for class: "
+                            + configClass.getName());
                 }
 
                 // Resolve file path
@@ -891,7 +1126,8 @@ public class ConfigurationContainer {
                 File file = resolvedPath.toFile();
 
                 if (!file.exists()) {
-                    System.err.println("Warning: Configuration file does not exist: " + resolvedPath + ". Keeping existing configuration.");
+                    System.err.println("Warning: Configuration file does not exist: " + resolvedPath
+                            + ". Keeping existing configuration.");
                     return;
                 }
 
@@ -906,13 +1142,16 @@ public class ConfigurationContainer {
                         // Mark as not dirty since we just loaded from disk
                         entry.dirty = false;
                     } else {
-                        throw new RuntimeException("Invalid YAML format: expected Map, got " + (data != null ? data.getClass().getName() : "null"));
+                        throw new RuntimeException("Invalid YAML format: expected Map, got "
+                                + (data != null ? data.getClass().getName() : "null"));
                     }
                 }
             } catch (java.io.FileNotFoundException e) {
-                System.err.println("Warning: Configuration file not found: " + entry.filePath + ". Keeping existing configuration.");
+                System.err.println("Warning: Configuration file not found: " + entry.filePath
+                        + ". Keeping existing configuration.");
             } catch (Exception e) {
-                throw new RuntimeException("Unable to reload YAML configuration for class: " + configClass.getName(), e);
+                throw new RuntimeException("Unable to reload YAML configuration for class: " + configClass.getName(),
+                        e);
             }
         }
     }
@@ -922,7 +1161,8 @@ public class ConfigurationContainer {
      * the config class associated with the given file path and reloads it.
      * 
      * @param filePath The file path of the configuration to reload
-     * @throws IllegalArgumentException if no configuration is found for the given file path
+     * @throws IllegalArgumentException if no configuration is found for the given
+     *                                  file path
      */
     public void reloadConfigByPath(String filePath) {
         ConfigEntry found = null;
@@ -932,11 +1172,11 @@ public class ConfigurationContainer {
                 break;
             }
         }
-        
+
         if (found == null) {
             throw new IllegalArgumentException("No configuration found for file path: " + filePath);
         }
-        
+
         reloadConfig(found.configClass);
     }
 
@@ -945,14 +1185,19 @@ public class ConfigurationContainer {
      * This will populate internal batch stores keyed by annotation id or dir path.
      */
     public void loadBatches(org.reflections.Reflections reflections, DependencyContainer container) {
-        for (Class<?> annotated : reflections.getTypesAnnotatedWith(net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory.class)) {
-            net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory ann = annotated.getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory.class);
-            if (ann == null) continue;
+        for (Class<?> annotated : reflections
+                .getTypesAnnotatedWith(net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory.class)) {
+            net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory ann = annotated
+                    .getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory.class);
+            if (ann == null)
+                continue;
             String effectiveId = loadBatchDirectory(ann, annotated);
 
-            // After loading the batch into batchStores, try to populate a @YamlDirectory-annotated holder class
+            // After loading the batch into batchStores, try to populate a
+            // @YamlDirectory-annotated holder class
             Map<String, Object> items = batchStores.get(effectiveId);
-            if (items == null) items = java.util.Collections.emptyMap();
+            if (items == null)
+                items = java.util.Collections.emptyMap();
 
             try {
                 Object holder = null;
@@ -966,10 +1211,12 @@ public class ConfigurationContainer {
                 // Find fields annotated with @YamlCollection and set them
                 boolean populated = false;
                 for (java.lang.reflect.Field field : annotated.getDeclaredFields()) {
-                    net.vortexdevelopment.vinject.annotation.yaml.YamlCollection yc = field.getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.YamlCollection.class);
+                    net.vortexdevelopment.vinject.annotation.yaml.YamlCollection yc = field
+                            .getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.YamlCollection.class);
                     String targetId = yc != null && !yc.value().isEmpty() ? yc.value() : effectiveId;
                     if (yc != null) {
-                        if (!targetId.equals(effectiveId)) continue;
+                        if (!targetId.equals(effectiveId))
+                            continue;
                         field.setAccessible(true);
                         java.util.List<Object> list = new java.util.ArrayList<>(items.values());
                         field.set(holder, list);
@@ -978,11 +1225,13 @@ public class ConfigurationContainer {
                     }
                 }
 
-                // If no annotated collection field found, try to find a List<T> field matching the target
+                // If no annotated collection field found, try to find a List<T> field matching
+                // the target
                 if (!populated) {
                     Class<?> targetType = ann.target();
                     for (java.lang.reflect.Field field : annotated.getDeclaredFields()) {
-                        if (!java.util.List.class.isAssignableFrom(field.getType())) continue;
+                        if (!java.util.List.class.isAssignableFrom(field.getType()))
+                            continue;
                         java.lang.reflect.Type generic = field.getGenericType();
                         if (generic instanceof java.lang.reflect.ParameterizedType pt) {
                             java.lang.reflect.Type arg = pt.getActualTypeArguments()[0];
@@ -1005,13 +1254,15 @@ public class ConfigurationContainer {
                     container.addBean(annotated, holder);
                 }
             } catch (Exception e) {
-                System.err.println("Unable to instantiate YamlDirectory holder: " + annotated.getName() + " - " + e.getMessage());
+                System.err.println(
+                        "Unable to instantiate YamlDirectory holder: " + annotated.getName() + " - " + e.getMessage());
                 e.printStackTrace();
             }
         }
     }
 
-    private String loadBatchDirectory(net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory ann, Class<?> holderClass) {
+    private String loadBatchDirectory(net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory ann,
+            Class<?> holderClass) {
         String dir = ann.dir();
         // generate effective id as <holderClassFqcn>::<dir>
         String id = holderClass.getName() + "::" + dir;
@@ -1022,13 +1273,15 @@ public class ConfigurationContainer {
         // Serializer must exist for target
         YamlSerializerBase<?> ser = serializers.get(target);
         if (ser == null) {
-            throw new RuntimeException("No YamlSerializer registered for target: " + target.getName() + " required by YamlDirectory: " + dir);
+            throw new RuntimeException("No YamlSerializer registered for target: " + target.getName()
+                    + " required by YamlDirectory: " + dir);
         }
 
         java.nio.file.Path start = resolvePath(dir);
         Map<String, Object> items = new LinkedHashMap<>();
         Map<String, ItemMeta> metaMap = new LinkedHashMap<>();
-        if (!java.nio.file.Files.exists(start)) return id;
+        if (!java.nio.file.Files.exists(start))
+            return id;
 
         try {
             java.util.stream.Stream<java.nio.file.Path> stream;
@@ -1043,7 +1296,8 @@ public class ConfigurationContainer {
             }).forEach(p -> {
                 try (InputStream in = new java.io.FileInputStream(p.toFile())) {
                     Object data = yaml.load(in);
-                    if (!(data instanceof Map)) return;
+                    if (!(data instanceof Map))
+                        return;
                     @SuppressWarnings("unchecked")
                     Map<String, Object> root = (Map<String, Object>) data;
                     Map<String, Object> source;
@@ -1051,7 +1305,8 @@ public class ConfigurationContainer {
                         source = root;
                     } else {
                         Object val = root.get(rootKey);
-                        if (!(val instanceof Map)) return;
+                        if (!(val instanceof Map))
+                            return;
                         @SuppressWarnings("unchecked")
                         Map<String, Object> sub = (Map<String, Object>) val;
                         source = sub;
@@ -1059,7 +1314,8 @@ public class ConfigurationContainer {
                     for (Map.Entry<String, Object> e : source.entrySet()) {
                         String key = e.getKey();
                         Object v = e.getValue();
-                        if (!(v instanceof Map)) continue;
+                        if (!(v instanceof Map))
+                            continue;
                         @SuppressWarnings("unchecked")
                         Map<String, Object> entryMap = (Map<String, Object>) v;
                         @SuppressWarnings("unchecked")
@@ -1069,13 +1325,15 @@ public class ConfigurationContainer {
                         // require @YamlId present on target class and set it
                         java.lang.reflect.Field idField = findIdFieldForClass(target);
                         if (idField == null) {
-                            throw new RuntimeException("Target class " + target.getName() + " must have a field annotated with @YamlId for batch loading");
+                            throw new RuntimeException("Target class " + target.getName()
+                                    + " must have a field annotated with @YamlId for batch loading");
                         }
                         try {
                             idField.setAccessible(true);
                             idField.set(obj, key);
                         } catch (IllegalAccessException iae) {
-                            throw new RuntimeException("Unable to set @YamlId field for class: " + target.getName(), iae);
+                            throw new RuntimeException("Unable to set @YamlId field for class: " + target.getName(),
+                                    iae);
                         }
 
                         // instrument item instance to carry meta (batch id and file path)
@@ -1085,14 +1343,16 @@ public class ConfigurationContainer {
                             idField.setAccessible(true);
                             idField.set(instrumented, key);
                         } catch (IllegalAccessException iae) {
-                            throw new RuntimeException("Unable to set @YamlId field for class: " + target.getName(), iae);
+                            throw new RuntimeException("Unable to set @YamlId field for class: " + target.getName(),
+                                    iae);
                         }
                         items.put(key, instrumented);
 
                         // record metadata
                         ItemMeta meta = new ItemMeta();
                         meta.filePath = p.toAbsolutePath().toString();
-                        meta.layout = (rootKey == null || rootKey.isEmpty()) ? ItemLayout.TOP_LEVEL : ItemLayout.ROOT_KEY;
+                        meta.layout = (rootKey == null || rootKey.isEmpty()) ? ItemLayout.TOP_LEVEL
+                                : ItemLayout.ROOT_KEY;
                         meta.rootKey = (rootKey == null || rootKey.isEmpty()) ? null : rootKey;
                         metaMap.put(key, meta);
                         fileToItemIds.computeIfAbsent(meta.filePath, k -> new ArrayList<>()).add(key);
@@ -1112,7 +1372,9 @@ public class ConfigurationContainer {
         return id;
     }
 
-    private enum ItemLayout {TOP_LEVEL, ROOT_KEY, SINGLE_FILE_PER_ITEM}
+    private enum ItemLayout {
+        TOP_LEVEL, ROOT_KEY, SINGLE_FILE_PER_ITEM
+    }
 
     private static final class ItemMeta {
         String filePath;
@@ -1122,13 +1384,15 @@ public class ConfigurationContainer {
 
     private java.lang.reflect.Field findIdFieldForClass(Class<?> clazz) {
         for (java.lang.reflect.Field f : clazz.getDeclaredFields()) {
-            if (f.isAnnotationPresent(net.vortexdevelopment.vinject.annotation.yaml.YamlId.class)) return f;
+            if (f.isAnnotationPresent(net.vortexdevelopment.vinject.annotation.yaml.YamlId.class))
+                return f;
         }
         // check superclasses
         Class<?> sup = clazz.getSuperclass();
         while (sup != null && !sup.equals(Object.class)) {
             for (java.lang.reflect.Field f : sup.getDeclaredFields()) {
-                if (f.isAnnotationPresent(net.vortexdevelopment.vinject.annotation.yaml.YamlId.class)) return f;
+                if (f.isAnnotationPresent(net.vortexdevelopment.vinject.annotation.yaml.YamlId.class))
+                    return f;
             }
             sup = sup.getSuperclass();
         }
@@ -1136,15 +1400,18 @@ public class ConfigurationContainer {
     }
 
     private YamlSerializerBase<?> findSerializerForInstance(Object instance) {
-        if (instance == null) return null;
+        if (instance == null)
+            return null;
         Class<?> c = instance.getClass();
         // direct match
         YamlSerializerBase<?> s = serializers.get(c);
-        if (s != null) return s;
+        if (s != null)
+            return s;
         // check assignable keys (serializer target is supertype)
         for (Map.Entry<Class<?>, YamlSerializerBase<?>> e : serializers.entrySet()) {
             Class<?> key = e.getKey();
-            if (key.isAssignableFrom(c)) return e.getValue();
+            if (key.isAssignableFrom(c))
+                return e.getValue();
         }
         return null;
     }
@@ -1154,7 +1421,7 @@ public class ConfigurationContainer {
         // Just set them directly on the original instance using reflection
         try {
             Class<?> clazz = original.getClass();
-            
+
             // Set batch id field
             try {
                 Field batchField = findFieldInHierarchy(clazz, SYNTHETIC_BATCH_FIELD);
@@ -1162,14 +1429,15 @@ public class ConfigurationContainer {
                     batchField.setAccessible(true);
                     batchField.set(original, batchId);
                 } else {
-                    System.err.println("Warning: Synthetic batch field " + SYNTHETIC_BATCH_FIELD + 
+                    System.err.println("Warning: Synthetic batch field " + SYNTHETIC_BATCH_FIELD +
                             " not found on class " + clazz.getName() + ". " +
                             "Ensure VInject-Transformer is configured in your build.");
                 }
             } catch (Exception ex) {
-                System.err.println("Unable to set synthetic batch field: " + SYNTHETIC_BATCH_FIELD + " - " + ex.getMessage());
+                System.err.println(
+                        "Unable to set synthetic batch field: " + SYNTHETIC_BATCH_FIELD + " - " + ex.getMessage());
             }
-            
+
             // Set file path field
             try {
                 Field fileField = findFieldInHierarchy(clazz, SYNTHETIC_FILE_FIELD);
@@ -1177,12 +1445,13 @@ public class ConfigurationContainer {
                     fileField.setAccessible(true);
                     fileField.set(original, filePath);
                 } else {
-                    System.err.println("Warning: Synthetic file field " + SYNTHETIC_FILE_FIELD + 
+                    System.err.println("Warning: Synthetic file field " + SYNTHETIC_FILE_FIELD +
                             " not found on class " + clazz.getName() + ". " +
                             "Ensure VInject-Transformer is configured in your build.");
                 }
             } catch (Exception ex) {
-                System.err.println("Unable to set synthetic file field: " + SYNTHETIC_FILE_FIELD + " - " + ex.getMessage());
+                System.err.println(
+                        "Unable to set synthetic file field: " + SYNTHETIC_FILE_FIELD + " - " + ex.getMessage());
             }
 
             return original;
@@ -1194,7 +1463,8 @@ public class ConfigurationContainer {
     }
 
     private String readSyntheticStringField(Object instance, String fieldName) {
-        if (instance == null) return null;
+        if (instance == null)
+            return null;
         Class<?> clazz = instance.getClass();
         while (clazz != null && !clazz.equals(Object.class)) {
             try {
@@ -1220,21 +1490,27 @@ public class ConfigurationContainer {
     }
 
     /**
-     * Save a single item by batch id and item id. Updates only the underlying file containing the item.
+     * Save a single item by batch id and item id. Updates only the underlying file
+     * containing the item.
      */
     public void saveItem(String batchId, String itemId) {
         Map<String, ItemMeta> metaForBatch = batchMeta.get(batchId);
-        if (metaForBatch == null) throw new RuntimeException("Batch not found: " + batchId);
+        if (metaForBatch == null)
+            throw new RuntimeException("Batch not found: " + batchId);
         ItemMeta meta = metaForBatch.get(itemId);
-        if (meta == null) throw new RuntimeException("Item not found in batch: " + itemId + " for batch " + batchId);
+        if (meta == null)
+            throw new RuntimeException("Item not found in batch: " + itemId + " for batch " + batchId);
 
         Map<String, Object> items = batchStores.get(batchId);
-        if (items == null) throw new RuntimeException("Batch store not found: " + batchId);
+        if (items == null)
+            throw new RuntimeException("Batch store not found: " + batchId);
         Object instance = items.get(itemId);
-        if (instance == null) throw new RuntimeException("Item instance not found: " + itemId);
+        if (instance == null)
+            throw new RuntimeException("Item instance not found: " + itemId);
 
         YamlSerializerBase<?> ser = findSerializerForInstance(instance);
-        if (ser == null) throw new RuntimeException("No serializer registered for class: " + instance.getClass().getName());
+        if (ser == null)
+            throw new RuntimeException("No serializer registered for class: " + instance.getClass().getName());
 
         @SuppressWarnings("unchecked")
         Map<String, Object> serialized = ((YamlSerializerBase<Object>) ser).serialize(instance);
@@ -1258,13 +1534,13 @@ public class ConfigurationContainer {
             if (meta.layout == ItemLayout.TOP_LEVEL) {
                 Object before = root.get(itemId);
                 root.put(itemId, serialized);
-                changed = !serializedEquals(before instanceof Map ? (Map<String,Object>)before : null, serialized);
+                changed = !serializedEquals(before instanceof Map ? (Map<String, Object>) before : null, serialized);
             } else if (meta.layout == ItemLayout.ROOT_KEY && meta.rootKey != null) {
                 Object sub = root.get(meta.rootKey);
-                Map<String,Object> subMap;
+                Map<String, Object> subMap;
                 if (sub instanceof Map) {
                     @SuppressWarnings("unchecked")
-                    Map<String,Object> temp = (Map<String,Object>) sub;
+                    Map<String, Object> temp = (Map<String, Object>) sub;
                     subMap = temp;
                 } else {
                     subMap = new LinkedHashMap<>();
@@ -1272,13 +1548,14 @@ public class ConfigurationContainer {
                 }
                 Object before = subMap.get(itemId);
                 subMap.put(itemId, serialized);
-                changed = !serializedEquals(before instanceof Map ? (Map<String,Object>)before : null, serialized);
+                changed = !serializedEquals(before instanceof Map ? (Map<String, Object>) before : null, serialized);
             } else {
                 throw new RuntimeException("Saving for layout " + meta.layout + " is not supported yet");
             }
 
             if (changed) {
-                try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(file.toFile()), metaFileCharset(meta))) {
+                try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(file.toFile()),
+                        metaFileCharset(meta))) {
                     yaml.dump(root, writer);
                 }
             }
@@ -1291,13 +1568,16 @@ public class ConfigurationContainer {
      * Save an item object by resolving its @YamlId field and batch.
      */
     public void saveItemObject(String batchId, Object item) {
-        if (item == null) throw new IllegalArgumentException("item is null");
+        if (item == null)
+            throw new IllegalArgumentException("item is null");
         java.lang.reflect.Field idField = findIdFieldForClass(item.getClass());
-        if (idField == null) throw new RuntimeException("No @YamlId field found on class: " + item.getClass().getName());
+        if (idField == null)
+            throw new RuntimeException("No @YamlId field found on class: " + item.getClass().getName());
         try {
             idField.setAccessible(true);
             Object val = idField.get(item);
-            if (val == null) throw new RuntimeException("@YamlId value is null for item: " + item.getClass().getName());
+            if (val == null)
+                throw new RuntimeException("@YamlId value is null for item: " + item.getClass().getName());
             saveItem(batchId, val.toString());
         } catch (IllegalAccessException e) {
             throw new RuntimeException(e);
@@ -1436,5 +1716,3 @@ public class ConfigurationContainer {
         cur.put(parts[parts.length - 1], value);
     }
 }
-
-
