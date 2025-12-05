@@ -1,30 +1,29 @@
 package net.vortexdevelopment.vinject.di;
 
+import net.vortexdevelopment.vinject.annotation.Injectable;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
 import net.vortexdevelopment.vinject.annotation.yaml.Key;
 import net.vortexdevelopment.vinject.config.serializer.YamlSerializerBase;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.DumperOptions;
+import org.yaml.snakeyaml.LoaderOptions;
+import org.yaml.snakeyaml.constructor.Constructor;
 import org.yaml.snakeyaml.representer.Representer;
 import org.yaml.snakeyaml.nodes.Node;
+import org.yaml.snakeyaml.nodes.NodeTuple;
+import org.yaml.snakeyaml.nodes.MappingNode;
+import org.yaml.snakeyaml.nodes.ScalarNode;
 import org.yaml.snakeyaml.nodes.Tag;
-import net.bytebuddy.ByteBuddy;
-import net.bytebuddy.dynamic.loading.ClassLoadingStrategy;
-import net.bytebuddy.implementation.MethodDelegation;
-import net.bytebuddy.matcher.ElementMatchers;
-import net.bytebuddy.implementation.bind.annotation.AllArguments;
-import net.bytebuddy.implementation.bind.annotation.Origin;
-import net.bytebuddy.implementation.bind.annotation.RuntimeType;
-import net.bytebuddy.implementation.bind.annotation.SuperCall;
-import net.bytebuddy.implementation.bind.annotation.This;
+import org.yaml.snakeyaml.comments.CommentLine;
+import org.yaml.snakeyaml.comments.CommentType;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.InputStreamReader;
 import java.io.InputStream;
 import java.io.OutputStreamWriter;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.nio.charset.Charset;
 import java.util.*;
@@ -33,11 +32,15 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Loads classes annotated with @YamlConfiguration and registers proxy instances
- * into the provided DependencyContainer. The proxies intercept setter calls
- * and trigger save (sync/async) according to the annotation, but initial
- * population is done via direct field assignment so setters are not invoked.
+ * Loads classes annotated with @YamlConfiguration and registers instances
+ * into the provided DependencyContainer. Initial population is done via
+ * direct field assignment. For auto-save functionality, manually call
+ * saveConfig() or saveItemObject() methods.
+ * 
+ * Note: Classes used in YAML batch loading (with @YamlId fields) must be
+ * processed by VInject-Transformer to add required synthetic fields.
  */
+@Injectable
 public class ConfigurationContainer {
     // Hold last created instance so callers (e.g., shutdown hooks) can trigger saves
     private static volatile ConfigurationContainer INSTANCE;
@@ -51,6 +54,9 @@ public class ConfigurationContainer {
     private final Map<Class<?>, YamlSerializerBase<?>> serializers = new ConcurrentHashMap<>();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Yaml yaml;
+    private final LoaderOptions loaderOptions;
+    private final DumperOptions dumperOptions;
+    private final Representer representer;
     private final Map<String, Map<String, Object>> batchStores = new ConcurrentHashMap<>();
     // metadata: batchId -> itemId -> Meta
     private final Map<String, Map<String, ItemMeta>> batchMeta = new ConcurrentHashMap<>();
@@ -60,13 +66,17 @@ public class ConfigurationContainer {
     private static final String SYNTHETIC_FILE_FIELD = "__vinject_yaml_file";
 
     public ConfigurationContainer(DependencyContainer container, Set<Class<?>> yamlConfigClasses) {
-        // Configure YAML dumper to use block style for mappings and sequences
-        DumperOptions dumperOptions = new DumperOptions();
-        dumperOptions.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
-        dumperOptions.setPrettyFlow(false);
+        // Configure YAML loader/dumper to preserve comments
+        this.dumperOptions = new DumperOptions();
+        this.dumperOptions.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
+        this.dumperOptions.setPrettyFlow(false);
+        this.dumperOptions.setProcessComments(true);
+
+        this.loaderOptions = new LoaderOptions();
+        this.loaderOptions.setProcessComments(true);
 
         // Custom representer: render empty sequences in flow style (i.e., [] inline)
-        Representer representer = new Representer(dumperOptions) {
+        this.representer = new Representer(this.dumperOptions) {
             @Override
             protected Node representSequence(Tag tag, Iterable<?> sequence, DumperOptions.FlowStyle flowStyle) {
                 if (sequence instanceof java.util.Collection<?> coll && coll.isEmpty()) {
@@ -78,7 +88,7 @@ public class ConfigurationContainer {
             }
         };
 
-        this.yaml = new Yaml(representer, dumperOptions);
+        this.yaml = new Yaml(new Constructor(this.loaderOptions), this.representer, this.dumperOptions, this.loaderOptions);
         loadConfigs(container, yamlConfigClasses);
         INSTANCE = this;
     }
@@ -123,8 +133,6 @@ public class ConfigurationContainer {
     }
 
     private static final class ConfigEntry {
-        final Object proxy;
-        final Object delegate;
         final Class<?> configClass;
         final String filePath;
         final Charset charset;
@@ -132,9 +140,7 @@ public class ConfigurationContainer {
         // whether instance has unsaved changes
         volatile boolean dirty;
 
-        ConfigEntry(Object proxy, Object delegate, Class<?> configClass, String filePath, Charset charset, YamlConfiguration annotation) {
-            this.proxy = proxy;
-            this.delegate = delegate;
+        ConfigEntry(Class<?> configClass, String filePath, Charset charset, YamlConfiguration annotation) {
             this.configClass = configClass;
             this.filePath = filePath;
             this.charset = charset;
@@ -191,13 +197,10 @@ public class ConfigurationContainer {
                     }
                 }
 
-                // Create ByteBuddy-based proxy that delegates behavior to proxy instance
-                Object proxy = createProxy(cfgClass, instance, resolvedPath.toString(), annotation, charset, container);
-
                 // Register proxy in dependency container so it can be injected
-                container.addBean(cfgClass, proxy);
+                container.addBean(cfgClass, instance);
                 // Store proxy as the delegate for saving/inspection (store original class too)
-                configs.put(cfgClass, new ConfigEntry(proxy, proxy, cfgClass, filePath, charset, annotation));
+                configs.put(cfgClass, new ConfigEntry(cfgClass, filePath, charset, annotation));
             } catch (Exception e) {
                 throw new RuntimeException("Unable to load YAML configuration for class: " + cfgClass.getName(), e);
             }
@@ -266,6 +269,18 @@ public class ConfigurationContainer {
                 return s.deserialize(m);
             }
         }
+        // Handle enum types - convert string to enum constant using .name()
+        if (targetType.isEnum()) {
+            String enumName = value.toString();
+            try {
+                // Use reflection to call valueOf method on the enum class
+                java.lang.reflect.Method valueOfMethod = targetType.getMethod("valueOf", String.class);
+                return valueOfMethod.invoke(null, enumName);
+            } catch (NoSuchMethodException | IllegalAccessException | java.lang.reflect.InvocationTargetException e) {
+                throw new RuntimeException("Invalid enum value '" + enumName + "' for enum type " + targetType.getName() + 
+                        (field != null ? " (field: " + field.getName() + ")" : ""), e);
+            }
+        }
         if (targetType == String.class) return value.toString();
         if (targetType == int.class || targetType == Integer.class) return Integer.parseInt(value.toString());
         if (targetType == long.class || targetType == Long.class) return Long.parseLong(value.toString());
@@ -274,6 +289,59 @@ public class ConfigurationContainer {
         if (List.class.isAssignableFrom(targetType)) {
             if (value instanceof List) return value;
             return Collections.singletonList(value);
+        }
+        // Handle Map types - convert YAML map to target Map type with proper value conversion
+        if (Map.class.isAssignableFrom(targetType) && value instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> yamlMap = (Map<String, Object>) value;
+            
+            // Get generic type parameters from field if available
+            Class<?> keyType = String.class; // Default to String for keys
+            Class<?> valueType = Object.class; // Default to Object for values
+            
+            if (field != null) {
+                java.lang.reflect.Type genericType = field.getGenericType();
+                if (genericType instanceof java.lang.reflect.ParameterizedType) {
+                    java.lang.reflect.ParameterizedType pt = (java.lang.reflect.ParameterizedType) genericType;
+                    java.lang.reflect.Type[] typeArgs = pt.getActualTypeArguments();
+                    if (typeArgs.length >= 1) {
+                        if (typeArgs[0] instanceof Class<?>) {
+                            keyType = (Class<?>) typeArgs[0];
+                        }
+                    }
+                    if (typeArgs.length >= 2) {
+                        if (typeArgs[1] instanceof Class<?>) {
+                            valueType = (Class<?>) typeArgs[1];
+                        }
+                    }
+                }
+            }
+            
+            // Create a new map instance of the target type
+            Map<Object, Object> resultMap;
+            try {
+                @SuppressWarnings("unchecked")
+                Map<Object, Object> mapInstance = (Map<Object, Object>) targetType.getDeclaredConstructor().newInstance();
+                resultMap = mapInstance;
+            } catch (Exception e) {
+                // Fallback to HashMap if default constructor not available
+                resultMap = new java.util.HashMap<>();
+            }
+            
+            // Convert each entry, converting keys and values to their target types
+            for (Map.Entry<String, Object> entry : yamlMap.entrySet()) {
+                Object key = entry.getKey();
+                // Convert key if needed (usually String, but handle other types)
+                if (keyType != String.class && !keyType.isAssignableFrom(key.getClass())) {
+                    key = convertValue(key, keyType, null);
+                }
+                
+                // Convert value to target value type
+                Object convertedValue = convertValue(entry.getValue(), valueType, null);
+                resultMap.put(key, convertedValue);
+            }
+            
+            return resultMap;
         }
         // For nested objects, assume map or use serializer
         if (value instanceof Map) {
@@ -297,84 +365,6 @@ public class ConfigurationContainer {
         return value;
     }
 
-    private Object createProxy(Class<?> clazz, Object instance, String filePath, YamlConfiguration annotation, Charset charset, DependencyContainer container) throws Exception {
-        final Interceptor interceptor = new Interceptor(this, clazz, filePath, charset, annotation);
-
-        Class<?> proxyClass = new ByteBuddy()
-                .subclass(clazz)
-                .method(ElementMatchers.not(ElementMatchers.isDeclaredBy(Object.class)))
-                .intercept(MethodDelegation.to(interceptor))
-                .make()
-                .load(clazz.getClassLoader(), ClassLoadingStrategy.Default.WRAPPER)
-                .getLoaded();
-
-        Object proxy = proxyClass.getDeclaredConstructor().newInstance();
-
-        // Copy populated fields from the temporary instance into the proxy so getters/readers see values
-        for (Field f : clazz.getDeclaredFields()) {
-            if (Modifier.isStatic(f.getModifiers())) continue;
-            f.setAccessible(true);
-            Object val = f.get(instance);
-            f.set(proxy, val);
-        }
-
-        return proxy;
-    }
-
-    public static class Interceptor {
-        private final ConfigurationContainer container;
-        private final Class<?> targetClass;
-        private final String filePath;
-        private final Charset charset;
-        private final YamlConfiguration annotation;
-
-        Interceptor(ConfigurationContainer container, Class<?> targetClass, String filePath, Charset charset, YamlConfiguration annotation) {
-            this.container = container;
-            this.targetClass = targetClass;
-            this.filePath = filePath;
-            this.charset = charset;
-            this.annotation = annotation;
-        }
-
-        @RuntimeType
-        public Object intercept(@This Object proxy, @AllArguments Object[] args, @Origin Method method, @SuperCall java.util.concurrent.Callable<?> zuper) throws Throwable {
-                String name = method.getName();
-                if (name.startsWith("set") && args != null && args.length == 1) {
-                    String fieldName = Character.toLowerCase(name.charAt(3)) + name.substring(4);
-                    try {
-                    Field f = container.findFieldInHierarchy(proxy.getClass(), fieldName);
-                        if (f != null) {
-                            f.setAccessible(true);
-                        f.set(proxy, args[0]);
-                        } else {
-                        if (zuper != null) zuper.call();
-                        }
-                    } catch (Exception e) {
-                    if (zuper != null) zuper.call();
-                }
-                // mark dirty and schedule/save only the corresponding config
-                if (targetClass != null) {
-                    container.markDirty(targetClass);
-                    if (forceSyncSave || !annotation.asyncSave()) {
-                        container.saveConfig(targetClass);
-                    } else {
-                        container.executor.submit(() -> container.saveConfig(targetClass));
-                    }
-                } else {
-                    // fallback: save by path
-                    if (forceSyncSave || !annotation.asyncSave()) {
-                        container.saveConfigByPath(filePath);
-                    } else {
-                        container.executor.submit(() -> container.saveConfigByPath(filePath));
-                    }
-                }
-                return null;
-            }
-
-            if (zuper != null) return zuper.call();
-            return null;
-        }
-    }
 
     private Field findFieldInHierarchy(Class<?> clazz, String name) {
         Class<?> cur = clazz;
@@ -399,8 +389,132 @@ public class ConfigurationContainer {
             Map<String, Object> dump = objectToMap(instance, inspectedClass, annotation.path());
             File file = new File(filePath);
             file.getParentFile(); // no-op to avoid warnings
-            try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(file), charset)) {
-                yaml.dump(dump, writer);
+
+            if (file.exists()) {
+                // Compose existing document into Node tree so we can update only schema keys
+                try (InputStreamReader ir = new InputStreamReader(new FileInputStream(file), charset)) {
+                    Node root = yaml.compose(ir);
+                    MappingNode mapping;
+                    if (root == null) {
+                        mapping = new MappingNode(Tag.MAP, new ArrayList<>(), DumperOptions.FlowStyle.BLOCK);
+                    } else if (root instanceof MappingNode mn) {
+                        mapping = mn;
+                    } else {
+                        // Not a mapping document - fall back to full dump
+                        try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(file), charset)) {
+                            // Write class-level comments (if any) above the YAML document
+                            try {
+                                java.lang.annotation.Annotation a = inspectedClass.getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.Comment.class);
+                                if (a instanceof net.vortexdevelopment.vinject.annotation.yaml.Comment) {
+                                    net.vortexdevelopment.vinject.annotation.yaml.Comment classComment = (net.vortexdevelopment.vinject.annotation.yaml.Comment) a;
+                                    String[] lines = classComment.value();
+                                    if (lines != null) {
+                                        for (String cl : lines) {
+                                            if (cl == null) continue;
+                                            writer.write("# ");
+                                            writer.write(cl);
+                                            writer.write(System.lineSeparator());
+                                        }
+                                    }
+                                }
+                            } catch (Throwable ignore) {
+                                // Non-fatal
+                            }
+                            yaml.dump(dump, writer);
+                        }
+                        return;
+                    }
+
+                    try {
+                        updateMappingNodeWithMap(mapping, dump, this.representer, instance, inspectedClass, annotation.path());
+                    } catch (Throwable t) {
+                        // On failure, log the error and fall back to full dump
+                        System.err.println("Warning: Failed to update YAML node tree, falling back to full dump. This may lose comments and unknown keys.");
+                        System.err.println("Error: " + t.getMessage());
+                        t.printStackTrace();
+                        try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(file), charset)) {
+                            try {
+                                java.lang.annotation.Annotation a = inspectedClass.getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.Comment.class);
+                                if (a instanceof net.vortexdevelopment.vinject.annotation.yaml.Comment) {
+                                    net.vortexdevelopment.vinject.annotation.yaml.Comment classComment = (net.vortexdevelopment.vinject.annotation.yaml.Comment) a;
+                                    String[] lines = classComment.value();
+                                    if (lines != null) {
+                                        for (String cl : lines) {
+                                            if (cl == null) continue;
+                                            writer.write("# ");
+                                            writer.write(cl);
+                                            writer.write(System.lineSeparator());
+                                        }
+                                    }
+                                }
+                            } catch (Throwable ignore) {}
+                            yaml.dump(dump, writer);
+                        }
+                        return;
+                    }
+
+                    // Serialize updated node (preserves comments and unknown keys)
+                    try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(file), charset)) {
+                        yaml.serialize(mapping, writer);
+                    }
+                }
+                return;
+            }
+
+            // File doesn't exist: create new Node tree with comments and serialize
+            MappingNode mapping = new MappingNode(Tag.MAP, new ArrayList<>(), DumperOptions.FlowStyle.BLOCK);
+            try {
+                // Use updateMappingNodeWithMap to populate the mapping with data and comments
+                updateMappingNodeWithMap(mapping, dump, this.representer, instance, inspectedClass, annotation.path());
+                
+                // Write class-level comments (if any) above the YAML document
+                try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(file), charset)) {
+                    try {
+                        java.lang.annotation.Annotation a = inspectedClass.getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.Comment.class);
+                        if (a instanceof net.vortexdevelopment.vinject.annotation.yaml.Comment) {
+                            net.vortexdevelopment.vinject.annotation.yaml.Comment classComment = (net.vortexdevelopment.vinject.annotation.yaml.Comment) a;
+                            String[] lines = classComment.value();
+                            if (lines != null) {
+                                for (String cl : lines) {
+                                    if (cl == null) continue;
+                                    writer.write("# ");
+                                    writer.write(cl);
+                                    writer.write(System.lineSeparator());
+                                }
+                            }
+                        }
+                    } catch (Throwable ignore) {
+                        // Non-fatal; continue
+                    }
+                    
+                    // Serialize the node tree (preserves comments)
+                    yaml.serialize(mapping, writer);
+                }
+            } catch (Throwable t) {
+                // On failure, fall back to full dump
+                System.err.println("Warning: Failed to create YAML node tree, falling back to full dump. Comments may be lost.");
+                System.err.println("Error: " + t.getMessage());
+                t.printStackTrace();
+                try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(file), charset)) {
+                    try {
+                        java.lang.annotation.Annotation a = inspectedClass.getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.Comment.class);
+                        if (a instanceof net.vortexdevelopment.vinject.annotation.yaml.Comment) {
+                            net.vortexdevelopment.vinject.annotation.yaml.Comment classComment = (net.vortexdevelopment.vinject.annotation.yaml.Comment) a;
+                            String[] lines = classComment.value();
+                            if (lines != null) {
+                                for (String cl : lines) {
+                                    if (cl == null) continue;
+                                    writer.write("# ");
+                                    writer.write(cl);
+                                    writer.write(System.lineSeparator());
+                                }
+                            }
+                        }
+                    } catch (Throwable ignore) {
+                        // Non-fatal; continue
+                    }
+                    yaml.dump(dump, writer);
+                }
             }
         } catch (Exception e) {
             System.err.println("Unable to save YAML configuration: " + e.getMessage());
@@ -415,12 +529,286 @@ public class ConfigurationContainer {
     public void saveAllSync() {
         for (ConfigEntry entry : configs.values()) {
             try {
-                saveToFile(entry.delegate, entry.configClass, entry.filePath, entry.charset, entry.annotation);
+                saveToFile(entry, entry.configClass, entry.filePath, entry.charset, entry.annotation);
             } catch (Exception e) {
-                System.err.println("Error saving configuration for " + entry.delegate.getClass().getName() + ": " + e.getMessage());
+                System.err.println("Error saving configuration for " + entry.getClass().getName() + ": " + e.getMessage());
                 e.printStackTrace();
             }
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void updateMappingNodeWithMap(MappingNode mapping, Map<String, Object> map, Representer representer, 
+                                          Object instance, Class<?> inspectedClass, String basePath) {
+        List<NodeTuple> tuples = mapping.getValue();
+        
+        // First, collect all existing keys in the mapping to preserve them
+        Map<String, NodeTuple> existingTuples = new LinkedHashMap<>();
+        for (NodeTuple nt : tuples) {
+            Node kNode = nt.getKeyNode();
+            if (kNode instanceof ScalarNode sk) {
+                String key = sk.getValue();
+                existingTuples.put(key, nt);
+            }
+        }
+        
+        // Build a map of full key paths to fields for comment lookup and ordering
+        // This handles nested keys like "App.Welcome Message"
+        Map<String, Field> fullKeyToField = new LinkedHashMap<>();
+        Map<String, String> topLevelKeyToFullKey = new LinkedHashMap<>();
+        // Also build a map for nested keys: for "App.Welcome Message", map "App" -> field
+        Map<String, Field> topLevelKeyToField = new LinkedHashMap<>();
+        if (instance != null && inspectedClass != null) {
+            Class<?> clazz = inspectedClass;
+            for (Field field : clazz.getDeclaredFields()) {
+                if (Modifier.isStatic(field.getModifiers())) continue;
+                String key = field.isAnnotationPresent(Key.class) ? field.getAnnotation(Key.class).value() : field.getName();
+                // The field's key is already the full path (e.g., "App.Welcome Message")
+                // We should use it as-is, not prepend basePath
+                String fullKey = key;
+                fullKeyToField.put(fullKey, field);
+                // Track the top-level key for this field
+                String[] parts = fullKey.split("\\.", 2);
+                if (parts.length > 0) {
+                    // For nested keys like "App.Welcome Message", map "App" to the field
+                    // This allows us to find the field when processing the top-level "App" key
+                    if (!topLevelKeyToFullKey.containsKey(parts[0]) || parts.length == 1) {
+                        topLevelKeyToFullKey.put(parts[0], fullKey);
+                        topLevelKeyToField.put(parts[0], field);
+                    }
+                }
+            }
+        }
+        
+        // Process keys in field order (for both top-level and nested keys) to maintain order
+        List<String> orderedKeys = new ArrayList<>();
+        Set<String> processedKeys = new HashSet<>();
+        
+        // First, add keys in field order based on the order they appear in the class
+        if (inspectedClass != null) {
+            for (Field field : inspectedClass.getDeclaredFields()) {
+                if (Modifier.isStatic(field.getModifiers())) continue;
+                String key = field.isAnnotationPresent(Key.class) ? field.getAnnotation(Key.class).value() : field.getName();
+                // The field's key is already the full path (e.g., "App.Welcome Message")
+                String fullKey = key;
+                
+                // Determine which key in the map this field corresponds to
+                String mapKey = null;
+                if (basePath == null || basePath.isEmpty()) {
+                    // Top-level: extract the first part (e.g., "App" from "App.Welcome Message")
+                    String[] parts = fullKey.split("\\.", 2);
+                    if (parts.length > 0) {
+                        mapKey = parts[0];
+                    }
+                } else {
+                    // Nested context: extract the part after basePath (e.g., "Welcome Message" from "App.Welcome Message" when basePath is "App")
+                    if (fullKey.startsWith(basePath + ".")) {
+                        mapKey = fullKey.substring(basePath.length() + 1);
+                    } else if (fullKey.equals(basePath)) {
+                        // This is the basePath itself
+                        mapKey = basePath;
+                    }
+                }
+                
+                if (mapKey != null && map.containsKey(mapKey) && !processedKeys.contains(mapKey)) {
+                    orderedKeys.add(mapKey);
+                    processedKeys.add(mapKey);
+                }
+            }
+        }
+        
+        // Then add any remaining keys from map that weren't in field order
+        for (String key : map.keySet()) {
+            if (!processedKeys.contains(key)) {
+                orderedKeys.add(key);
+            }
+        }
+        
+        // Rebuild tuples list in the correct order
+        List<NodeTuple> newTuples = new ArrayList<>();
+        Set<String> processedKeysInOrder = new HashSet<>();
+        
+        // First, process keys in field order
+        for (String key : orderedKeys) {
+            Object val = map.get(key);
+            NodeTuple existingTuple = existingTuples.get(key);
+            String fullKey = topLevelKeyToFullKey.get(key);
+            Field field = topLevelKeyToField.get(key);
+            
+            // For nested keys, we need to find the field that matches the nested structure
+            // If this is a nested key (like "Welcome Message" within "App"), find the field
+            if (field == null && basePath != null && !basePath.isEmpty()) {
+                // We're in a nested context, look for fields that match the nested path
+                String searchKey = basePath + "." + key;
+                field = fullKeyToField.get(searchKey);
+            }
+            
+            // Check if this is a nested parent key (e.g., "App" when field has key "App.Welcome Message")
+            // For nested keys like "App.Welcome Message", when processing "App" at top level,
+            // we should NOT add comments to "App" - they should be added to "Welcome Message" in the recursive call
+            // isNestedParent is true if:
+            // 1. We're at the top level (basePath is null/empty)
+            // 2. The field's key contains "." and doesn't match the current key
+            // If we're in a nested context and found a field, it's the final key, not a parent
+            boolean isNestedParent = false;
+            if (field != null) {
+                String fieldKey = field.isAnnotationPresent(Key.class) ? field.getAnnotation(Key.class).value() : field.getName();
+                // Only consider it a nested parent if we're at the top level
+                // In nested contexts, if we found a field, it's the final key
+                if (basePath == null || basePath.isEmpty()) {
+                    isNestedParent = fieldKey.contains(".") && !fieldKey.equals(key);
+                }
+            } else if (fullKey != null) {
+                isNestedParent = fullKey.contains(".") && !fullKey.equals(key);
+            }
+            
+            if (existingTuple != null) {
+                // Key exists - update it
+                Node kNode = existingTuple.getKeyNode();
+                Node vNode = existingTuple.getValueNode();
+                
+                // Preserve inline comment from existing value node
+                // Try to get inline comment using reflection since API may vary
+                String inlineComment = null;
+                try {
+                    java.lang.reflect.Method getInlineMethod = vNode.getClass().getMethod("getInLineComment");
+                    Object inlineCommentObj = getInlineMethod.invoke(vNode);
+                    if (inlineCommentObj instanceof String) {
+                        inlineComment = (String) inlineCommentObj;
+                    }
+                } catch (Exception ignored) {
+                    // Method doesn't exist or failed, ignore
+                }
+                
+                // Add @Comment annotation on key node if present on field AND key doesn't already have comments
+                // BUT only if this is the final key (not a nested parent key)
+                // For nested keys like "App.Welcome Message", don't add comment to "App" - add it to "Welcome Message"
+                if (field != null && field.isAnnotationPresent(net.vortexdevelopment.vinject.annotation.yaml.Comment.class) && !isNestedParent) {
+                    // Check if key already has block comments
+                    List<CommentLine> existingBlockComments = null;
+                    try {
+                        java.lang.reflect.Method getBlockCommentsMethod = kNode.getClass().getMethod("getBlockComments");
+                        Object existingComments = getBlockCommentsMethod.invoke(kNode);
+                        if (existingComments instanceof List) {
+                            @SuppressWarnings("unchecked")
+                            List<CommentLine> comments = (List<CommentLine>) existingComments;
+                            existingBlockComments = comments;
+                        }
+                    } catch (Exception ignored) {
+                        // Method doesn't exist or failed, assume no comments
+                    }
+                    
+                    // Only add comments if key doesn't already have them
+                    if (existingBlockComments == null || existingBlockComments.isEmpty()) {
+                        net.vortexdevelopment.vinject.annotation.yaml.Comment comment = field.getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.Comment.class);
+                        String[] lines = comment.value();
+                        if (lines != null && lines.length > 0) {
+                            List<CommentLine> blockComments = new ArrayList<>();
+                            for (String line : lines) {
+                                if (line != null && !line.isEmpty()) {
+                                    blockComments.add(new CommentLine(null, null, line, CommentType.BLOCK));
+                                }
+                            }
+                            if (!blockComments.isEmpty()) {
+                                kNode.setBlockComments(blockComments);
+                            }
+                        }
+                    }
+                }
+                
+                if (val instanceof Map && vNode instanceof MappingNode) {
+                    // Recursively update nested mapping, preserving existing keys
+                    Map<String, Object> sub = (Map<String, Object>) val;
+                    // Get nested instance and class for recursive call
+                    Object nestedInstance = null;
+                    Class<?> nestedClass = null;
+                    if (field != null) {
+                        try {
+                            field.setAccessible(true);
+                            nestedInstance = field.get(instance);
+                            if (nestedInstance != null) {
+                                nestedClass = nestedInstance.getClass();
+                            } else if (!isPrimitiveOrString(field.getType())) {
+                                nestedClass = field.getType();
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                    // For nested keys like "App.Welcome Message", when processing "App" at top level,
+                    // we need to find the field that has a key starting with "App."
+                    // Build a new basePath for nested keys
+                    String nestedBasePath = null;
+                    if (fullKey != null && fullKey.contains(".")) {
+                        // This is a nested key like "App.Welcome Message"
+                        // When recursively processing, the basePath should be "App" so we can find "App.Welcome Message"
+                        nestedBasePath = fullKey.substring(0, fullKey.indexOf('.'));
+                    } else if (basePath != null && !basePath.isEmpty()) {
+                        // We're already in a nested context, continue with the basePath
+                        nestedBasePath = basePath;
+                    }
+                    // For nested keys, we need to pass the original instance and class so we can find fields
+                    // that match the nested path (e.g., "App.Welcome Message")
+                    updateMappingNodeWithMap((MappingNode) vNode, sub, representer, 
+                                            instance, inspectedClass, nestedBasePath);
+                    // Add to new tuples list in order (the nested mapping has been updated in place)
+                    newTuples.add(new NodeTuple(kNode, vNode));
+                    processedKeysInOrder.add(key);
+                } else {
+                    // Replace the value node but preserve inline comment
+                    Node newVal = representer.represent(val);
+                    if (inlineComment != null) {
+                        try {
+                            java.lang.reflect.Method setInlineMethod = newVal.getClass().getMethod("setInLineComment", String.class);
+                            setInlineMethod.invoke(newVal, inlineComment);
+                        } catch (Exception ignored) {
+                            // Method doesn't exist or failed, ignore
+                        }
+                    }
+                    // Add to new tuples list in order
+                    newTuples.add(new NodeTuple(kNode, newVal));
+                    processedKeysInOrder.add(key);
+                }
+            } else {
+                // Key doesn't exist - add it
+                Node kNode = representer.represent(key);
+                Node vNode = representer.represent(val);
+                
+                // Add @Comment annotation if present on field (new keys don't have comments yet)
+                if (field != null && field.isAnnotationPresent(net.vortexdevelopment.vinject.annotation.yaml.Comment.class)) {
+                    net.vortexdevelopment.vinject.annotation.yaml.Comment comment = field.getAnnotation(net.vortexdevelopment.vinject.annotation.yaml.Comment.class);
+                    String[] lines = comment.value();
+                    if (lines != null && lines.length > 0) {
+                        List<CommentLine> blockComments = new ArrayList<>();
+                        for (String line : lines) {
+                            if (line != null && !line.isEmpty()) {
+                                blockComments.add(new CommentLine(null, null, line, CommentType.BLOCK));
+                            }
+                        }
+                        if (!blockComments.isEmpty()) {
+                            kNode.setBlockComments(blockComments);
+                        }
+                    }
+                }
+                
+                // Add to new tuples list in order
+                newTuples.add(new NodeTuple(kNode, vNode));
+                processedKeysInOrder.add(key);
+            }
+        }
+        
+        // Add any existing keys that weren't in the map (preserve unknown keys)
+        for (NodeTuple nt : tuples) {
+            Node kNode = nt.getKeyNode();
+            if (kNode instanceof ScalarNode sk) {
+                String key = sk.getValue();
+                if (!processedKeysInOrder.contains(key)) {
+                    newTuples.add(nt);
+                }
+            }
+        }
+        
+        // Replace the old tuples list with the new ordered one
+        tuples.clear();
+        tuples.addAll(newTuples);
     }
 
     public void registerSerializer(YamlSerializerBase<?> serializer) {
@@ -447,7 +835,7 @@ public class ConfigurationContainer {
         if (e == null) return;
         synchronized (e) {
             if (!force && !e.dirty) return;
-            saveToFile(e.delegate, e.configClass, e.filePath, e.charset, e.annotation);
+            saveToFile(e, e.configClass, e.filePath, e.charset, e.annotation);
             e.dirty = false;
         }
     }
@@ -465,10 +853,91 @@ public class ConfigurationContainer {
     public void saveConfigByPath(String filePath) {
         for (ConfigEntry e : configs.values()) {
             if (e.filePath.equals(filePath)) {
-                saveConfig(e.delegate.getClass());
+                saveConfig(e.configClass);
                 break;
             }
         }
+    }
+
+    /**
+     * Reload a configuration from disk, re-reading the YAML file and updating the instance fields.
+     * The instance reference is preserved so injected dependencies remain valid.
+     * 
+     * @param configClass The configuration class to reload
+     * @throws IllegalArgumentException if the config class is not found
+     * @throws RuntimeException if the YAML file is invalid or cannot be read
+     */
+    public void reloadConfig(Class<?> configClass) {
+        ConfigEntry entry = configs.get(configClass);
+        if (entry == null) {
+            throw new IllegalArgumentException("Configuration class not found: " + configClass.getName());
+        }
+
+        synchronized (entry) {
+            try {
+                // Get the existing instance from DependencyContainer
+                DependencyContainer container = DependencyContainer.getInstance();
+                if (container == null) {
+                    throw new RuntimeException("DependencyContainer instance not available");
+                }
+                
+                Object instance = container.getDependencyOrNull(configClass);
+                if (instance == null) {
+                    throw new RuntimeException("Configuration instance not found in DependencyContainer for class: " + configClass.getName());
+                }
+
+                // Resolve file path
+                java.nio.file.Path resolvedPath = resolvePath(entry.filePath);
+                File file = resolvedPath.toFile();
+
+                if (!file.exists()) {
+                    System.err.println("Warning: Configuration file does not exist: " + resolvedPath + ". Keeping existing configuration.");
+                    return;
+                }
+
+                // Re-read YAML file
+                try (InputStream in = new FileInputStream(file)) {
+                    Object data = yaml.load(in);
+                    if (data instanceof Map) {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> root = (Map<String, Object>) data;
+                        // Update instance fields directly (preserves instance reference)
+                        mapToInstance(root, instance, entry.configClass, entry.annotation.path());
+                        // Mark as not dirty since we just loaded from disk
+                        entry.dirty = false;
+                    } else {
+                        throw new RuntimeException("Invalid YAML format: expected Map, got " + (data != null ? data.getClass().getName() : "null"));
+                    }
+                }
+            } catch (java.io.FileNotFoundException e) {
+                System.err.println("Warning: Configuration file not found: " + entry.filePath + ". Keeping existing configuration.");
+            } catch (Exception e) {
+                throw new RuntimeException("Unable to reload YAML configuration for class: " + configClass.getName(), e);
+            }
+        }
+    }
+
+    /**
+     * Reload a configuration by file path. This is a convenience method that finds
+     * the config class associated with the given file path and reloads it.
+     * 
+     * @param filePath The file path of the configuration to reload
+     * @throws IllegalArgumentException if no configuration is found for the given file path
+     */
+    public void reloadConfigByPath(String filePath) {
+        ConfigEntry found = null;
+        for (ConfigEntry e : configs.values()) {
+            if (e.filePath.equals(filePath)) {
+                found = e;
+                break;
+            }
+        }
+        
+        if (found == null) {
+            throw new IllegalArgumentException("No configuration found for file path: " + filePath);
+        }
+        
+        reloadConfig(found.configClass);
     }
 
     /**
@@ -622,8 +1091,6 @@ public class ConfigurationContainer {
 
                         // record metadata
                         ItemMeta meta = new ItemMeta();
-                        meta.batchId = id;
-                        meta.itemId = key;
                         meta.filePath = p.toAbsolutePath().toString();
                         meta.layout = (rootKey == null || rootKey.isEmpty()) ? ItemLayout.TOP_LEVEL : ItemLayout.ROOT_KEY;
                         meta.rootKey = (rootKey == null || rootKey.isEmpty()) ? null : rootKey;
@@ -648,8 +1115,6 @@ public class ConfigurationContainer {
     private enum ItemLayout {TOP_LEVEL, ROOT_KEY, SINGLE_FILE_PER_ITEM}
 
     private static final class ItemMeta {
-        String batchId;
-        String itemId;
         String filePath;
         ItemLayout layout;
         String rootKey;
@@ -685,68 +1150,45 @@ public class ConfigurationContainer {
     }
 
     private Object instrumentItemInstance(Object original, String batchId, String filePath) {
+        // Synthetic fields are now added at compile-time by VInject-Transformer
+        // Just set them directly on the original instance using reflection
         try {
-            Class<?> origClass = original.getClass();
-            Class<?> proxyClass = new ByteBuddy()
-                    .subclass(origClass)
-                    .defineField(SYNTHETIC_BATCH_FIELD, String.class, net.bytebuddy.description.modifier.Visibility.PRIVATE)
-                    .defineField(SYNTHETIC_FILE_FIELD, String.class, net.bytebuddy.description.modifier.Visibility.PRIVATE)
-                    .make()
-                    .load(origClass.getClassLoader(), ClassLoadingStrategy.Default.WRAPPER)
-                    .getLoaded();
-
-            Object proxy = proxyClass.getDeclaredConstructor().newInstance();
-            // copy fields
-            for (Field f : origClass.getDeclaredFields()) {
-                if (Modifier.isStatic(f.getModifiers())) continue;
-                f.setAccessible(true);
-                Object val = f.get(original);
-                try {
-                    Field targetField = null;
-                    try {
-                        targetField = proxyClass.getDeclaredField(f.getName());
-                    } catch (NoSuchFieldException nsf) {
-                        // field inherited from superclass, search hierarchy
-                        Class<?> cur = proxyClass;
-                        while (cur != null) {
-                            try {
-                                targetField = cur.getDeclaredField(f.getName());
-                                break;
-                            } catch (NoSuchFieldException ignored) {
-                                cur = cur.getSuperclass();
-                            }
-                        }
-                    }
-                    if (targetField != null) {
-                        targetField.setAccessible(true);
-                        targetField.set(proxy, val);
-                    }
-                } catch (Throwable t) {
-                    // ignore individual field copy failures
+            Class<?> clazz = original.getClass();
+            
+            // Set batch id field
+            try {
+                Field batchField = findFieldInHierarchy(clazz, SYNTHETIC_BATCH_FIELD);
+                if (batchField != null) {
+                    batchField.setAccessible(true);
+                    batchField.set(original, batchId);
+                } else {
+                    System.err.println("Warning: Synthetic batch field " + SYNTHETIC_BATCH_FIELD + 
+                            " not found on class " + clazz.getName() + ". " +
+                            "Ensure VInject-Transformer is configured in your build.");
                 }
-            }
-
-            // set synthetic fields
-            try {
-                Field b = proxyClass.getDeclaredField(SYNTHETIC_BATCH_FIELD);
-                b.setAccessible(true);
-                b.set(proxy, batchId);
-            } catch (Throwable ex) {
+            } catch (Exception ex) {
                 System.err.println("Unable to set synthetic batch field: " + SYNTHETIC_BATCH_FIELD + " - " + ex.getMessage());
-                ex.printStackTrace();
             }
+            
+            // Set file path field
             try {
-                Field f = proxyClass.getDeclaredField(SYNTHETIC_FILE_FIELD);
-                f.setAccessible(true);
-                f.set(proxy, filePath);
-            } catch (Throwable ex) {
+                Field fileField = findFieldInHierarchy(clazz, SYNTHETIC_FILE_FIELD);
+                if (fileField != null) {
+                    fileField.setAccessible(true);
+                    fileField.set(original, filePath);
+                } else {
+                    System.err.println("Warning: Synthetic file field " + SYNTHETIC_FILE_FIELD + 
+                            " not found on class " + clazz.getName() + ". " +
+                            "Ensure VInject-Transformer is configured in your build.");
+                }
+            } catch (Exception ex) {
                 System.err.println("Unable to set synthetic file field: " + SYNTHETIC_FILE_FIELD + " - " + ex.getMessage());
-                ex.printStackTrace();
             }
 
-            return proxy;
+            return original;
         } catch (Exception e) {
-            // fallback: attach nothing, return original
+            // fallback: return original without metadata
+            System.err.println("Error instrumenting item instance: " + e.getMessage());
             return original;
         }
     }
@@ -888,6 +1330,8 @@ public class ConfigurationContainer {
         return Charset.forName("UTF-8");
     }
 
+    
+
     private Map<String, Object> objectToMap(Object instance, Class<?> inspectedClass, String basePath) throws IllegalAccessException {
         Map<String, Object> root = new LinkedHashMap<>();
         Class<?> clazz = inspectedClass != null ? inspectedClass : instance.getClass();
@@ -910,7 +1354,13 @@ public class ConfigurationContainer {
                     // fall through to default handling
                 }
             }
-            if (isPrimitiveOrString(val.getClass())) {
+            // Handle enum types - serialize as string using .name()
+            if (val.getClass().isEnum()) {
+                putNested(root, (basePath == null || basePath.isEmpty()) ? key : basePath + "." + key, ((Enum<?>) val).name());
+            } else if (val instanceof Map) {
+                // Handle Map types - serialize directly as Map
+                putNested(root, (basePath == null || basePath.isEmpty()) ? key : basePath + "." + key, val);
+            } else if (isPrimitiveOrString(val.getClass())) {
                 putNested(root, (basePath == null || basePath.isEmpty()) ? key : basePath + "." + key, val);
             } else if (val instanceof List) {
                 putNested(root, (basePath == null || basePath.isEmpty()) ? key : basePath + "." + key, val);

@@ -212,6 +212,43 @@ public interface UserRepository extends CrudRepository<User, Long> {
 }
 ```
 
+## Maven Transformer Plugin (Required)
+
+**The VInject-Transformer plugin is required for both database entities and YAML configurations.**
+
+Add the transformer plugin to your `pom.xml`:
+
+```xml
+<plugin>
+    <groupId>net.vortexdevelopment</groupId>
+    <artifactId>VInject-Transformer</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <executions>
+        <execution>
+            <id>process-classes</id>
+            <phase>process-classes</phase>
+            <goals>
+                <goal>transform-classes</goal>
+            </goals>
+        </execution>
+        <execution>
+            <id>process-test-classes</id>
+            <phase>process-test-classes</phase>
+            <goals>
+                <goal>transform-classes</goal>
+            </goals>
+        </execution>
+    </executions>
+</plugin>
+```
+
+### What the Transformer Does
+
+- **For `@Entity` classes**: Adds field modification tracking for efficient database updates
+- **For YAML configuration classes**: Adds synthetic fields (`__vinject_yaml_batch_id` and `__vinject_yaml_file`) required for batch loading and saving
+
+**Note**: Classes used in YAML batch loading (classes with fields annotated with `@YamlId`) must be processed by the transformer. Without it, YAML configuration features will not work correctly.
+
 ## Performance Optimization
 
 For optimal performance with VInject-Transformer, ensure your entity classes have:

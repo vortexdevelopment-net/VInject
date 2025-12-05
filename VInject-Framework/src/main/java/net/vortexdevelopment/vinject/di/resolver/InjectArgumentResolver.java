@@ -6,6 +6,7 @@ import net.vortexdevelopment.vinject.annotation.Component;
 import net.vortexdevelopment.vinject.annotation.OptionalDependency;
 import net.vortexdevelopment.vinject.annotation.Repository;
 import net.vortexdevelopment.vinject.annotation.Service;
+import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
 
 import java.lang.reflect.Field;
 import java.util.List;
@@ -24,11 +25,12 @@ public class InjectArgumentResolver implements ArgumentResolverProcessor {
             return true;
         }
         
-        // Also handle default dependency injection for component types
+        // Also handle default dependency injection for component types and YAML configs
         Class<?> targetType = context.getTargetType();
         return targetType.isAnnotationPresent(Component.class) 
                 || targetType.isAnnotationPresent(Service.class)
                 || targetType.isAnnotationPresent(Repository.class)
+                || targetType.isAnnotationPresent(YamlConfiguration.class)
                 || context.getContainer().getDependencyOrNull(targetType) != null;
     }
     

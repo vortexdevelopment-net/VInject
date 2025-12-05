@@ -209,6 +209,7 @@ public class DependencyContainer implements DependencyRepository {
         //Run database initialization (Create, Update tables)
         if (database != null) {
             database.initializeEntityMetadata(this);
+            database.verifyTables();
         }
 
         if (onPreComponentLoad != null) {

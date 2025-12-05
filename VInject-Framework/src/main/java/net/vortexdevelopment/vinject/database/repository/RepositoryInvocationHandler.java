@@ -5,6 +5,7 @@ import net.vortexdevelopment.vinject.annotation.database.Entity;
 import net.vortexdevelopment.vinject.annotation.database.Temporal;
 import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.database.TemporalType;
+import net.vortexdevelopment.vinject.database.formatter.SchemaFormatter;
 import net.vortexdevelopment.vinject.database.meta.EntityMetadata;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
 import org.jetbrains.annotations.NotNull;
@@ -57,6 +58,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
     private final Database database; // Assume Database is a utility class for DB connections
     private final DependencyContainer dependencyContainer; // For dependency injection
     private final Map<String, String> queryCache = new HashMap<>();
+    private final SchemaFormatter schemaFormatter;
 
     public RepositoryInvocationHandler(Class<?> repositoryClass, Class<T> entityClass, Database database, DependencyContainer dependencyContainer) {
         this.entityClass = entityClass;
@@ -64,6 +66,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
         this.database = database;
         this.dependencyContainer = dependencyContainer;
         this.repositoryClass = repositoryClass;
+        this.schemaFormatter = database.getSchemaFormatter();
     }
 
     @SuppressWarnings("unchecked")
@@ -351,12 +354,12 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
             if (i > 0) {
                 whereClause.append(" AND ");
             }
-            whereClause.append(columnName).append(" = ?");
+            whereClause.append(schemaFormatter.formatColumnName(columnName)).append(" = ?");
             parameters.add(fetchValue(args[i])); // Fetch value (handle foreign keys if needed)
         }
 
         // Build SQL query
-        String sql = "SELECT * FROM " + entityMetadata.getTableName() +
+        String sql = "SELECT * FROM " + schemaFormatter.formatTableName(entityMetadata.getTableName()) +
                 " WHERE " + whereClause;
 
         // Execute query and retrieve results
@@ -434,12 +437,12 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
             if (i > 0) {
                 whereClause.append(" AND ");
             }
-            whereClause.append(columnName).append(" = ?");
+            whereClause.append(schemaFormatter.formatColumnName(columnName)).append(" = ?");
             parameters.add(fetchValue(args[i])); // Fetch value (handle foreign keys if needed)
         }
 
         // Build SQL query
-        String sql = "SELECT * FROM " + entityMetadata.getTableName() +
+        String sql = "SELECT * FROM " + schemaFormatter.formatTableName(entityMetadata.getTableName()) +
                 " WHERE " + whereClause;
 
         // Execute query and retrieve results
@@ -500,12 +503,12 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
             if (i > 0) {
                 whereClause.append(" AND ");
             }
-            whereClause.append(columnName).append(" = ?");
+            whereClause.append(schemaFormatter.formatColumnName(columnName)).append(" = ?");
             parameters.add(fetchValue(args[i])); // Fetch value (handle foreign keys if needed)
         }
 
         // Build SQL query
-        String sql = "DELETE FROM " + entityMetadata.getTableName() +
+        String sql = "DELETE FROM " + schemaFormatter.formatTableName(entityMetadata.getTableName()) +
                 " WHERE " + whereClause;
 
         // Execute query
@@ -561,12 +564,12 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
             if (i > 0) {
                 whereClause.append(" AND ");
             }
-            whereClause.append(columnName).append(" = ?");
+            whereClause.append(schemaFormatter.formatColumnName(columnName)).append(" = ?");
             parameters.add(fetchValue(args[i])); // Fetch value (handle foreign keys if needed)
         }
 
         // Build SQL query
-        String sql = "DELETE FROM " + entityMetadata.getTableName() +
+        String sql = "DELETE FROM " + schemaFormatter.formatTableName(entityMetadata.getTableName()) +
                 " WHERE " + whereClause;
 
         // Execute query
@@ -654,8 +657,8 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
      * Internal method to check existence by ID.
      */
     private boolean existsByIdInternal(Object id) throws Exception {
-        String sql = "SELECT 1 FROM " + entityMetadata.getTableName() + " WHERE " +
-                entityMetadata.getPrimaryKeyColumn() + " = ?";
+        String sql = "SELECT 1 FROM " + schemaFormatter.formatTableName(entityMetadata.getTableName()) + " WHERE " +
+                schemaFormatter.formatColumnName(entityMetadata.getPrimaryKeyColumn()) + " = ?";
         return database.connect(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 statement.setObject(1, id);
@@ -671,7 +674,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
      */
     private @NotNull Iterable<T> findAll() throws Exception {
         return database.connect(connection -> {
-            String sql = "SELECT * FROM " + entityMetadata.getTableName();
+            String sql = "SELECT * FROM " + schemaFormatter.formatTableName(entityMetadata.getTableName());
             List<T> results = new ArrayList<>();
             try (PreparedStatement statement = connection.prepareStatement(sql);
                  ResultSet rs = statement.executeQuery()) {
@@ -695,8 +698,8 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
         }
 
         String placeholders = idList.stream().map(id -> "?").collect(Collectors.joining(", "));
-        String sql = "SELECT * FROM " + entityMetadata.getTableName() +
-                " WHERE " + entityMetadata.getPrimaryKeyColumn() + " IN (" + placeholders + ")";
+        String sql = "SELECT * FROM " + schemaFormatter.formatTableName(entityMetadata.getTableName()) +
+                " WHERE " + schemaFormatter.formatColumnName(entityMetadata.getPrimaryKeyColumn()) + " IN (" + placeholders + ")";
 
         return database.connect(connection -> {
             List<T> results = new ArrayList<>();
@@ -720,7 +723,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
      * Counts the total number of entities.
      */
     private long count() throws Exception {
-        String sql = "SELECT COUNT(*) FROM " + entityMetadata.getTableName();
+        String sql = "SELECT COUNT(*) FROM " + schemaFormatter.formatTableName(entityMetadata.getTableName());
         return database.connect(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql);
                  ResultSet rs = statement.executeQuery()) {
@@ -736,8 +739,8 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
      * Deletes an entity by its ID.
      */
     private void deleteById(ID id) throws Exception {
-        String sql = "DELETE FROM " + entityMetadata.getTableName() +
-                " WHERE " + entityMetadata.getPrimaryKeyColumn() + " = ?";
+        String sql = "DELETE FROM " + schemaFormatter.formatTableName(entityMetadata.getTableName()) +
+                " WHERE " + schemaFormatter.formatColumnName(entityMetadata.getPrimaryKeyColumn()) + " = ?";
         database.connect(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 statement.setObject(1, id);
@@ -770,8 +773,8 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
         }
 
         String placeholders = idList.stream().map(id -> "?").collect(Collectors.joining(", "));
-        String sql = "DELETE FROM " + entityMetadata.getTableName() +
-                " WHERE " + entityMetadata.getPrimaryKeyColumn() + " IN (" + placeholders + ")";
+        String sql = "DELETE FROM " + schemaFormatter.formatTableName(entityMetadata.getTableName()) +
+                " WHERE " + schemaFormatter.formatColumnName(entityMetadata.getPrimaryKeyColumn()) + " IN (" + placeholders + ")";
 
         database.connect(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
@@ -798,7 +801,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
      * Deletes all entities in the repository.
      */
     private void deleteAll() throws Exception {
-        String sql = "DELETE FROM " + entityMetadata.getTableName();
+        String sql = "DELETE FROM " + schemaFormatter.formatTableName(entityMetadata.getTableName());
         database.connect(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 statement.executeUpdate();
@@ -836,12 +839,12 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
                 value = new Timestamp((long)value);
             }
 
-            columns.add(columnName);
+            columns.add(schemaFormatter.formatColumnName(columnName));
             values.add(value);
             placeholders.add("?");
         }
 
-        String sql = "INSERT INTO " + entityMetadata.getTableName() + " (" +
+        String sql = "INSERT INTO " + schemaFormatter.formatTableName(entityMetadata.getTableName()) + " (" +
                 String.join(", ", columns) + ") VALUES (" +
                 String.join(", ", placeholders) + ")";
 
@@ -903,7 +906,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
                 value = new Timestamp((long)value);
             }
 
-            setClauses.add(columnName + " = ?");
+            setClauses.add(schemaFormatter.formatColumnName(columnName) + " = ?");
             values.add(value);
         }
 
@@ -918,9 +921,9 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
             resetModifiedFields.invoke(entity);
         } catch (Exception ignored) {}
 
-        String sql = "UPDATE " + entityMetadata.getTableName() + " SET " +
+        String sql = "UPDATE " + schemaFormatter.formatTableName(entityMetadata.getTableName()) + " SET " +
                 String.join(", ", setClauses) + " WHERE " +
-                entityMetadata.getPrimaryKeyColumn() + " = ?";
+                schemaFormatter.formatColumnName(entityMetadata.getPrimaryKeyColumn()) + " = ?";
 
         // Add primary key value at the end
         Field pkField = entityMetadata.getPrimaryKeyField();
@@ -1039,7 +1042,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
             if (columnName == null) {
                 throw new IllegalArgumentException("No such field: " + fieldName + " in entity " + entityClass.getName());
             }
-            return "SELECT * FROM " + tableName + " WHERE " + columnName + " = ?";
+            return "SELECT * FROM " + schemaFormatter.formatTableName(tableName) + " WHERE " + schemaFormatter.formatColumnName(columnName) + " = ?";
         });
     }
 
@@ -1141,7 +1144,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
         String tableName = foreignMetadata.getTableName();
         String pkColumn = foreignMetadata.getPrimaryKeyColumn();
 
-        String sql = "SELECT * FROM " + tableName + " WHERE " + pkColumn + " = ?";
+        String sql = "SELECT * FROM " + schemaFormatter.formatTableName(tableName) + " WHERE " + schemaFormatter.formatColumnName(pkColumn) + " = ?";
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setObject(1, foreignKeyValue);
             try (ResultSet rs = statement.executeQuery()) {

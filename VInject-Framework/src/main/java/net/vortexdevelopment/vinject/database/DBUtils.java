@@ -23,7 +23,10 @@ public class DBUtils {
      * @throws Exception If a database access error occurs.
      */
     public static Map<String, String> getExistingColumns(Connection connection, String tableName) throws Exception {
-        boolean isH2 = Database.isH2();
+        // Detect database type from connection metadata for reliability
+        DatabaseMetaData metaData = connection.getMetaData();
+        String databaseProductName = metaData.getDatabaseProductName().toLowerCase(Locale.ENGLISH);
+        boolean isH2 = databaseProductName.contains("h2");
         Map<String, String> columns = new HashMap<>();
 
         String sql;

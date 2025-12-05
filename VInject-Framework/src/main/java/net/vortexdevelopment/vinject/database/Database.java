@@ -4,6 +4,9 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import net.vortexdevelopment.vinject.annotation.database.Column;
 import net.vortexdevelopment.vinject.annotation.database.Entity;
+import net.vortexdevelopment.vinject.database.formatter.H2SchemaFormatter;
+import net.vortexdevelopment.vinject.database.formatter.MySQLSchemaFormatter;
+import net.vortexdevelopment.vinject.database.formatter.SchemaFormatter;
 import net.vortexdevelopment.vinject.database.mapper.H2Mapper;
 import net.vortexdevelopment.vinject.database.mapper.MySQLMapper;
 import net.vortexdevelopment.vinject.database.meta.EntityMetadata;
@@ -26,6 +29,7 @@ public class Database implements DatabaseConnector {
     private final List<String> FOREIGN_KEY_QUERIES = new ArrayList<>();
     private String database;
     private static SQLTypeMapper sqlTypeMapper;
+    private final SchemaFormatter schemaFormatter;
 
     public Database(String host, String port, String database, String type, String username, String password, int maxPoolSize, File h2File) {
         hikariConfig = new HikariConfig();
@@ -33,11 +37,20 @@ public class Database implements DatabaseConnector {
         if (type.equals("h2")) {
             //Set system propery vinject.database=h2
             sqlTypeMapper = new H2Mapper();
+            schemaFormatter = new H2SchemaFormatter();
             System.setProperty("vinject.database", "h2");
             hikariConfig.setDriverClassName("org.h2.Driver");
             hikariConfig.setJdbcUrl("jdbc:h2:file:./" + h2File.getPath().replaceAll("\\\\", "/") + ";AUTO_RECONNECT=TRUE;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE");
         } else {
             sqlTypeMapper = new MySQLMapper();
+            schemaFormatter = new MySQLSchemaFormatter();
+
+            switch (type.toLowerCase(Locale.ENGLISH)) {
+                case "mysql" -> hikariConfig.setDriverClassName("com.mysql.cj.jdbc.Driver");
+                case "mariadb" -> hikariConfig.setDriverClassName("org.mariadb.jdbc.Driver");
+                default -> throw new IllegalArgumentException("Unsupported database type: " + type);
+            }
+
             hikariConfig.setJdbcUrl("jdbc:" + type + "://" + host + ":" + port + "/" + database + "?autoReconnect=true&useSSL=false");
         }
 
@@ -58,17 +71,17 @@ public class Database implements DatabaseConnector {
         return sqlTypeMapper;
     }
 
+    /**
+     * Returns the schema formatter for this database instance.
+     *
+     * @return the schema formatter
+     */
+    public SchemaFormatter getSchemaFormatter() {
+        return schemaFormatter;
+    }
+
     public void init() {
-        System.out.println("Initializing database connection...");
         hikariDataSource = new HikariDataSource(hikariConfig);
-        System.out.println("Database connection initialized.");
-
-        //Init metadata
-        initializeEntityMetadata(DependencyContainer.getInstance());
-
-        System.out.println("Verifying tables...");
-        verifyTables();
-        System.out.println("Tables verified.");
     }
 
     public static String getTablePrefix() {
@@ -101,8 +114,7 @@ public class Database implements DatabaseConnector {
         }
     }
 
-    private void verifyTables() {
-        boolean isH2 = System.getProperty("vinject.database", "").equals("h2");
+    public void verifyTables() {
         connect(connection -> {
             for (EntityMetadata metadata : entityMetadataMap.values()) {
                 try {
@@ -136,23 +148,19 @@ public class Database implements DatabaseConnector {
     }
 
     private void createTable(Connection connection, EntityMetadata metadata) throws Exception {
-        boolean isH2 = isH2();
-        StringBuilder createSQL = new StringBuilder("CREATE TABLE IF NOT EXISTS `")
-                .append(metadata.getTableName())
-                .append("` (\n");
+        StringBuilder createSQL = new StringBuilder(schemaFormatter.formatCreateTablePrefix(metadata.getTableName()))
+                .append(" (\n");
 
         List<String> pkColumns = new ArrayList<>();
         List<String> foreignKeys = new ArrayList<>();
 
         for (FieldMetadata fieldMeta : metadata.getFields()) {
-            createSQL.append("  `")
-                    .append(fieldMeta.getColumnName())
-                    .append("` ")
-                    .append(fieldMeta.getSqlType())
+            createSQL.append("  ")
+                    .append(schemaFormatter.formatColumnDefinition(fieldMeta.getColumnName(), fieldMeta.getSqlType()))
                     .append(",\n");
 
             if (fieldMeta.isPrimaryKey()) {
-                pkColumns.add("`" + fieldMeta.getColumnName() + "`");
+                pkColumns.add(schemaFormatter.formatColumnName(fieldMeta.getColumnName()));
             }
             // foreign key handling omitted…
         }
@@ -173,10 +181,7 @@ public class Database implements DatabaseConnector {
 
         createSQL.append(") ENGINE=InnoDB;");
 
-        String sql = createSQL.toString();
-        if (isH2) {
-            sql = sql.replace("`", "");
-        }
+        String sql = schemaFormatter.convertSqlSyntax(createSQL.toString());
 
         try (Statement stmt = connection.createStatement()) {
             stmt.executeUpdate(sql);
@@ -189,7 +194,6 @@ public class Database implements DatabaseConnector {
     }
 
     private void synchronizeTable(Connection connection, EntityMetadata metadata) throws Exception {
-        boolean isH2 = Database.isH2();
         Map<String, String> existingColumns = DBUtils.getExistingColumns(connection, metadata.getTableName());
         Map<String, String> entityColumnTypes = new HashMap<>();
         Map<String, FieldMetadata> fieldMetadataMap = new HashMap<>();
@@ -208,11 +212,11 @@ public class Database implements DatabaseConnector {
             String col = entry.getKey();
             String desired = entry.getValue();
             if (!existingColumns.containsKey(col)) {
-                addColumns.add(isH2 ? col + " " + desired : "`" + col + "` " + desired);
+                addColumns.add(schemaFormatter.formatColumnDefinition(col, desired));
             } else {
                 String actual = existingColumns.get(col).toUpperCase(Locale.ENGLISH);
                 if (!actual.equals(desired.toUpperCase(Locale.ENGLISH))) {
-                    modifyColumns.add(isH2 ? col + " " + desired : "`" + col + "` " + desired);
+                    modifyColumns.add(schemaFormatter.formatColumnDefinition(col, desired));
                     System.out.println("Type mismatch for column: " + col + " Expected: " + desired + " Actual: " + actual);
                 }
             }
@@ -220,7 +224,7 @@ public class Database implements DatabaseConnector {
 
         for (String existing : existingColumns.keySet()) {
             if (!entityColumnTypes.containsKey(existing)) {
-                dropColumns.add("`" + existing + "`");
+                dropColumns.add(schemaFormatter.formatColumnName(existing));
             }
         }
 
@@ -229,34 +233,35 @@ public class Database implements DatabaseConnector {
         }
 
         try (Statement stmt = connection.createStatement()) {
-            if (isH2) {
-                for (String clause : addColumns) {
-                    String sql = "ALTER TABLE " + metadata.getTableName()
-                            + " ADD COLUMN " + clause.replaceAll("`", "")
-                            .replaceAll("(?i)AUTO_INCREMENT", "IDENTITY");
-                    stmt.executeUpdate(sql);
-                }
-                for (String clause : modifyColumns) {
-                    String sql = "ALTER TABLE " + metadata.getTableName()
-                            + " ALTER COLUMN " + clause.replaceAll("`", "")
-                            .replaceAll("(?i)AUTO_INCREMENT", "IDENTITY");
-                    stmt.executeUpdate(sql);
-                }
-                for (String drop : dropColumns) {
-                    String col = drop.replaceAll("`", "");
-                    String sql = "ALTER TABLE " + metadata.getTableName() + " DROP COLUMN " + col;
-                    stmt.executeUpdate(sql);
-                }
-            } else {
-                StringBuilder alter = new StringBuilder("ALTER TABLE `")
-                        .append(metadata.getTableName()).append("`\n");
+            String alterTablePrefix = schemaFormatter.formatAlterTablePrefix(metadata.getTableName());
+            
+            if (schemaFormatter.supportsCombinedAlterStatements()) {
+                // For MySQL/MariaDB, combine all ALTER statements
+                StringBuilder alter = new StringBuilder(alterTablePrefix).append("\n");
                 List<String> clauses = new ArrayList<>();
                 for (String add : addColumns)    clauses.add("  ADD COLUMN " + add);
                 for (String mod : modifyColumns) clauses.add("  MODIFY COLUMN " + mod);
                 for (String drop : dropColumns)  clauses.add("  DROP COLUMN " + drop);
                 alter.append(String.join(",\n", clauses)).append(";");
-                stmt.executeUpdate(alter.toString());
-                System.out.println("Alter SQL: " + alter);
+                String sql = schemaFormatter.convertSqlSyntax(alter.toString());
+                stmt.executeUpdate(sql);
+                System.out.println("Alter SQL: " + sql);
+            } else {
+                // For H2, execute each ALTER statement separately
+                for (String clause : addColumns) {
+                    String sql = alterTablePrefix + " ADD COLUMN " + clause;
+                    sql = schemaFormatter.convertSqlSyntax(sql);
+                    stmt.executeUpdate(sql);
+                }
+                for (String clause : modifyColumns) {
+                    String sql = alterTablePrefix + " ALTER COLUMN " + clause;
+                    sql = schemaFormatter.convertSqlSyntax(sql);
+                    stmt.executeUpdate(sql);
+                }
+                for (String drop : dropColumns) {
+                    String sql = alterTablePrefix + " DROP COLUMN " + drop;
+                    stmt.executeUpdate(sql);
+                }
             }
         }
     }

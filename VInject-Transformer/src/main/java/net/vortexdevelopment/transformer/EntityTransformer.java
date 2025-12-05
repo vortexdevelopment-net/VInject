@@ -13,26 +13,22 @@ import org.apache.bcel.generic.FieldGen;
 import org.apache.bcel.generic.GETFIELD;
 import org.apache.bcel.generic.INVOKEINTERFACE;
 import org.apache.bcel.generic.INVOKESPECIAL;
-import org.apache.bcel.generic.INVOKESTATIC;
 import org.apache.bcel.generic.InstructionConstants;
 import org.apache.bcel.generic.InstructionFactory;
 import org.apache.bcel.generic.InstructionHandle;
 import org.apache.bcel.generic.InstructionList;
-import org.apache.bcel.generic.LDC;
 import org.apache.bcel.generic.MethodGen;
 import org.apache.bcel.generic.ObjectType;
 import org.apache.bcel.generic.POP;
 import org.apache.bcel.generic.PUSH;
 import org.apache.bcel.generic.PUTFIELD;
 import org.apache.bcel.generic.Type;
-import org.apache.maven.execution.MavenSession;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecution;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.project.MavenProject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -43,14 +39,9 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Mojo(name = "transform-classes", defaultPhase = LifecyclePhase.PROCESS_CLASSES)
 public class EntityTransformer extends AbstractMojo {
@@ -61,32 +52,65 @@ public class EntityTransformer extends AbstractMojo {
     @Parameter(defaultValue = "${project.build.testOutputDirectory}", readonly = true)
     private File testOutputDirectory;
 
+    /**
+     * Optional: explicitly specify the classes directory to process.
+     * If set, this overrides the phase-based directory selection.
+     */
+    @Parameter
+    private File classesDirectory;
 
     @Parameter(defaultValue = "${mojoExecution}", readonly = true)
     private MojoExecution session;
 
     @Override
     public void execute() throws MojoExecutionException {
-        String phase = session.getLifecyclePhase();
+        String phase = session != null ? session.getLifecyclePhase() : null;
 
-        if (phase.equals("process-classes")) {
-            Set<File> classFiles = getClassFiles(outputDirectory);
-            for (File classFile : classFiles) {
-                try {
-                    processClassFile(classFile);
-                } catch (IOException e) {
-                    throw new MojoExecutionException("Failed to process class file: " + classFile, e);
+        // If classesDirectory is explicitly configured, use it
+        if (classesDirectory != null) {
+            if (classesDirectory.exists()) {
+                Set<File> classFiles = getClassFiles(classesDirectory);
+                for (File classFile : classFiles) {
+                    try {
+                        processClassFile(classFile);
+                    } catch (IOException | MojoExecutionException e) {
+                        throw new MojoExecutionException("Failed to process class file: " + classFile, e);
+                    }
                 }
+            } else {
+                getLog().warn("Configured classes directory does not exist: " + classesDirectory);
             }
             return;
         }
 
-        Set<File> testClassFiles = getClassFiles(testOutputDirectory);
-        for (File classFile : testClassFiles) {
-            try {
-                processClassFile(classFile);
-            } catch (IOException e) {
-                throw new MojoExecutionException("Failed to process class file: " + classFile, e);
+        // Fall back to phase-based directory selection
+        // Process main classes if in process-classes phase
+        if (phase != null && phase.equals("process-classes")) {
+            if (outputDirectory != null && outputDirectory.exists()) {
+                Set<File> classFiles = getClassFiles(outputDirectory);
+                for (File classFile : classFiles) {
+                    try {
+                        processClassFile(classFile);
+                    } catch (IOException | MojoExecutionException e) {
+                        throw new MojoExecutionException("Failed to process class file: " + classFile, e);
+                    }
+                }
+            }
+        }
+
+        // Process test classes if in process-test-classes phase
+        if (phase != null && phase.equals("process-test-classes")) {
+            if (testOutputDirectory != null && testOutputDirectory.exists()) {
+                Set<File> testClassFiles = getClassFiles(testOutputDirectory);
+                for (File classFile : testClassFiles) {
+                    try {
+                        processClassFile(classFile);
+                    } catch (IOException | MojoExecutionException e) {
+                        throw new MojoExecutionException("Failed to process class file: " + classFile, e);
+                    }
+                }
+            } else {
+                getLog().warn("Test output directory does not exist: " + testOutputDirectory);
             }
         }
     }
@@ -109,16 +133,38 @@ public class EntityTransformer extends AbstractMojo {
         return classFiles;
     }
 
-    private void processClassFile(File classFile) throws IOException {
+    private void processClassFile(File classFile) throws IOException, MojoExecutionException {
         try (InputStream inputStream = new FileInputStream(classFile)) {
             ClassParser parser = new ClassParser(inputStream, classFile.getName());
             JavaClass javaClass = parser.parse();
 
-            boolean hasDataAnnotation = Arrays.stream(javaClass.getAnnotationEntries())
+            String className = javaClass.getClassName();
+            getLog().debug("Processing class file: " + className + " from " + classFile.getName());
+
+            boolean hasEntityAnnotation = Arrays.stream(javaClass.getAnnotationEntries())
                     .anyMatch(annotation -> annotation.getAnnotationType().equals("Lnet/vortexdevelopment/vinject/annotation/database/Entity;"));
 
-            if (hasDataAnnotation) {
-                byte[] modifiedBytes = modifyClass(javaClass, classFile);
+            // Check for @YamlId annotation on any field
+            boolean hasYamlIdField = false;
+            for (Field field : javaClass.getFields()) {
+                org.apache.bcel.classfile.AnnotationEntry[] annotations = field.getAnnotationEntries();
+                for (org.apache.bcel.classfile.AnnotationEntry annotation : annotations) {
+                    String annotationType = annotation.getAnnotationType();
+                    if (annotationType.equals("Lnet/vortexdevelopment/vinject/annotation/yaml/YamlId;")) {
+                        hasYamlIdField = true;
+                        break;
+                    }
+                }
+                if (hasYamlIdField) break;
+            }
+
+            if (hasEntityAnnotation) {
+                byte[] modifiedBytes = modifyEntityClass(javaClass, classFile);
+                try (OutputStream outputStream = new FileOutputStream(classFile)) {
+                    outputStream.write(modifiedBytes);
+                }
+            } else if (hasYamlIdField) {
+                byte[] modifiedBytes = modifyYamlConfigClass(javaClass, classFile);
                 try (OutputStream outputStream = new FileOutputStream(classFile)) {
                     outputStream.write(modifiedBytes);
                 }
@@ -126,7 +172,47 @@ public class EntityTransformer extends AbstractMojo {
         }
     }
 
-    private byte[] modifyClass(JavaClass javaClass, File classFile) throws IOException {
+    private byte[] modifyYamlConfigClass(JavaClass javaClass, File classFile) throws IOException {
+        // Modify YAML config classes to add synthetic fields for batch tracking
+        ClassGen classGen = new ClassGen(javaClass);
+        ConstantPoolGen constantPool = classGen.getConstantPool();
+
+        // Check if fields already exist to avoid duplicates
+        boolean hasBatchField = Arrays.stream(classGen.getFields())
+                .anyMatch(field -> field.getName().equals("__vinject_yaml_batch_id"));
+        boolean hasFileField = Arrays.stream(classGen.getFields())
+                .anyMatch(field -> field.getName().equals("__vinject_yaml_file"));
+
+        // Add __vinject_yaml_batch_id field
+        if (!hasBatchField) {
+            FieldGen batchField = new FieldGen(
+                    Constants.ACC_PRIVATE,
+                    Type.STRING,
+                    "__vinject_yaml_batch_id",
+                    constantPool
+            );
+            classGen.addField(batchField.getField());
+        }
+
+        // Add __vinject_yaml_file field
+        if (!hasFileField) {
+            FieldGen fileField = new FieldGen(
+                    Constants.ACC_PRIVATE,
+                    Type.STRING,
+                    "__vinject_yaml_file",
+                    constantPool
+            );
+            classGen.addField(fileField.getField());
+        }
+
+        // Write the modified class to byte array
+        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+            classGen.getJavaClass().dump(outputStream);
+            return outputStream.toByteArray();
+        }
+    }
+
+    private byte[] modifyEntityClass(JavaClass javaClass, File classFile) throws IOException {
         // Modify the class using BCEL
         ClassGen classGen = new ClassGen(javaClass);
         ConstantPoolGen constantPool = classGen.getConstantPool();
