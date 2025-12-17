@@ -1,13 +1,16 @@
 package net.vortexdevelopment.vinject.di.resolver;
 
 import net.vortexdevelopment.vinject.annotation.ArgumentResolver;
+import net.vortexdevelopment.vinject.annotation.Conditional;
 import net.vortexdevelopment.vinject.annotation.Inject;
 import net.vortexdevelopment.vinject.annotation.Component;
 import net.vortexdevelopment.vinject.annotation.OptionalDependency;
 import net.vortexdevelopment.vinject.annotation.Repository;
 import net.vortexdevelopment.vinject.annotation.Service;
+import net.vortexdevelopment.vinject.annotation.yaml.YamlConditional;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
 
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.util.List;
 
@@ -46,7 +49,12 @@ public class InjectArgumentResolver implements ArgumentResolverProcessor {
             if (context.hasAnnotation(OptionalDependency.class)) {
                 return null;
             }
-            
+
+            // Inject null for conditional dependencies if they are not met
+            if (targetType.isAnnotationPresent(Conditional.class) || targetType.isAnnotationPresent(YamlConditional.class)) {
+                return null;
+            }
+
             // Handle error cases with proper error messages
             if (context.isField()) {
                 // Field injection error handling
@@ -67,11 +75,8 @@ public class InjectArgumentResolver implements ArgumentResolverProcessor {
                 }
                 
                 // Determine error message based on context
-                String errorContext = field.getModifiers() != 0 && java.lang.reflect.Modifier.isStatic(field.getModifiers()) 
-                        ? "static dependencies" 
-                        : "dependencies";
-                throw new RuntimeException("Dependency not found for field: " + targetType + " " + field.getName() + 
-                        " in class: " + declaringClass.getName() + " while injecting " + errorContext + ". Forget to add Bean?");
+                String errorContext = field.getModifiers() != 0 && java.lang.reflect.Modifier.isStatic(field.getModifiers()) ? "static dependencies" : "dependencies";
+                throw new RuntimeException("Dependency not found for field: " + targetType + " " + field.getName() + " in class: " + declaringClass.getName() + " while injecting " + errorContext + ". Forget to add Bean?");
             } else if (context.isParameter()) {
                 // Parameter injection error handling
                 Class<?> declaringClass = context.getDeclaringClass();
