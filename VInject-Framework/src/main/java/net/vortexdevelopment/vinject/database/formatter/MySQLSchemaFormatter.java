@@ -23,7 +23,14 @@ public class MySQLSchemaFormatter implements SchemaFormatter {
 
     @Override
     public String convertSqlSyntax(String sql) {
-        // No conversion needed for MySQL/MariaDB
+        // Add ENGINE=InnoDB for MySQL/MariaDB if it's a CREATE TABLE statement
+        if (sql.toUpperCase().startsWith("CREATE TABLE")) {
+            // Remove trailing semicolon if it exists to append engine
+            if (sql.endsWith(";")) {
+                sql = sql.substring(0, sql.length() - 1);
+            }
+            return sql + " ENGINE=InnoDB;";
+        }
         return sql;
     }
 

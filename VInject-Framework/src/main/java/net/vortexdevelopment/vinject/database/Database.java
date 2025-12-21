@@ -12,6 +12,8 @@ import net.vortexdevelopment.vinject.database.mapper.MySQLMapper;
 import net.vortexdevelopment.vinject.database.meta.EntityMetadata;
 import net.vortexdevelopment.vinject.database.meta.FieldMetadata;
 import net.vortexdevelopment.vinject.database.meta.ForeignKeyMetadata;
+import net.vortexdevelopment.vinject.database.serializer.DatabaseSerializer;
+import net.vortexdevelopment.vinject.database.serializer.SerializerRegistry;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
 
 import java.io.File;
@@ -30,17 +32,25 @@ public class Database implements DatabaseConnector {
     private String database;
     private static SQLTypeMapper sqlTypeMapper;
     private final SchemaFormatter schemaFormatter;
+    private final SerializerRegistry serializerRegistry;
 
     public Database(String host, String port, String database, String type, String username, String password, int maxPoolSize, File h2File) {
         hikariConfig = new HikariConfig();
 
-        if (type.equals("h2")) {
+        if (type.equalsIgnoreCase("h2")) {
             //Set system propery vinject.database=h2
             sqlTypeMapper = new H2Mapper();
             schemaFormatter = new H2SchemaFormatter();
             System.setProperty("vinject.database", "h2");
             hikariConfig.setDriverClassName("org.h2.Driver");
-            hikariConfig.setJdbcUrl("jdbc:h2:file:./" + h2File.getPath().replaceAll("\\\\", "/") + ";AUTO_RECONNECT=TRUE;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE");
+
+            // If h2 file name is "mem" use in-memory database
+            if (h2File.getName().equalsIgnoreCase("mem")) {
+                hikariConfig.setJdbcUrl("jdbc:h2:mem:" + database + ";DB_CLOSE_DELAY=-1;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE");
+            } else {
+                hikariConfig.setJdbcUrl("jdbc:h2:file:./" + h2File.getPath().replaceAll("\\\\", "/") + ";AUTO_RECONNECT=TRUE;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE");
+            }
+
         } else {
             sqlTypeMapper = new MySQLMapper();
             schemaFormatter = new MySQLSchemaFormatter();
@@ -61,6 +71,7 @@ public class Database implements DatabaseConnector {
         hikariConfig.addDataSourceProperty("prepStmtCacheSize", "250");
         hikariConfig.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
         this.database = database;
+        this.serializerRegistry = new SerializerRegistry();
     }
 
     public static boolean isH2() {
@@ -92,6 +103,26 @@ public class Database implements DatabaseConnector {
         TABLE_PREFIX = tablePrefix;
     }
 
+    /**
+     * Register a database serializer for a type.
+     * 
+     * @param type The type being serialized
+     * @param serializer The serializer instance
+     * @param <T> The type parameter
+     */
+    public <T> void registerSerializer(Class<T> type, DatabaseSerializer<T> serializer) {
+        serializerRegistry.registerSerializer(type, serializer);
+    }
+
+    /**
+     * Get the serializer registry.
+     * 
+     * @return The serializer registry
+     */
+    public SerializerRegistry getSerializerRegistry() {
+        return serializerRegistry;
+    }
+
     public void initializeEntityMetadata(DependencyContainer dependencyContainer) {
         Class<?>[] classes = dependencyContainer.getAllEntities();
         for (Class<?> clazz : classes) {
@@ -106,7 +137,7 @@ public class Database implements DatabaseConnector {
         // After all entities are mapped, resolve relationships
         for (EntityMetadata metadata : entityMetadataMap.values()) {
             try {
-                metadata.resolveFields(entityMetadataMap);
+                metadata.resolveFields(entityMetadataMap, serializerRegistry);
             } catch (Exception e) {
                 System.err.println("Could not resolve fields for entity: " + metadata.getTableName());
                 e.printStackTrace();
@@ -179,7 +210,7 @@ public class Database implements DatabaseConnector {
             createSQL.append("\n");
         }
 
-        createSQL.append(") ENGINE=InnoDB;");
+        createSQL.append(");");
 
         String sql = schemaFormatter.convertSqlSyntax(createSQL.toString());
 
@@ -287,6 +318,7 @@ public class Database implements DatabaseConnector {
             connection.connect(conn);
         } catch (Exception e) {
             e.printStackTrace();
+            throw new RuntimeException("Database connection error", e);
         }
     }
 
@@ -296,8 +328,8 @@ public class Database implements DatabaseConnector {
             return connection.connect(conn);
         } catch (Exception e) {
             e.printStackTrace();
+            throw new RuntimeException("Database connection error", e);
         }
-        return null;
     }
 
     public void shutdown() {

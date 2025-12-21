@@ -78,6 +78,8 @@ public class ConfigurationContainer {
     private final Map<String, Map<String, ItemMeta>> batchMeta = new ConcurrentHashMap<>();
     // file path -> list of itemIds contained
     private final Map<String, List<String>> fileToItemIds = new ConcurrentHashMap<>();
+    // Track which config classes write to which file, and which top-level keys they own
+    private final Map<String, Map<String, Class<?>>> fileToKeyToClass = new ConcurrentHashMap<>();
     private static final String SYNTHETIC_BATCH_FIELD = "__vinject_yaml_batch_id";
     private static final String SYNTHETIC_FILE_FIELD = "__vinject_yaml_file";
 
@@ -102,6 +104,14 @@ public class ConfigurationContainer {
                 }
                 // Use block style for non-empty sequences
                 return super.representSequence(tag, sequence, DumperOptions.FlowStyle.BLOCK);
+            }
+
+            @Override
+            public Node represent(Object data) {
+                if (data instanceof Enum<?>) {
+                    return representScalar(Tag.STR, ((Enum<?>) data).name());
+                }
+                return super.represent(data);
             }
         };
 
@@ -224,6 +234,13 @@ public class ConfigurationContainer {
                 container.addBean(cfgClass, instance);
                 // Store proxy as the delegate for saving/inspection (store original class too)
                 configs.put(cfgClass, new ConfigEntry(cfgClass, filePath, charset, annotation));
+                
+                // Track which keys belong to which class for sorting when multiple classes write to same file
+                Map<String, Object> serialized = objectToMap(instance, cfgClass, annotation.path());
+                Map<String, Class<?>> keyToClass = fileToKeyToClass.computeIfAbsent(filePath, k -> new ConcurrentHashMap<>());
+                for (String topLevelKey : serialized.keySet()) {
+                    keyToClass.put(topLevelKey, cfgClass);
+                }
             } catch (Exception e) {
                 throw new RuntimeException("Unable to load YAML configuration for class: " + cfgClass.getName(), e);
             }
@@ -330,8 +347,38 @@ public class ConfigurationContainer {
         if (targetType == boolean.class || targetType == Boolean.class) return Boolean.parseBoolean(value.toString());
         if (targetType == double.class || targetType == Double.class) return Double.parseDouble(value.toString());
         if (List.class.isAssignableFrom(targetType)) {
-            if (value instanceof List) return value;
-            return Collections.singletonList(value);
+            List<Object> resultList = new ArrayList<>();
+            Class<?> elementType = Object.class;
+            if (field != null) {
+                Type genericType = field.getGenericType();
+                if (genericType instanceof ParameterizedType pt) {
+                    Type[] typeArgs = pt.getActualTypeArguments();
+                    if (typeArgs.length > 0 && typeArgs[0] instanceof Class<?>) {
+                        elementType = (Class<?>) typeArgs[0];
+                    }
+                }
+            }
+
+            if (value instanceof List<?> list) {
+                for (Object item : list) {
+                    // For enum lists, convert string values to enum constants
+                    if (elementType.isEnum()) {
+                        String enumName = item.toString();
+                        try {
+                            Method valueOfMethod = elementType.getMethod("valueOf", String.class);
+                            Object enumValue = valueOfMethod.invoke(null, enumName);
+                            resultList.add(enumValue);
+                        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
+                            throw new RuntimeException("Invalid enum value '" + enumName + "' for enum type " + elementType.getName() + (field != null ? " (field: " + field.getName() + ")" : ""), e);
+                        }
+                    } else {
+                        resultList.add(convertValue(item, elementType, null));
+                    }
+                }
+            } else {
+                resultList.add(convertValue(value, elementType, null));
+            }
+            return resultList;
         }
         // Handle Map types - convert YAML map to target Map type with proper value conversion
         if (Map.class.isAssignableFrom(targetType) && value instanceof Map) {
@@ -511,7 +558,7 @@ public class ConfigurationContainer {
                     // Create a new mapping node and populate it with data and comments
                     MappingNode newMapping = new MappingNode(Tag.MAP, new ArrayList<>(), DumperOptions.FlowStyle.BLOCK);
                     updateMappingNodeWithMap(newMapping, dump, this.representer, instance, inspectedClass,
-                            annotation.path());
+                            annotation.path(), filePath);
 
                     try (java.io.BufferedWriter writer = Files.newBufferedWriter(nioPath, charset,
                             StandardOpenOption.CREATE,
@@ -532,12 +579,15 @@ public class ConfigurationContainer {
 
             // File has valid content - update the mapping
             try {
-                updateMappingNodeWithMap(mapping, dump, this.representer, instance, inspectedClass,
-                        annotation.path());
+                boolean hasChanges = updateMappingNodeWithMap(mapping, dump, this.representer, instance, inspectedClass,
+                        annotation.path(), filePath);
+                // Only save if changes were detected (new keys or comments added)
+                if (!hasChanges) {
+                    return; // No changes, don't save
+                }
             } catch (Throwable t) {
                 // On failure, log the error and fall back to full dump
-                System.err.println(
-                        "Warning: Failed to update YAML node tree, falling back to full dump. This may lose comments and unknown keys.");
+                System.err.println("Warning: Failed to update YAML node tree, falling back to full dump. This may lose comments and unknown keys.");
                 System.err.println("Error: " + t.getMessage());
                 t.printStackTrace();
                 try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(file), charset)) {
@@ -584,8 +634,9 @@ public class ConfigurationContainer {
     }
 
     @SuppressWarnings("unchecked")
-    private void updateMappingNodeWithMap(MappingNode mapping, Map<String, Object> map, Representer representer,
-                                          Object instance, Class<?> inspectedClass, String basePath) {
+    private boolean updateMappingNodeWithMap(MappingNode mapping, Map<String, Object> map, Representer representer,
+                                          Object instance, Class<?> inspectedClass, String basePath, String filePath) {
+        boolean hasChanges = false;
         List<NodeTuple> tuples = mapping.getValue();
 
         // Check if this class is a @YamlItem (compact data object) - skip blank lines
@@ -634,11 +685,13 @@ public class ConfigurationContainer {
         }
 
         // Process keys in field order (for both top-level and nested keys) to maintain
-        // order
+        // order. This ensures that even if keys are deleted and re-added, they maintain their
+        // proper position based on field order.
         List<String> orderedKeys = new ArrayList<>();
         Set<String> processedKeys = new HashSet<>();
 
         // First, add keys in field order based on the order they appear in the class
+        // This ensures deleted keys are re-added in their correct position
         if (inspectedClass != null) {
             for (Field field : inspectedClass.getDeclaredFields()) {
                 if (Modifier.isStatic(field.getModifiers()))
@@ -667,6 +720,7 @@ public class ConfigurationContainer {
                     }
                 }
 
+                // Add the key if it exists in the map (including deleted keys that are being re-added)
                 if (mapKey != null && map.containsKey(mapKey) && !processedKeys.contains(mapKey)) {
                     orderedKeys.add(mapKey);
                     processedKeys.add(mapKey);
@@ -675,11 +729,62 @@ public class ConfigurationContainer {
         }
 
         // Then add any remaining keys from map that weren't in field order
+        // Separate keys by whether they belong to the current class or other classes
+        // This ensures keys from the current class stay together and maintain relative order
+        List<String> remainingKeysFromCurrentClass = new ArrayList<>();
+        List<String> remainingKeysFromOtherClasses = new ArrayList<>();
         for (String key : map.keySet()) {
             if (!processedKeys.contains(key)) {
-                orderedKeys.add(key);
+                // Check if this key belongs to the current class being processed
+                boolean belongsToCurrentClass = false;
+                if (inspectedClass != null && filePath != null) {
+                    Map<String, Class<?>> keyToClass = fileToKeyToClass.get(filePath);
+                    if (keyToClass != null) {
+                        Class<?> keyClass = keyToClass.get(key);
+                        belongsToCurrentClass = inspectedClass.equals(keyClass);
+                    }
+                }
+                
+                if (belongsToCurrentClass) {
+                    // Keys from current class should maintain their relative order
+                    // (they'll be sorted alphabetically as fallback)
+                    remainingKeysFromCurrentClass.add(key);
+                } else {
+                    remainingKeysFromOtherClasses.add(key);
+                }
             }
         }
+        
+        // Sort keys from current class alphabetically (maintains some order)
+        remainingKeysFromCurrentClass.sort(String::compareTo);
+        orderedKeys.addAll(remainingKeysFromCurrentClass);
+        
+        // Sort keys from other classes by class name if we're at top level and multiple classes write to this file
+        if ((basePath == null || basePath.isEmpty()) && filePath != null) {
+            Map<String, Class<?>> keyToClass = fileToKeyToClass.get(filePath);
+            if (keyToClass != null && !keyToClass.isEmpty()) {
+                remainingKeysFromOtherClasses.sort((k1, k2) -> {
+                    Class<?> c1 = keyToClass.get(k1);
+                    Class<?> c2 = keyToClass.get(k2);
+                    if (c1 == null && c2 == null) return k1.compareTo(k2);
+                    if (c1 == null) return 1;
+                    if (c2 == null) return -1;
+                    // Sort by class simple name
+                    int classCompare = c1.getSimpleName().compareTo(c2.getSimpleName());
+                    if (classCompare != 0) return classCompare;
+                    // If same class, sort by key name
+                    return k1.compareTo(k2);
+                });
+            } else {
+                // No class mapping, sort alphabetically
+                remainingKeysFromOtherClasses.sort(String::compareTo);
+            }
+        } else {
+            // Not top level or no file path, sort alphabetically
+            remainingKeysFromOtherClasses.sort(String::compareTo);
+        }
+        
+        orderedKeys.addAll(remainingKeysFromOtherClasses);
 
         // Rebuild tuples list in the correct order
         List<NodeTuple> newTuples = new ArrayList<>();
@@ -710,50 +815,72 @@ public class ConfigurationContainer {
                     foundNestedField = true;
                 } else {
                     // Fallback: search through all fields to find a match
-                    // This handles cases where the key might have different formatting
+                    // This handles cases where the key might have different formatting or deeper nesting
+                    // (e.g., field key "Modules.Blocks.Enabled" when processing "Blocks" with basePath="Modules")
+                    // Prioritize exact matches over prefix matches
+                    Field exactMatch = null;
+                    Field prefixMatch = null;
                     if (inspectedClass != null) {
                         for (Field f : inspectedClass.getDeclaredFields()) {
                             if (Modifier.isStatic(f.getModifiers()))
                                 continue;
                             String fieldKey = f.isAnnotationPresent(Key.class) ? f.getAnnotation(Key.class).value()
                                     : f.getName();
+                            // Check for exact match first (leaf key)
                             if (fieldKey.equals(searchKey)) {
-                                field = f;
-                                fullKey = fieldKey;
-                                foundNestedField = true;
-                                break;
+                                exactMatch = f;
+                                break; // Exact match takes priority
+                            } else if (fieldKey.startsWith(searchKey + ".")) {
+                                // Prefix match (parent key) - only use if no exact match found
+                                if (prefixMatch == null) {
+                                    prefixMatch = f;
+                                }
                             }
                         }
+                    }
+                    // Use exact match if found, otherwise use prefix match
+                    Field selectedField = exactMatch != null ? exactMatch : prefixMatch;
+                    if (selectedField != null) {
+                        field = selectedField;
+                        String fieldKey = selectedField.isAnnotationPresent(Key.class) ? selectedField.getAnnotation(Key.class).value()
+                                : selectedField.getName();
+                        fullKey = fieldKey;
+                        foundNestedField = true;
                     }
                 }
             }
 
             // Check if this is a nested parent key (e.g., "App" when field has key
-            // "App.Welcome Message")
+            // "App.Welcome Message", or "Blocks" when field has key "Modules.Blocks.Enabled")
             // For nested keys like "App.Welcome Message", when processing "App" at top
             // level,
             // we should NOT add comments to "App" - they should be added to "Welcome
             // Message" in the recursive call
             // isNestedParent is true if:
-            // 1. We're at the top level (basePath is null/empty)
-            // 2. The field's key contains "." and doesn't match the current key
-            // If we're in a nested context and found a field, it's the final key, not a
-            // parent
+            // 1. The field's key has more nesting levels beyond the current key
+            // 2. At top level: field key contains "." and doesn't match the current key
+            // 3. In nested context: field key starts with searchKey + "." (has more levels)
             boolean isNestedParent = false;
-            if (basePath != null && !basePath.isEmpty()) {
-                // We're in a nested context - any field we find here is for the current key
-                // level, not a parent
-                // So isNestedParent should be false
-                isNestedParent = false;
-            } else {
-                // We're at the top level - check if this is a nested parent
-                if (field != null) {
-                    String fieldKey = field.isAnnotationPresent(Key.class) ? field.getAnnotation(Key.class).value()
-                            : field.getName();
+            if (field != null) {
+                String fieldKey = field.isAnnotationPresent(Key.class) ? field.getAnnotation(Key.class).value()
+                        : field.getName();
+                if (basePath != null && !basePath.isEmpty()) {
+                    // We're in a nested context - check if field key has more nesting levels
+                    String searchKey = basePath + "." + key;
+                    // If field key starts with searchKey + ".", it means there are more levels
+                    // (e.g., fieldKey="Modules.Blocks.Enabled", searchKey="Modules.Blocks")
+                    isNestedParent = fieldKey.startsWith(searchKey + ".");
+                } else {
+                    // We're at the top level - check if this is a nested parent
                     // It's a nested parent if the field key contains "." and doesn't match the
                     // current key
                     isNestedParent = fieldKey.contains(".") && !fieldKey.equals(key);
-                } else if (fullKey != null) {
+                }
+            } else if (fullKey != null) {
+                if (basePath != null && !basePath.isEmpty()) {
+                    String searchKey = basePath + "." + key;
+                    isNestedParent = fullKey.startsWith(searchKey + ".");
+                } else {
                     isNestedParent = fullKey.contains(".") && !fullKey.equals(key);
                 }
             }
@@ -773,7 +900,7 @@ public class ConfigurationContainer {
                         inlineComment = (String) inlineCommentObj;
                     }
                 } catch (Exception ignored) {
-                    // Method doesn't exist or failed, ignore
+                    // MethodValue doesn't exist or failed, ignore
                 }
 
                 // Add blank line and @Comment annotation on key node
@@ -845,10 +972,16 @@ public class ConfigurationContainer {
                     Class<?> recursiveClass = inspectedClass;
 
                     if (fullKey != null && fullKey.contains(".")) {
-                        // This is a nested key like "App.Welcome Message"
-                        // When recursively processing, the basePath should be "App" so we can find
-                        // "App.Welcome Message"
-                        nestedBasePath = fullKey.substring(0, fullKey.indexOf('.'));
+                        // This is a nested key like "Modules.Blocks.Enabled" or "App.Welcome Message"
+                        // When recursively processing, we need to build the basePath correctly
+                        if (basePath != null && !basePath.isEmpty()) {
+                            // We're already in a nested context, append the current key
+                            // e.g., basePath="Modules", key="Blocks" -> nestedBasePath="Modules.Blocks"
+                            nestedBasePath = basePath + "." + key;
+                        } else {
+                            // Top level: extract the first part (e.g., "Modules" from "Modules.Blocks.Enabled")
+                            nestedBasePath = fullKey.substring(0, fullKey.indexOf('.'));
+                        }
                         // Keep using parent instance/class to find fields with nested key paths
                     } else if (basePath != null && !basePath.isEmpty()) {
                         // We're already in a nested context, continue with the basePath
@@ -862,8 +995,11 @@ public class ConfigurationContainer {
                     }
 
                     // Recursive call with appropriate instance and class
-                    updateMappingNodeWithMap((MappingNode) vNode, sub, representer,
-                            recursiveInstance, recursiveClass, nestedBasePath);
+                    boolean nestedHasChanges = updateMappingNodeWithMap((MappingNode) vNode, sub, representer,
+                            recursiveInstance, recursiveClass, nestedBasePath, filePath);
+                    if (nestedHasChanges) {
+                        hasChanges = true;
+                    }
                     // Add to new tuples list in order (the nested mapping has been updated in
                     // place)
                     newTuples.add(new NodeTuple(kNode, vNode));
@@ -876,7 +1012,7 @@ public class ConfigurationContainer {
                             Method setInlineMethod = newVal.getClass().getMethod("setInLineComment", String.class);
                             setInlineMethod.invoke(newVal, inlineComment);
                         } catch (Exception ignored) {
-                            // Method doesn't exist or failed, ignore
+                            // MethodValue doesn't exist or failed, ignore
                         }
                     }
                     // Add to new tuples list in order
@@ -884,7 +1020,8 @@ public class ConfigurationContainer {
                     processedKeysInOrder.add(key);
                 }
             } else {
-                // Key doesn't exist - add it
+                // Key doesn't exist - add it (this is a new key, so we have changes)
+                hasChanges = true;
                 Node kNode = representer.represent(key);
                 // For nested maps, create an empty MappingNode first so we can properly add comments
                 // Otherwise, use the representer to create the node
@@ -963,8 +1100,16 @@ public class ConfigurationContainer {
                     Class<?> recursiveClass = inspectedClass;
 
                     if (fullKey != null && fullKey.contains(".")) {
-                        // This is a nested key like "App.Welcome Message"
-                        nestedBasePath = fullKey.substring(0, fullKey.indexOf('.'));
+                        // This is a nested key like "Modules.Blocks.Enabled" or "App.Welcome Message"
+                        // When recursively processing, we need to build the basePath correctly
+                        if (basePath != null && !basePath.isEmpty()) {
+                            // We're already in a nested context, append the current key
+                            // e.g., basePath="Modules", key="Blocks" -> nestedBasePath="Modules.Blocks"
+                            nestedBasePath = basePath + "." + key;
+                        } else {
+                            // Top level: extract the first part (e.g., "Modules" from "Modules.Blocks.Enabled")
+                            nestedBasePath = fullKey.substring(0, fullKey.indexOf('.'));
+                        }
                     } else if (basePath != null && !basePath.isEmpty()) {
                         nestedBasePath = basePath;
                     } else if (nestedClass != null && !isNestedParent) {
@@ -979,7 +1124,10 @@ public class ConfigurationContainer {
                     }
 
                     // Recursively update the new mapping node with comments
-                    updateMappingNodeWithMap((MappingNode) vNode, sub, representer, recursiveInstance, recursiveClass, nestedBasePath);
+                    boolean nestedHasChanges = updateMappingNodeWithMap((MappingNode) vNode, sub, representer, recursiveInstance, recursiveClass, nestedBasePath, filePath);
+                    if (nestedHasChanges) {
+                        hasChanges = true;
+                    }
                 }
 
                 // Add to new tuples list in order
@@ -1005,6 +1153,8 @@ public class ConfigurationContainer {
         // Replace the old tuples list with the new ordered one
         tuples.clear();
         tuples.addAll(newTuples);
+        
+        return hasChanges;
     }
 
     public void registerSerializer(YamlSerializerBase<?> serializer) {
@@ -1238,8 +1388,7 @@ public class ConfigurationContainer {
                     container.addBean(annotated, holder);
                 }
             } catch (Exception e) {
-                System.err.println(
-                        "Unable to instantiate YamlDirectory holder: " + annotated.getName() + " - " + e.getMessage());
+                System.err.println("Unable to instantiate YamlDirectory holder: " + annotated.getName() + " - " + e.getMessage());
                 e.printStackTrace();
             }
         }
@@ -1668,6 +1817,30 @@ public class ConfigurationContainer {
             } else if (isPrimitiveOrString(val)) {
                 putNested(root, path, val);
             } else if (val instanceof List) {
+                // Check if this is a list of enums - if so, serialize as string list
+                List<?> list = (List<?>) val;
+                if (field != null) {
+                    Type genericType = field.getGenericType();
+                    if (genericType instanceof ParameterizedType pt) {
+                        Type[] typeArgs = pt.getActualTypeArguments();
+                        if (typeArgs.length > 0 && typeArgs[0] instanceof Class<?>) {
+                            Class<?> elementType = (Class<?>) typeArgs[0];
+                            if (elementType.isEnum()) {
+                                // Convert enum list to string list
+                                List<String> stringList = new ArrayList<>();
+                                for (Object item : list) {
+                                    if (item instanceof Enum<?>) {
+                                        stringList.add(((Enum<?>) item).name());
+                                    } else {
+                                        stringList.add(item.toString());
+                                    }
+                                }
+                                putNested(root, path, stringList);
+                                continue;
+                            }
+                        }
+                    }
+                }
                 putNested(root, path, val);
             } else {
                 // nested object

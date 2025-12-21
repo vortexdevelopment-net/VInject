@@ -54,6 +54,14 @@ public class MySQLMapper implements SQLTypeMapper {
             case "UUID" -> "UUID";
             case "BigDecimal" -> "DECIMAL(" + (column.precision() != -1 ? column.precision() : 10) + ","
                     + (column.scale() != -1 ? column.scale() : 2) + ")";
+            case "BigInteger" -> {
+                // MariaDB/MySQL doesn't support AUTO_INCREMENT on DECIMAL, use BIGINT instead
+                if (column.autoIncrement()) {
+                    yield "BIGINT(20)";
+                } else {
+                    yield "DECIMAL(" + (column.precision() != -1 ? column.precision() : 38) + ",0)";
+                }
+            }
             default -> throw new UnsupportedOperationException("Unsupported field type: " + fieldType.getName());
         } + nullableConstraint;
     }

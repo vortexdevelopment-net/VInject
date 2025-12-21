@@ -2,10 +2,13 @@ package net.vortexdevelopment.transformer;
 
 import org.apache.bcel.Const;
 import org.apache.bcel.Constants;
+import org.apache.bcel.classfile.AnnotationEntry;
 import org.apache.bcel.classfile.ClassParser;
+import org.apache.bcel.classfile.ElementValuePair;
 import org.apache.bcel.classfile.Field;
 import org.apache.bcel.classfile.JavaClass;
 import org.apache.bcel.classfile.Method;
+import org.apache.bcel.classfile.SimpleElementValue;
 import org.apache.bcel.generic.ALOAD;
 import org.apache.bcel.generic.ClassGen;
 import org.apache.bcel.generic.ConstantPoolGen;
@@ -29,6 +32,8 @@ import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
+import org.eclipse.sisu.space.asm.ClassReader;
+import org.eclipse.sisu.space.asm.ClassWriter;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -228,24 +233,33 @@ public class EntityTransformer extends AbstractMojo {
         );
         classGen.addField(modifiedFieldsField.getField());
 
-        // Modify all constructors to include initialization
+        // Modify all methods
         for (Method method : classGen.getMethods()) {
             if (method.getName().equals("<init>")) {
                 modifyConstructor(classGen, method, constantPool, modifiedFieldName);
+                continue;
+            }
+
+            // Skip methods with @PostConstruct
+            if (Arrays.stream(method.getAnnotationEntries()).anyMatch(a -> a.getAnnotationType().equals("Lnet/vortexdevelopment/vinject/annotation/PostConstruct;"))) {
+                continue;
+            }
+
+            // Check for @Cached annotation
+            String cachedFieldName = extractCachedAnnotationValue(method);
+            if (cachedFieldName != null) {
+                enhanceCachedMethod(classGen, method, constantPool, modifiedFieldName, cachedFieldName);
+                continue;
+            }
+
+            // If it's a setter, enhance it
+            if (method.getName().startsWith("set") && method.getArgumentTypes().length == 1) {
+                enhanceSetter(classGen, method, constantPool, modifiedFieldName);
             }
         }
 
-
-        // Remove all existing methods except constructors or those that has @Persist annotaton
-        Method[] methods = classGen.getMethods();
-        for (Method method : methods) {
-            if (!method.getName().equals("<init>") && Arrays.stream(method.getAnnotationEntries()).noneMatch(annotation -> annotation.getAnnotationType().equals("Lnet/vortexdevelopment/vinject/annotation/Keep;"))) {
-                classGen.removeMethod(method);
-            }
-        }
-
-        // Modify existing fields (adding getter, setter, and modification tracking)
-        addGettersSetters(classGen, constantPool);
+        // Add missing getters/setters if they don't exist
+        addMissingGettersSetters(classGen, constantPool, modifiedFieldName);
 
         // Add reset method to clear modifiedFields
         addResetMethod(classGen, constantPool);
@@ -254,84 +268,217 @@ public class EntityTransformer extends AbstractMojo {
         addIsFieldModifiedMethod(classGen, constantPool);
 
         // Write the modified class to byte array
-        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
-            classGen.getJavaClass().dump(outputStream);
-            return outputStream.toByteArray();
+        byte[] bcelBytes;
+        try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            classGen.getJavaClass().dump(out);
+            bcelBytes = out.toByteArray();
         }
+
+        ClassReader cr = new ClassReader(bcelBytes);
+
+        ClassWriter cw = new ClassWriter(
+                ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS
+        );
+
+        cr.accept(cw, ClassReader.EXPAND_FRAMES);
+
+        byte[] finalBytes = cw.toByteArray();
+        return finalBytes;
+    }
+
+    private void enhanceSetter(ClassGen classGen, Method method, ConstantPoolGen constantPool, String modifiedFieldName) {
+        MethodGen mg = new MethodGen(method, classGen.getClassName(), constantPool);
+        InstructionList il = mg.getInstructionList();
+        if (il == null) return;
+
+        InstructionHandle start = il.getStart();
+        if (start == null) return;
+
+        // Try to find the field name from the setter name (e.g., setAmount -> amount)
+        String methodName = method.getName();
+        String fieldName = Character.toLowerCase(methodName.charAt(3)) + methodName.substring(4);
+
+        // However, it's safer to look at the PUTFIELD instruction if it exists
+        for (InstructionHandle handle : il.getInstructionHandles()) {
+            if (handle.getInstruction() instanceof PUTFIELD) {
+                PUTFIELD putField = (PUTFIELD) handle.getInstruction();
+                fieldName = putField.getFieldName(constantPool);
+                break;
+            }
+        }
+
+        InstructionList inject = new InstructionList();
+        inject.append(new ALOAD(0)); // this
+        inject.append(new GETFIELD(constantPool.addFieldref(
+                classGen.getClassName(),
+                modifiedFieldName,
+                "Ljava/util/Set;"))
+        );
+        inject.append(new PUSH(constantPool, fieldName)); // "fieldName"
+        inject.append(new INVOKEINTERFACE(constantPool.addInterfaceMethodref(
+                "java/util/Set", "add", "(Ljava/lang/Object;)Z"), (short) 2));
+        inject.append(new POP());
+
+        il.insert(start, inject);
+
+        mg.setMaxStack();
+        mg.setMaxLocals();
+        mg.removeLineNumbers();
+        mg.removeLocalVariables();
+        classGen.replaceMethod(method, mg.getMethod());
+        il.dispose();
     }
 
     /**
-     * Adds getter and setter methods for each field, excluding modifiedFields.
+     * Extracts the field name from a @Cached annotation on a method.
+     * 
+     * @param method The method to check for @Cached annotation
+     * @return The field name from the annotation value, or null if not found
      */
-    private void addGettersSetters(ClassGen classGen, ConstantPoolGen constantPool) {
+    private String extractCachedAnnotationValue(Method method) {
+        AnnotationEntry[] annotations = method.getAnnotationEntries();
+        for (AnnotationEntry annotation : annotations) {
+            String annotationType = annotation.getAnnotationType();
+            if (annotationType.equals("Lnet/vortexdevelopment/vinject/annotation/database/Cached;")) {
+                ElementValuePair[] pairs = annotation.getElementValuePairs();
+                for (ElementValuePair pair : pairs) {
+                    if (pair.getNameString().equals("value")) {
+                        if (pair.getValue() instanceof SimpleElementValue) {
+                            SimpleElementValue simpleValue = (SimpleElementValue) pair.getValue();
+                            return simpleValue.getValueString();
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Enhances a method annotated with @Cached to track field modifications.
+     * 
+     * @param classGen The class generator
+     * @param method The method to enhance
+     * @param constantPool The constant pool
+     * @param modifiedFieldName The name of the modifiedFields field
+     * @param fieldName The field name to track (from @Cached annotation)
+     */
+    private void enhanceCachedMethod(ClassGen classGen, Method method, ConstantPoolGen constantPool, String modifiedFieldName, String fieldName) {
+        MethodGen mg = new MethodGen(method, classGen.getClassName(), constantPool);
+        InstructionList il = mg.getInstructionList();
+        if (il == null) return;
+
+        InstructionHandle start = il.getStart();
+        if (start == null) return;
+
+        InstructionList inject = new InstructionList();
+        inject.append(new ALOAD(0)); // this
+        inject.append(new GETFIELD(constantPool.addFieldref(
+                classGen.getClassName(),
+                modifiedFieldName,
+                "Ljava/util/Set;"))
+        );
+        inject.append(new PUSH(constantPool, fieldName)); // "fieldName"
+        inject.append(new INVOKEINTERFACE(constantPool.addInterfaceMethodref(
+                "java/util/Set", "add", "(Ljava/lang/Object;)Z"), (short) 2));
+        inject.append(new POP());
+
+        il.insert(start, inject);
+
+        mg.setMaxStack();
+        mg.setMaxLocals();
+        mg.removeLineNumbers();
+        mg.removeLocalVariables();
+        classGen.replaceMethod(method, mg.getMethod());
+        il.dispose();
+    }
+
+    /**
+     * Adds getter and setter methods for each field if they don't already exist.
+     */
+    private void addMissingGettersSetters(ClassGen classGen, ConstantPoolGen constantPool, String modifiedFieldName) {
         Field[] fields = classGen.getFields();
         for (Field field : fields) {
             String fieldName = field.getName();
-            if (fieldName.equals("modifiedFields")) {
+            if (fieldName.equals(modifiedFieldName)) {
                 continue;
             }
             Type fieldType = field.getType();
 
-            // Add getter
-            MethodGen getter = new MethodGen(
-                    Constants.ACC_PUBLIC,
-                    fieldType,
-                    Type.NO_ARGS,
-                    null,
-                    "get" + capitalize(fieldName),
-                    classGen.getClassName(),
-                    new InstructionList(),
-                    constantPool
-            );
-            getter.getInstructionList().append(new ALOAD(0));
-            getter.getInstructionList().append(new GETFIELD(constantPool.addFieldref(
-                    classGen.getClassName(),
-                    fieldName,
-                    fieldType.getSignature()
-            )));
-            getter.getInstructionList().append(InstructionFactory.createReturn(fieldType));
-            getter.setMaxStack();
-            getter.setMaxLocals();
-            classGen.addMethod(getter.getMethod());
-            getter.getInstructionList().dispose();
+            String getterName = "get" + capitalize(fieldName);
+            String setterName = "set" + capitalize(fieldName);
 
-            // Add setter
-            MethodGen setter = new MethodGen(
-                    Const.ACC_PUBLIC,
-                    Type.VOID,
-                    new Type[]{fieldType},
-                    new String[]{fieldName},
-                    "set" + capitalize(fieldName),
-                    classGen.getClassName(),
-                    new InstructionList(),
-                    constantPool
-            );
-            setter.getInstructionList().append(new ALOAD(0));   // this
-            setter.getInstructionList().append(new ALOAD(1));   // value
-            setter.getInstructionList().append(new PUTFIELD(constantPool.addFieldref(
-                    classGen.getClassName(),
-                    fieldName,
-                    fieldType.getSignature()
-            )));
+            boolean hasGetter = Arrays.stream(classGen.getMethods()).anyMatch(m -> m.getName().equals(getterName));
+            boolean hasSetter = Arrays.stream(classGen.getMethods()).anyMatch(m -> m.getName().equals(setterName));
 
-            // Add modifiedFields.add("fieldName");
-            setter.getInstructionList().append(new ALOAD(0)); // this
-            setter.getInstructionList().append(new GETFIELD(constantPool.addFieldref(
-                    classGen.getClassName(),
-                    "modifiedFields",
-                    "Ljava/util/Set;"))
-            );
-            setter.getInstructionList().append(new PUSH(constantPool, fieldName)); // "fieldName"
-            setter.getInstructionList().append(new INVOKEINTERFACE(constantPool.addInterfaceMethodref(
-                    "java/util/Set", "add", "(Ljava/lang/Object;)Z"), (short) 2));
-            // Discard the boolean result of Set.add(...)
-            setter.getInstructionList().append(new POP());
+            // Add getter if missing
+            if (!hasGetter) {
+                MethodGen getter = new MethodGen(
+                        Constants.ACC_PUBLIC,
+                        fieldType,
+                        Type.NO_ARGS,
+                        null,
+                        getterName,
+                        classGen.getClassName(),
+                        new InstructionList(),
+                        constantPool
+                );
+                getter.getInstructionList().append(new ALOAD(0));
+                getter.getInstructionList().append(new GETFIELD(constantPool.addFieldref(
+                        classGen.getClassName(),
+                        fieldName,
+                        fieldType.getSignature()
+                )));
+                getter.getInstructionList().append(InstructionFactory.createReturn(fieldType));
+                getter.setMaxStack();
+                getter.setMaxLocals();
+                getter.removeLineNumbers();
+                getter.removeLocalVariables();
+                classGen.addMethod(getter.getMethod());
+                getter.getInstructionList().dispose();
+            }
 
-            setter.getInstructionList().append(InstructionFactory.createReturn(Type.VOID));
-            setter.setMaxStack();
-            setter.setMaxLocals();
-            classGen.addMethod(setter.getMethod());
-            setter.getInstructionList().dispose();
+            // Add setter if missing
+            if (!hasSetter) {
+                MethodGen setter = new MethodGen(
+                        Const.ACC_PUBLIC,
+                        Type.VOID,
+                        new Type[]{fieldType},
+                        new String[]{fieldName},
+                        setterName,
+                        classGen.getClassName(),
+                        new InstructionList(),
+                        constantPool
+                );
+                setter.getInstructionList().append(new ALOAD(0));   // this
+                setter.getInstructionList().append(new ALOAD(1));   // value
+                setter.getInstructionList().append(new PUTFIELD(constantPool.addFieldref(
+                        classGen.getClassName(),
+                        fieldName,
+                        fieldType.getSignature()
+                )));
+
+                // Add modifiedFields.add("fieldName");
+                setter.getInstructionList().append(new ALOAD(0)); // this
+                setter.getInstructionList().append(new GETFIELD(constantPool.addFieldref(
+                        classGen.getClassName(),
+                        modifiedFieldName,
+                        "Ljava/util/Set;"))
+                );
+                setter.getInstructionList().append(new PUSH(constantPool, fieldName)); // "fieldName"
+                setter.getInstructionList().append(new INVOKEINTERFACE(constantPool.addInterfaceMethodref(
+                        "java/util/Set", "add", "(Ljava/lang/Object;)Z"), (short) 2));
+                // Discard the boolean result of Set.add(...)
+                setter.getInstructionList().append(new POP());
+
+                setter.getInstructionList().append(InstructionFactory.createReturn(Type.VOID));
+                setter.setMaxStack();
+                setter.setMaxLocals();
+                setter.removeLineNumbers();
+                setter.removeLocalVariables();
+                classGen.addMethod(setter.getMethod());
+                setter.getInstructionList().dispose();
+            }
         }
     }
 
@@ -360,6 +507,8 @@ public class EntityTransformer extends AbstractMojo {
         resetMethod.getInstructionList().append(InstructionFactory.createReturn(Type.VOID));
         resetMethod.setMaxStack();
         resetMethod.setMaxLocals();
+        resetMethod.removeLineNumbers();
+        resetMethod.removeLocalVariables();
         classGen.addMethod(resetMethod.getMethod());
         resetMethod.getInstructionList().dispose();
     }
@@ -397,6 +546,8 @@ public class EntityTransformer extends AbstractMojo {
         // Finalize and add the method
         isFieldModifiedMethod.setMaxStack();
         isFieldModifiedMethod.setMaxLocals();
+        isFieldModifiedMethod.removeLineNumbers();
+        isFieldModifiedMethod.removeLocalVariables();
         classGen.addMethod(isFieldModifiedMethod.getMethod());
         isFieldModifiedMethod.getInstructionList().dispose();
     }
@@ -448,12 +599,15 @@ public class EntityTransformer extends AbstractMojo {
         ));
 
         // Insert initialization instructions after the "super()" call
-        instructionList.insert(superCall, initInstructions);
+        instructionList.append(superCall, initInstructions);
+        getLog().info("Appended initInstructions after superCall in constructor");
 
         // Update the method
         methodGen.setInstructionList(instructionList);
         methodGen.setMaxStack();
         methodGen.setMaxLocals();
+        methodGen.removeLineNumbers();
+        methodGen.removeLocalVariables();
         classGen.replaceMethod(method, methodGen.getMethod());
     }
 

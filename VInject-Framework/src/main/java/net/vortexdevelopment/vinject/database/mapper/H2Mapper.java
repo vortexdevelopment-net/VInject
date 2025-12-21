@@ -49,14 +49,23 @@ public class H2Mapper implements SQLTypeMapper {
             case "Integer", "int" -> "INTEGER";
             case "Long", "long" -> "BIGINT";
             case "Double", "double" -> "DOUBLE PRECISION";
-            case "Float", "float" -> "FLOAT(" + (column.precision() != -1 ? column.precision() : 10) + ","
-                    + (column.scale() != -1 ? column.scale() : 2) + ")";
+            case "Float", "float" -> {
+                // H2 doesn't support FLOAT(precision, scale), use DECIMAL instead when precision/scale are specified
+                // or REAL/FLOAT when they're not
+                if (column.precision() != -1 || column.scale() != -1) {
+                    yield "DECIMAL(" + (column.precision() != -1 ? column.precision() : 10) + ","
+                            + (column.scale() != -1 ? column.scale() : 2) + ")";
+                } else {
+                    yield "REAL";
+                }
+            }
             case "Boolean", "boolean" -> "TINYINT(1)";
             case "Date" -> "DATETIME";
             case "Byte[]", "byte[]" -> "BLOB";
             case "UUID" -> "UUID";
             case "BigDecimal" -> "DECIMAL(" + (column.precision() != -1 ? column.precision() : 10) + ","
                     + (column.scale() != -1 ? column.scale() : 2) + ")";
+            case "BigInteger" -> "NUMERIC(" + (column.precision() != -1 ? column.precision() : 38) + ",0)";
             default -> throw new UnsupportedOperationException("Unsupported field type: " + fieldType.getName());
         } + nullableConstraint;
     }

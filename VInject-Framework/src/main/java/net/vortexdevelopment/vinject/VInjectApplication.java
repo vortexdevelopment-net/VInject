@@ -180,6 +180,10 @@ public class VInjectApplication {
                 database = databaseFromProps;
             }
 
+            if (database != null) {
+                database.init();
+            }
+
             // Validate: If entities exist, Database must be configured BEFORE container creation
             if (hasEntities && database == null) {
                 throw new RuntimeException(

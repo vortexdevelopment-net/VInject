@@ -8,12 +8,14 @@ import net.vortexdevelopment.vinject.annotation.DependsOn;
 import net.vortexdevelopment.vinject.annotation.Inject;
 import net.vortexdevelopment.vinject.annotation.OnDestroy;
 import net.vortexdevelopment.vinject.annotation.OnEvent;
+import net.vortexdevelopment.vinject.annotation.OnLoad;
 import net.vortexdevelopment.vinject.annotation.PostConstruct;
 import net.vortexdevelopment.vinject.annotation.Registry;
 import net.vortexdevelopment.vinject.annotation.Repository;
 import net.vortexdevelopment.vinject.annotation.Root;
 import net.vortexdevelopment.vinject.annotation.Service;
 import net.vortexdevelopment.vinject.annotation.Value;
+import net.vortexdevelopment.vinject.annotation.database.RegisterDatabaseSerializer;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConditional;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlSerializer;
@@ -24,6 +26,7 @@ import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.database.repository.CrudRepository;
 import net.vortexdevelopment.vinject.database.repository.RepositoryContainer;
 import net.vortexdevelopment.vinject.database.repository.RepositoryInvocationHandler;
+import net.vortexdevelopment.vinject.database.serializer.DatabaseSerializer;
 import net.vortexdevelopment.vinject.di.utils.ConditionalOperator;
 import net.vortexdevelopment.vinject.di.registry.AnnotationHandler;
 import net.vortexdevelopment.vinject.di.registry.AnnotationHandlerRegistry;
@@ -82,6 +85,7 @@ public class DependencyContainer implements DependencyRepository {
     @Getter
     private static DependencyContainer instance;
 
+    @SuppressWarnings({"unchecked", "rawtypes"})
     public DependencyContainer(Root rootAnnotation, Class<?> rootClass, @Nullable Object rootInstance, Database database, RepositoryContainer repositoryContainer, @Nullable Consumer<Void> onPreComponentLoad) {
         instance = this;
         this.onPreComponentLoad = onPreComponentLoad;
@@ -190,6 +194,29 @@ public class DependencyContainer implements DependencyRepository {
             });
         });
 
+        // Auto-register RegisterDatabaseSerializer implementations FIRST
+        // This must happen before repository registration because RepositoryInvocationHandler
+        // creates EntityMetadata in its constructor, which needs serializers to be registered
+        if (database != null) {
+            reflections.getTypesAnnotatedWith(RegisterDatabaseSerializer.class).forEach(serializerClass -> {
+                if (!canLoadClass(serializerClass)) return;
+                try {
+                    RegisterDatabaseSerializer annotation = serializerClass.getAnnotation(RegisterDatabaseSerializer.class);
+                    if (annotation == null) {
+                        return;
+                    }
+                    Class<?> targetType = annotation.value();
+                    Object instance = newInstance(serializerClass);
+                    if (instance instanceof DatabaseSerializer serializer) {
+                        database.registerSerializer(targetType, serializer);
+                    }
+                } catch (Exception e) {
+                    throw new RuntimeException("Unable to register RegisterDatabaseSerializer: " + serializerClass.getName(), e);
+                }
+            });
+        }
+        
+        // Register Repositories (after serializers are registered)
         reflections.getTypesAnnotatedWith(Repository.class).forEach(repositoryClass -> {
             if (!canLoadClass(repositoryClass)) {
                 return;
@@ -212,6 +239,7 @@ public class DependencyContainer implements DependencyRepository {
             RepositoryInvocationHandler<?, ?> proxy = repositoryContainer.registerRepository(repositoryClass, entityClass, this);
             this.dependencies.put(repositoryClass, proxy.create());
         });
+        
         //Run database initialization (Create, Update tables)
         if (database != null) {
             database.initializeEntityMetadata(this);
@@ -856,7 +884,6 @@ public class DependencyContainer implements DependencyRepository {
                 injectStatic(clazz);
                 T instance = (T) clazz.getDeclaredConstructors()[0].newInstance(parameters);
                 inject(instance);
-                invokePostConstruct(instance);
 
                 if (clazz.isAnnotationPresent(Component.class)) {
                     Component componentAnnotation = clazz.getAnnotation(Component.class);
@@ -867,6 +894,9 @@ public class DependencyContainer implements DependencyRepository {
 
                 //Register the instance in the dependency container
                 dependencies.put(clazz, instance);
+
+                // Invoke post construct after the instance is registered
+                invokePostConstruct(instance);
                 return instance;
             }
             Constructor<T> constructor = clazz.getDeclaredConstructor();
@@ -874,7 +904,7 @@ public class DependencyContainer implements DependencyRepository {
             injectStatic(clazz);
             T instance = constructor.newInstance();
             inject(instance);
-            invokePostConstruct(instance);
+
             //Register the instance in the dependency container
             dependencies.put(clazz, instance);
             if (clazz.isAnnotationPresent(Component.class)) {
@@ -883,6 +913,9 @@ public class DependencyContainer implements DependencyRepository {
                     dependencies.put(subclass, instance);
                 }
             }
+
+            // Invoke post construct after the instance is registered
+            invokePostConstruct(instance);
             return instance;
         } catch (Exception e) {
             throw new RuntimeException("Unable to create new instance of class: " + clazz.getName(), e);
@@ -966,8 +999,81 @@ public class DependencyContainer implements DependencyRepository {
                     // Invoke the method with resolved parameters
                     method.invoke(instance, parameters);
                 } catch (Exception e) {
-                    throw new RuntimeException("Error invoking @PostConstruct method " + method.getName() +
-                            " on " + clazz.getName(), e);
+                    throw new RuntimeException("Error invoking @PostConstruct method " + method.getName() + " on " + clazz.getName(), e);
+                }
+            }
+        }
+    }
+
+    /**
+     * Invoke all methods annotated with @OnLoad on the given entity instance.
+     * OnLoad methods are called after all fields have been loaded from the database.
+     * Supports dependency injection for method parameters via @Inject or @Value annotations.
+     *
+     * @param instance The entity instance to invoke OnLoad methods on
+     */
+    public void invokeOnLoad(Object instance) {
+        if (instance == null) {
+            return;
+        }
+
+        Class<?> clazz = instance.getClass();
+        for (Method method : clazz.getDeclaredMethods()) {
+            if (method.isAnnotationPresent(OnLoad.class)) {
+                // Validate return type: should return void
+                if (!method.getReturnType().equals(void.class) && !method.getReturnType().equals(Void.class)) {
+                    System.err.println("Warning: @OnLoad method " + method.getName() +
+                            " in class " + clazz.getName() +
+                            " does not return void. It should return void.");
+                    continue;
+                }
+
+                try {
+                    method.setAccessible(true);
+
+                    // Resolve method parameters with dependency injection support
+                    Class<?>[] parameterTypes = method.getParameterTypes();
+                    Annotation[][] parameterAnnotations = method.getParameterAnnotations();
+                    Object[] parameters = new Object[parameterTypes.length];
+
+                    for (int i = 0; i < parameterTypes.length; i++) {
+                        // Try resolver system first
+                        Parameter parameter = method.getParameters()[i];
+                        ArgumentResolverContext context = new ArgumentResolverContext.Builder()
+                                .targetType(parameterTypes[i])
+                                .annotations(parameterAnnotations[i])
+                                .parameter(parameter)
+                                .declaringClass(clazz)
+                                .method(method)
+                                .container(this)
+                                .instance(instance)
+                                .build();
+
+                        Object resolvedValue = resolveArgument(context);
+                        if (resolvedValue != null) {
+                            parameters[i] = resolvedValue;
+                            continue;
+                        }
+
+                        // Fallback to existing logic for backward compatibility (only for @Value if resolver didn't handle it)
+                        // Note: @Inject is now fully handled by InjectArgumentResolver
+                        Value valueAnnotation = findAnnotation(parameterAnnotations[i], Value.class);
+                        if (valueAnnotation != null) {
+                            parameters[i] = resolveValue(valueAnnotation.value(), parameterTypes[i]);
+                            continue;
+                        }
+
+                        // If no resolver handled it and it's not @Value, throw an error
+                        throw new RuntimeException("@OnLoad method " + method.getName() +
+                                " in class " + clazz.getName() +
+                                " has parameter " + parameterTypes[i].getName() +
+                                " that cannot be injected. Use @Inject or @Value annotation, or mark with @OptionalDependency.");
+                    }
+
+                    // Invoke the method with resolved parameters
+                    method.invoke(instance, parameters);
+                } catch (Exception e) {
+                    throw new RuntimeException("Error invoking @OnLoad method " + method.getName() + " on " + clazz.getName(), e);
                 }
             }
         }

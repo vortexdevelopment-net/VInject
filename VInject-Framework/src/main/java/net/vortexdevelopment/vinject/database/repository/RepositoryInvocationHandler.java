@@ -1,8 +1,11 @@
 package net.vortexdevelopment.vinject.database.repository;
 
 import net.vortexdevelopment.vinject.annotation.database.Column;
+import net.vortexdevelopment.vinject.annotation.database.ColumnPrefix;
 import net.vortexdevelopment.vinject.annotation.database.Entity;
 import net.vortexdevelopment.vinject.annotation.database.Temporal;
+import net.vortexdevelopment.vinject.database.serializer.DatabaseSerializer;
+import net.vortexdevelopment.vinject.database.serializer.SerializerRegistry;
 import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.database.TemporalType;
 import net.vortexdevelopment.vinject.database.formatter.SchemaFormatter;
@@ -21,6 +24,7 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.lang.reflect.Type;
+import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.sql.Blob;
 import java.sql.Connection;
@@ -37,9 +41,11 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -62,7 +68,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
 
     public RepositoryInvocationHandler(Class<?> repositoryClass, Class<T> entityClass, Database database, DependencyContainer dependencyContainer) {
         this.entityClass = entityClass;
-        this.entityMetadata = new EntityMetadata(entityClass);
+        this.entityMetadata = new EntityMetadata(entityClass, database.getSerializerRegistry());
         this.database = database;
         this.dependencyContainer = dependencyContainer;
         this.repositoryClass = repositoryClass;
@@ -595,7 +601,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
             case "equals" -> proxy == args[0];
             case "hashCode" -> System.identityHashCode(proxy);
             case "toString" -> proxy.getClass().getName() + "@" + Integer.toHexString(proxy.hashCode());
-            default -> throw new UnsupportedOperationException("Method not implemented: " + methodName);
+            default -> throw new UnsupportedOperationException("MethodValue not implemented: " + methodName);
         };
     }
 
@@ -821,12 +827,66 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
         List<String> placeholders = new ArrayList<>();
         List<Annotation> annotations = new ArrayList<>();
 
+        // Track which serialized fields we've already processed
+        Set<String> processedSerializedFields = new HashSet<>();
+
         for (Map.Entry<String, String> entry : entityMetadata.fieldToColumnMap.entrySet()) {
             String fieldName = entry.getKey();
             String columnName = entry.getValue();
+
+            // Check if this is a serialized column
+            if (entityMetadata.isSerializedColumn(columnName)) {
+                SerializedFieldInfo serializedInfo = entityMetadata.getSerializedFieldInfo(columnName);
+                String originalFieldName = serializedInfo.getOriginalField().getName();
+                
+                // Skip if we've already processed this serialized field
+                if (processedSerializedFields.contains(originalFieldName)) {
+                    continue;
+                }
+                processedSerializedFields.add(originalFieldName);
+
+                // Get the object value
+                Field originalField = serializedInfo.getOriginalField();
+                Object objectValue = originalField.get(entity);
+
+                // Serialize the object
+                @SuppressWarnings("unchecked")
+                DatabaseSerializer<Object> serializer = serializedInfo.getSerializer();
+                Map<String, Object> serializedValues = serializer.serialize(objectValue);
+
+                // Add all serialized columns
+                List<String> serializedColumnNames = entityMetadata.getSerializedColumnNames(originalFieldName);
+                for (String serializedColumnName : serializedColumnNames) {
+                    // Extract the key from column name (remove prefix if used)
+                    String key;
+                    if (serializedInfo.isUsePrefix()) {
+                        String prefix = serializedInfo.getBaseColumnName() + "_";
+                        if (serializedColumnName.startsWith(prefix)) {
+                            key = serializedColumnName.substring(prefix.length());
+                        } else {
+                            key = serializedColumnName;
+                        }
+                    } else {
+                        key = serializedColumnName;
+                    }
+                    Object serializedValue = serializedValues.get(key);
+                    
+                    columns.add(schemaFormatter.formatColumnName(serializedColumnName));
+                    values.add(serializedValue);
+                    placeholders.add("?");
+                }
+                continue;
+            }
+
             Field field = entityMetadata.getField(fieldName);
+            if (field == null) continue;
 
             if (field.getName().equals("modifiedFields")) continue;
+
+            // Skip fields without @Column or @Temporal annotations
+            if (!field.isAnnotationPresent(Column.class) && !field.isAnnotationPresent(Temporal.class)) {
+                continue;
+            }
 
             Object value = field.get(entity);
 
@@ -851,6 +911,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
         database.connect(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
                 setStatementParameters(statement, values);
+                //Debug print
                 statement.executeUpdate();
 
                 // If primary key is auto-generated, set it back to the entity
@@ -858,9 +919,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
                     try (ResultSet generatedKeys = statement.getGeneratedKeys()) {
                         if (generatedKeys.next()) {
                             Object generatedId = generatedKeys.getObject(1);
-                            if (generatedId instanceof BigInteger && entityMetadata.getPrimaryKeyField().getType() == Long.class) {
-                                generatedId = ((BigInteger) generatedId).longValue();
-                            }
+                            generatedId = convertValueToFieldType(generatedId, entityMetadata.getPrimaryKeyField().getType());
                             entityMetadata.getPrimaryKeyField().set(entity, generatedId);
                         }
                     }
@@ -877,8 +936,66 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
         List<String> setClauses = new ArrayList<>();
         List<Object> values = new ArrayList<>();
 
+        // Track which serialized fields we've already processed
+        Set<String> processedSerializedFields = new HashSet<>();
+
         for (Map.Entry<String, String> entry : entityMetadata.fieldToColumnMap.entrySet()) {
             String fieldName = entry.getKey();
+            String columnName = entry.getValue();
+
+            // Check if this is a serialized column
+            if (entityMetadata.isSerializedColumn(columnName)) {
+                SerializedFieldInfo serializedInfo = entityMetadata.getSerializedFieldInfo(columnName);
+                String originalFieldName = serializedInfo.getOriginalField().getName();
+                
+                // Skip if we've already processed this serialized field
+                if (processedSerializedFields.contains(originalFieldName)) {
+                    continue;
+                }
+
+                //Check if field is modified
+                try {
+                    Method isFieldModified = entity.getClass().getDeclaredMethod("isFieldModified", String.class);
+                    if (!(boolean) isFieldModified.invoke(entity, originalFieldName)) {
+                        continue; // Skip unchanged fields
+                    }
+                } catch (NoSuchMethodException ignored) {
+                    //No field found, we continue as usual
+                }
+
+                processedSerializedFields.add(originalFieldName);
+
+                // Get the object value
+                Field originalField = serializedInfo.getOriginalField();
+                Object objectValue = originalField.get(entity);
+
+                // Serialize the object
+                @SuppressWarnings("unchecked")
+                DatabaseSerializer<Object> serializer = serializedInfo.getSerializer();
+                Map<String, Object> serializedValues = serializer.serialize(objectValue);
+
+                // Add all serialized columns
+                List<String> serializedColumnNames = entityMetadata.getSerializedColumnNames(originalFieldName);
+                for (String serializedColumnName : serializedColumnNames) {
+                    // Extract the key from column name (remove prefix if used)
+                    String key;
+                    if (serializedInfo.isUsePrefix()) {
+                        String prefix = serializedInfo.getBaseColumnName() + "_";
+                        if (serializedColumnName.startsWith(prefix)) {
+                            key = serializedColumnName.substring(prefix.length());
+                        } else {
+                            key = serializedColumnName;
+                        }
+                    } else {
+                        key = serializedColumnName;
+                    }
+                    Object serializedValue = serializedValues.get(key);
+                    
+                    setClauses.add(schemaFormatter.formatColumnName(serializedColumnName) + " = ?");
+                    values.add(serializedValue);
+                }
+                continue;
+            }
 
             //Check if field is modified
             try {
@@ -890,14 +1007,19 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
                 //No field found, we continue as usual
             }
 
-            String columnName = entry.getValue();
-
             // Skip primary key in SET clause
             if (fieldName.equals(entityMetadata.getPrimaryKeyField().getName())) {
                 continue;
             }
 
             Field field = entityMetadata.getField(fieldName);
+            if (field == null) continue;
+
+            // Skip fields without @Column or @Temporal annotations
+            if (!field.isAnnotationPresent(Column.class) && !field.isAnnotationPresent(Temporal.class)) {
+                continue;
+            }
+
             Object value = field.get(entity);
 
             //Check if the field is annotated with @Temporal
@@ -966,6 +1088,62 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
         return field.isAnnotationPresent(Column.class) && field.getAnnotation(Column.class).autoIncrement();
     }
 
+    /**
+     * Converts a value to match the target field type.
+     * Handles common conversions like BigDecimal -> BigInteger, Long -> BigInteger, etc.
+     * 
+     * @param value The value to convert
+     * @param targetType The target field type
+     * @return The converted value, or original value if no conversion needed
+     */
+    private Object convertValueToFieldType(Object value, Class<?> targetType) {
+        if (value == null) {
+            return null;
+        }
+        
+        // Handle Long -> BigInteger conversion (BIGINT columns return Long)
+        if (value instanceof Long && targetType == BigInteger.class) {
+            return BigInteger.valueOf((Long) value);
+        }
+        
+        // Handle BigDecimal -> BigInteger conversion (common for NUMERIC columns)
+        if (value instanceof BigDecimal && targetType == BigInteger.class) {
+            return ((BigDecimal) value).toBigInteger();
+        }
+        
+        // Handle Integer -> BigInteger conversion
+        if (value instanceof Integer && targetType == BigInteger.class) {
+            return BigInteger.valueOf((Integer) value);
+        }
+        
+        // Handle BigInteger -> Long conversion
+        if (value instanceof BigInteger && targetType == Long.class) {
+            return ((BigInteger) value).longValue();
+        }
+        
+        // Handle BigDecimal -> Long conversion
+        if (value instanceof BigDecimal && targetType == Long.class) {
+            return ((BigDecimal) value).longValue();
+        }
+        
+        // Handle BigInteger -> Integer conversion
+        if (value instanceof BigInteger && targetType == Integer.class) {
+            return ((BigInteger) value).intValue();
+        }
+        
+        // Handle BigDecimal -> Integer conversion
+        if (value instanceof BigDecimal && targetType == Integer.class) {
+            return ((BigDecimal) value).intValue();
+        }
+        
+        // If value is already the correct type, return as-is
+        if (targetType.isInstance(value)) {
+            return value;
+        }
+        
+        return value;
+    }
+
     // -------------------- Handle FindBy Methods --------------------
 
     /**
@@ -976,7 +1154,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
     private Object fetchValue(Object value) {
         if (value.getClass().isAnnotationPresent(Entity.class)) {
             //We must use it's primary key
-            EntityMetadata metadata = new EntityMetadata(value.getClass());
+            EntityMetadata metadata = new EntityMetadata(value.getClass(), database.getSerializerRegistry());
             Field pkField = metadata.getPrimaryKeyField();
             try {
                 value = pkField.get(value);
@@ -1058,14 +1236,60 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
      * @throws Exception If an error occurs during mapping.
      */
     private Object mapEntity(Connection connection, Class<?> entityCls, ResultSet resultSet) throws Exception {
-        EntityMetadata metadata = new EntityMetadata(entityCls);
+        EntityMetadata metadata = new EntityMetadata(entityCls, database.getSerializerRegistry());
         Object entityInstance = dependencyContainer.newInstance(entityCls);
+
+        // Track which serialized fields we've already processed
+        Set<String> processedSerializedFields = new HashSet<>();
 
         for (Map.Entry<String, String> entry : metadata.fieldToColumnMap.entrySet()) {
             String fieldName = entry.getKey();
             String columnName = entry.getValue();
-            Field field = metadata.getField(fieldName);
 
+            // Check if this is a serialized column
+            if (metadata.isSerializedColumn(columnName)) {
+                SerializedFieldInfo serializedInfo = metadata.getSerializedFieldInfo(columnName);
+                String originalFieldName = serializedInfo.getOriginalField().getName();
+                
+                // Skip if we've already processed this serialized field
+                if (processedSerializedFields.contains(originalFieldName)) {
+                    continue;
+                }
+                processedSerializedFields.add(originalFieldName);
+
+                // Collect all column values for this serialized field
+                List<String> serializedColumnNames = metadata.getSerializedColumnNames(originalFieldName);
+                Map<String, Object> columnValues = new HashMap<>();
+                
+                for (String serializedColumnName : serializedColumnNames) {
+                    // Extract the key from column name (remove prefix if used)
+                    String key;
+                    if (serializedInfo.isUsePrefix()) {
+                        String prefix = serializedInfo.getBaseColumnName() + "_";
+                        if (serializedColumnName.startsWith(prefix)) {
+                            key = serializedColumnName.substring(prefix.length());
+                        } else {
+                            key = serializedColumnName;
+                        }
+                    } else {
+                        key = serializedColumnName;
+                    }
+                    Object value = resultSet.getObject(serializedColumnName);
+                    columnValues.put(key, value);
+                }
+
+                // Deserialize the object
+                @SuppressWarnings("unchecked")
+                DatabaseSerializer<Object> serializer = serializedInfo.getSerializer();
+                Object deserializedValue = serializer.deserialize(columnValues);
+                
+                // Set the deserialized object to the field
+                Field originalField = serializedInfo.getOriginalField();
+                originalField.set(entityInstance, deserializedValue);
+                continue;
+            }
+
+            Field field = metadata.getField(fieldName);
             if (field == null || field.getName().equals("modifiedFields")) {
                 continue; // Skip if field not found
             }
@@ -1074,11 +1298,20 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
             if (field.getType().isAnnotationPresent(Entity.class)) {
                 Object foreignKeyValue = resultSet.getObject(columnName);
                 if (foreignKeyValue != null) {
+                    // Get the primary key field type of the foreign entity to convert the value
+                    EntityMetadata foreignMetadata = new EntityMetadata(field.getType(), database.getSerializerRegistry());
+                    Field foreignPkField = foreignMetadata.getPrimaryKeyField();
+                    if (foreignPkField != null) {
+                        foreignKeyValue = convertValueToFieldType(foreignKeyValue, foreignPkField.getType());
+                    }
                     Object foreignEntity = fetchForeignEntity(connection, field.getType(), metadata.getPrimaryKeyColumn(), foreignKeyValue);
                     field.set(entityInstance, foreignEntity);
                 }
             } else {
                 Object value = resultSet.getObject(columnName);
+                
+                // Convert value to match field type
+                value = convertValueToFieldType(value, field.getType());
 
                 // Handle UUID conversion
                 if (field.getType() == UUID.class && value instanceof String) {
@@ -1125,7 +1358,20 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
             }
         }
 
+        // Invoke @OnLoad methods after all fields are set
+        invokeOnLoad(entityInstance);
+
         return entityInstance;
+    }
+
+    /**
+     * Invokes all methods annotated with @OnLoad on the entity instance.
+     * OnLoad methods are called after all fields have been loaded from the database.
+     * 
+     * @param entityInstance The entity instance to invoke OnLoad methods on
+     */
+    private void invokeOnLoad(Object entityInstance) {
+        dependencyContainer.invokeOnLoad(entityInstance);
     }
 
     /**
@@ -1140,7 +1386,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
      */
     private Object fetchForeignEntity(Connection connection, Class<?> foreignEntityCls,
                                       String foreignKeyColumn, Object foreignKeyValue) throws Exception {
-        EntityMetadata foreignMetadata = new EntityMetadata(foreignEntityCls);
+        EntityMetadata foreignMetadata = new EntityMetadata(foreignEntityCls, database.getSerializerRegistry());
         String tableName = foreignMetadata.getTableName();
         String pkColumn = foreignMetadata.getPrimaryKeyColumn();
 
@@ -1167,10 +1413,13 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
         private final String tableName;
         private final Map<String, String> fieldToColumnMap = new HashMap<>();
         private final Map<String, Field> fieldsMap = new HashMap<>();
+        private final Map<String, SerializedFieldInfo> serializedFields = new HashMap<>(); // columnName -> info
         private final String primaryKeyColumn;
         private final Field primaryKeyField;
+        private final SerializerRegistry serializerRegistry;
 
-        public EntityMetadata(Class<?> entityClass) {
+        public EntityMetadata(Class<?> entityClass, SerializerRegistry serializerRegistry) {
+            this.serializerRegistry = serializerRegistry;
             Entity entity = entityClass.getAnnotation(Entity.class);
             if (entity == null) {
                 throw new IllegalArgumentException("Entity annotation not found on class: " + entityClass.getName());
@@ -1199,7 +1448,30 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
                         columnName = temporal.name();
                     }
                 }
-                fieldToColumnMap.put(field.getName(), columnName);
+                
+                // Check if this field type has a serializer
+                if (serializerRegistry != null && serializerRegistry.hasSerializer(field.getType())) {
+                    DatabaseSerializer<?> serializer = serializerRegistry.getSerializer(field.getType());
+                    List<net.vortexdevelopment.vinject.database.meta.FieldMetadata> serializedColumns = serializer.getColumns(columnName);
+                    boolean usePrefix = field.isAnnotationPresent(ColumnPrefix.class);
+                    
+                    for (net.vortexdevelopment.vinject.database.meta.FieldMetadata serializedColumn : serializedColumns) {
+                        // Conditionally prefix column name based on @ColumnPrefix annotation
+                        String finalColumnName = usePrefix 
+                            ? columnName + "_" + serializedColumn.getColumnName()
+                            : serializedColumn.getColumnName();
+                        serializedFields.put(finalColumnName, new SerializedFieldInfo(field, serializer, columnName, usePrefix));
+                        fieldToColumnMap.put(finalColumnName, finalColumnName);
+                    }
+                    // Skip adding the original field - it's handled by serialized columns
+                    fieldsMap.put(field.getName(), field);
+                    continue;
+                }
+                
+                // Only add fields with @Column or @Temporal annotations to the map
+                if (field.isAnnotationPresent(Column.class) || field.isAnnotationPresent(Temporal.class)) {
+                    fieldToColumnMap.put(field.getName(), columnName);
+                }
                 fieldsMap.put(field.getName(), field);
             }
 
@@ -1232,6 +1504,61 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
 
         public Map<String, String> getFieldToColumnMap() {
             return fieldToColumnMap;
+        }
+
+        public boolean isSerializedColumn(String columnName) {
+            return serializedFields.containsKey(columnName);
+        }
+
+        public SerializedFieldInfo getSerializedFieldInfo(String columnName) {
+            return serializedFields.get(columnName);
+        }
+
+        public Set<String> getSerializedFieldNames() {
+            return serializedFields.values().stream()
+                .map(info -> info.getOriginalField().getName())
+                .collect(Collectors.toSet());
+        }
+
+        public List<String> getSerializedColumnNames(String fieldName) {
+            List<String> columnNames = new ArrayList<>();
+            for (Map.Entry<String, SerializedFieldInfo> entry : serializedFields.entrySet()) {
+                if (entry.getValue().getOriginalField().getName().equals(fieldName)) {
+                    columnNames.add(entry.getKey());
+                }
+            }
+            return columnNames;
+        }
+    }
+
+    private static class SerializedFieldInfo {
+        private final Field originalField;
+        private final DatabaseSerializer<?> serializer;
+        private final String baseColumnName;
+        private final boolean usePrefix;
+
+        public SerializedFieldInfo(Field originalField, DatabaseSerializer<?> serializer, String baseColumnName, boolean usePrefix) {
+            this.originalField = originalField;
+            this.serializer = serializer;
+            this.baseColumnName = baseColumnName;
+            this.usePrefix = usePrefix;
+        }
+
+        public Field getOriginalField() {
+            return originalField;
+        }
+
+        @SuppressWarnings("unchecked")
+        public <T> DatabaseSerializer<T> getSerializer() {
+            return (DatabaseSerializer<T>) serializer;
+        }
+
+        public String getBaseColumnName() {
+            return baseColumnName;
+        }
+
+        public boolean isUsePrefix() {
+            return usePrefix;
         }
     }
 }
