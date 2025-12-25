@@ -19,7 +19,7 @@ public @interface Component {
      *
      * @return The classes to register the class as a subclass of.
      */
-    public Class[] registerSubclasses() default {};
+    public Class<?>[] registerSubclasses() default {};
 
     /**
      * Register priority. Lower numbers are loaded first.

@@ -1,16 +1,13 @@
 package net.vortexdevelopment.vinject;
 
 import net.vortexdevelopment.vinject.annotation.Root;
+import net.vortexdevelopment.vinject.annotation.database.Entity;
 import net.vortexdevelopment.vinject.config.Environment;
 import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.database.repository.RepositoryContainer;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
+import net.vortexdevelopment.vinject.di.scan.ClasspathScanner;
 import org.jetbrains.annotations.Nullable;
-
-import net.vortexdevelopment.vinject.annotation.database.Entity;
-import org.reflections.Configuration;
-import org.reflections.Reflections;
-import org.reflections.util.ConfigurationBuilder;
 
 import java.io.File;
 import java.io.InputStream;
@@ -43,8 +40,6 @@ public class VInjectApplication {
     private static Database database;
     private static RepositoryContainer repositoryContainer;
     private static Thread shutdownHookThread;
-    private static Object rootInstance;
-    private static Class<?> rootClass;
     private static final Object shutdownLock = new Object();
     private static CountDownLatch shutdownHookComplete;
 
@@ -121,9 +116,6 @@ public class VInjectApplication {
             }
         }
 
-        // Store root instance and class for later use
-        VInjectApplication.rootInstance = rootInstance;
-        VInjectApplication.rootClass = rootClass;
 
         dependencyContainer = new DependencyContainer(
                 rootAnnotation,
@@ -136,7 +128,7 @@ public class VInjectApplication {
 
         // Inject dependencies into root instance if it exists
         if (rootInstance != null) {
-            dependencyContainer.inject(rootInstance);
+            dependencyContainer.getInjectionEngine().inject(rootInstance);
         }
 
         // Register a shutdown hook BEFORE starting the main thread
@@ -213,9 +205,6 @@ public class VInjectApplication {
                 }
             }
 
-            // Store root instance and class for later use
-            VInjectApplication.rootInstance = rootInstance;
-            VInjectApplication.rootClass = rootClass;
 
             dependencyContainer = new DependencyContainer(
                     rootAnnotation,
@@ -231,9 +220,9 @@ public class VInjectApplication {
 
             // Inject dependencies into root instance if it exists
             if (rootInstance != null) {
-                dependencyContainer.inject(rootInstance);
+                dependencyContainer.getInjectionEngine().inject(rootInstance);
                 // Invoke @PostConstruct on root instance after injection
-                dependencyContainer.invokePostConstruct(rootInstance);
+                dependencyContainer.getLifecycleManager().invokePostConstruct(rootInstance);
             }
 
             // Check if Database bean exists in the container after component loading
@@ -330,86 +319,9 @@ public class VInjectApplication {
         }
     }
 
-    /**
-     * Get the effective package name from the root annotation or detect it from the root class.
-     * If packageName is specified in the annotation (non-empty), it will be used.
-     * Otherwise, the package name will be detected from the root class.
-     *
-     * @param rootAnnotation The @Root annotation
-     * @param rootClass The root class
-     * @return The effective package name to scan
-     */
-    private static String getEffectivePackageName(Root rootAnnotation, Class<?> rootClass) {
-        String packageName = rootAnnotation.packageName();
-        if (packageName == null || packageName.isEmpty()) {
-            // Auto-detect package name from root class
-            Package pkg = rootClass.getPackage();
-            if (pkg != null) {
-                packageName = pkg.getName();
-            } else {
-                // Fallback: extract package name from class name
-                String className = rootClass.getName();
-                int lastDot = className.lastIndexOf('.');
-                if (lastDot > 0) {
-                    packageName = className.substring(0, lastDot);
-                } else {
-                    // Default package - use empty string
-                    packageName = "";
-                }
-            }
-        }
-        return packageName;
-    }
-
-    /**
-     * Pre-scan for entity classes to determine if Database configuration is required.
-     * This is done before DependencyContainer creation to validate Database configuration.
-     *
-     * @param rootAnnotation The @Root annotation containing package scanning configuration
-     * @param rootClass The root class
-     * @return true if entities are found, false otherwise
-     */
     private static boolean scanForEntities(Root rootAnnotation, Class<?> rootClass) {
-        String[] ignoredPackages = rootAnnotation.ignoredPackages();
-        String[] includedPackages = rootAnnotation.includedPackages();
-        String rootPackage = getEffectivePackageName(rootAnnotation, rootClass);
-        // Convert package name to path format (e.g., "net.vortexdevelopment.vinject.app" -> "net/vortexdevelopment/vinject/app")
-        String rootPackagePath = rootPackage.replace('.', '/');
-
-        Configuration configuration = new ConfigurationBuilder()
-                .forPackage(rootPackage)
-                .filterInputsBy(s -> {
-                    if (s == null) return false;
-                    if (s.startsWith("META-INF")) return false;
-                    if (!s.endsWith(".class")) return false;
-
-                    // First check: Only include classes that are under the root package
-                    if (!s.startsWith(rootPackagePath + "/") && !s.equals(rootPackagePath + ".class")) {
-                        return false;
-                    }
-
-                    // Check ignored packages (must match the path format)
-                    for (String ignoredPackage : ignoredPackages) {
-                        String ignoredPath = ignoredPackage.replace('.', '/');
-                        if (s.startsWith(ignoredPath)) {
-                            return false;
-                        }
-                    }
-
-                    // Check included packages (override ignored packages)
-                    for (String includedPackage : includedPackages) {
-                        String includedPath = includedPackage.replace('.', '/');
-                        if (s.startsWith(includedPath)) {
-                            return true;
-                        }
-                    }
-
-                    // Default: include if under root package (already checked above)
-                    return true;
-                });
-
-        Reflections reflections = new Reflections(configuration);
-        Set<Class<?>> entities = reflections.getTypesAnnotatedWith(Entity.class);
+        ClasspathScanner scanner = new ClasspathScanner(rootAnnotation, rootClass);
+        Set<Class<?>> entities = scanner.getTypesAnnotatedWith(Entity.class);
         return !entities.isEmpty();
     }
 
@@ -511,7 +423,7 @@ public class VInjectApplication {
 
         // Call all @OnDestroy methods
         if (dependencyContainer != null) {
-            dependencyContainer.invokeDestroyMethods();
+            dependencyContainer.getLifecycleManager().invokeDestroyMethods();
         }
 
         // Release dependency container resources

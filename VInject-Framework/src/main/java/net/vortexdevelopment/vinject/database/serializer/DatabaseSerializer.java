@@ -1,5 +1,6 @@
 package net.vortexdevelopment.vinject.database.serializer;
 
+import lombok.Getter;
 import net.vortexdevelopment.vinject.annotation.database.Column;
 import net.vortexdevelopment.vinject.annotation.database.FieldValue;
 import net.vortexdevelopment.vinject.annotation.database.MethodValue;
@@ -23,6 +24,7 @@ import java.util.Map;
  */
 public abstract class DatabaseSerializer<T> {
 
+    @Getter
     private final Class<T> targetType;
     private final List<SerializedFieldInfo> serializedFields;
 
@@ -41,13 +43,6 @@ public abstract class DatabaseSerializer<T> {
     }
 
     /**
-     * Get the type this serializer handles.
-     */
-    public Class<T> getTargetType() {
-        return targetType;
-    }
-
-    /**
      * Get column definitions for this serializer.
      * Called during EntityMetadata resolution to create database columns.
      * 
@@ -58,8 +53,8 @@ public abstract class DatabaseSerializer<T> {
         List<FieldMetadata> columns = new ArrayList<>();
         
         for (SerializedFieldInfo fieldInfo : serializedFields) {
-            Field field = fieldInfo.getField();
-            Column columnAnnotation = fieldInfo.getColumnAnnotation();
+            Field field = fieldInfo.field();
+            Column columnAnnotation = fieldInfo.columnAnnotation();
             
             // Determine column name
             String columnName;
@@ -74,7 +69,7 @@ public abstract class DatabaseSerializer<T> {
                 field.getType(),
                 columnAnnotation,
                 null,
-                fieldInfo.getDefaultValue()
+                fieldInfo.defaultValue()
             );
             
             // Create FieldMetadata
@@ -88,7 +83,7 @@ public abstract class DatabaseSerializer<T> {
                 columnAnnotation != null && columnAnnotation.autoIncrement(),
                 null, // No foreign key for serialized fields
                 field,
-                fieldInfo.getDefaultValue()
+                fieldInfo.defaultValue()
             );
             
             columns.add(fieldMetadata);
@@ -121,8 +116,8 @@ public abstract class DatabaseSerializer<T> {
             // Extract value using FieldExtractor
             Object value = FieldExtractor.extractValue(
                 object,
-                fieldInfo.getFieldAnnotation(),
-                fieldInfo.getMethodAnnotation()
+                fieldInfo.fieldAnnotation(),
+                fieldInfo.methodAnnotation()
             );
             
             values.put(key, value);
@@ -194,53 +189,12 @@ public abstract class DatabaseSerializer<T> {
      * Get the column key for a field (used in serialize/deserialize maps).
      */
     private String getColumnKey(SerializedFieldInfo fieldInfo) {
-        Column columnAnnotation = fieldInfo.getColumnAnnotation();
-        Field field = fieldInfo.getField();
+        Column columnAnnotation = fieldInfo.columnAnnotation();
+        Field field = fieldInfo.field();
         
         if (columnAnnotation != null && !columnAnnotation.name().isEmpty()) {
             return columnAnnotation.name();
         }
         return field.getName();
-    }
-
-    /**
-     * Internal class to hold information about a serialized field.
-     */
-    protected static class SerializedFieldInfo {
-        private final Field field;
-        private final Column columnAnnotation;
-        private final FieldValue fieldAnnotation;
-        private final MethodValue methodAnnotation;
-        private final Object defaultValue;
-
-        public SerializedFieldInfo(Field field, Column columnAnnotation,
-                                   FieldValue fieldAnnotation, MethodValue methodAnnotation,
-                                   Object defaultValue) {
-            this.field = field;
-            this.columnAnnotation = columnAnnotation;
-            this.fieldAnnotation = fieldAnnotation;
-            this.methodAnnotation = methodAnnotation;
-            this.defaultValue = defaultValue;
-        }
-
-        public Field getField() {
-            return field;
-        }
-
-        public Column getColumnAnnotation() {
-            return columnAnnotation;
-        }
-
-        public FieldValue getFieldAnnotation() {
-            return fieldAnnotation;
-        }
-
-        public MethodValue getMethodAnnotation() {
-            return methodAnnotation;
-        }
-
-        public Object getDefaultValue() {
-            return defaultValue;
-        }
     }
 }

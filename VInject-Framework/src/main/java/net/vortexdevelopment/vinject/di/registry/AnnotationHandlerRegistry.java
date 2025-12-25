@@ -5,7 +5,6 @@ import net.vortexdevelopment.vinject.annotation.Registry;
 import java.lang.annotation.Annotation;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class AnnotationHandlerRegistry {

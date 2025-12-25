@@ -9,6 +9,9 @@ public enum ConditionalOperator {
     GREATER_THAN_OR_EQUALS,
     LESS_THAN_OR_EQUALS,
     CONTAINS,
-    NOT_CONTAINS;
+    NOT_CONTAINS,
+    STARTS_WITH,
+    ENDS_WITH,
+    MATCHES;
 
 }

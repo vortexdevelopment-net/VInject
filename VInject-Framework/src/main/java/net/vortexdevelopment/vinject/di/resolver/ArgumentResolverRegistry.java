@@ -1,5 +1,8 @@
 package net.vortexdevelopment.vinject.di.resolver;
 
+import net.vortexdevelopment.vinject.annotation.Inject;
+import net.vortexdevelopment.vinject.annotation.Value;
+
 import java.lang.annotation.Annotation;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -22,6 +25,18 @@ public class ArgumentResolverRegistry {
         this.resolvers = new ConcurrentHashMap<>();
         this.priorities = new ConcurrentHashMap<>();
         this.resolverPriorities = new ConcurrentHashMap<>();
+
+        registerBuiltInResolvers();
+    }
+
+    private void registerBuiltInResolvers() {
+        // Register @Value resolver with priority 100 (highest)
+        ValueArgumentResolver valueResolver = new ValueArgumentResolver();
+        registerResolver(Value.class, valueResolver, 100);
+
+        // Register @Inject resolver with priority 50
+        InjectArgumentResolver injectResolver = new InjectArgumentResolver();
+        registerResolver(Inject.class, injectResolver, 50);
     }
     
     /**

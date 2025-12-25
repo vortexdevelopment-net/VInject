@@ -16,5 +16,5 @@ public @interface Bean {
      *
      * @return The classes to register the class as a subclass of.
      */
-    public Class[] registerSubclasses() default {};
+    public Class<?>[] registerSubclasses() default {};
 }

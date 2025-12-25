@@ -163,15 +163,40 @@ public class EntityTransformer extends AbstractMojo {
                 if (hasYamlIdField) break;
             }
 
+            // Check for @Inject annotation on any field
+            boolean hasInjectField = false;
+            for (Field field : javaClass.getFields()) {
+                org.apache.bcel.classfile.AnnotationEntry[] annotations = field.getAnnotationEntries();
+                for (org.apache.bcel.classfile.AnnotationEntry annotation : annotations) {
+                    String annotationType = annotation.getAnnotationType();
+                    if (annotationType.equals("Lnet/vortexdevelopment/vinject/annotation/Inject;")) {
+                        hasInjectField = true;
+                        break;
+                    }
+                }
+                if (hasInjectField) break;
+            }
+
             if (hasEntityAnnotation) {
                 byte[] modifiedBytes = modifyEntityClass(javaClass, classFile);
-                try (OutputStream outputStream = new FileOutputStream(classFile)) {
-                    outputStream.write(modifiedBytes);
+                if (modifiedBytes != null) {
+                    try (OutputStream outputStream = new FileOutputStream(classFile)) {
+                        outputStream.write(modifiedBytes);
+                    }
                 }
             } else if (hasYamlIdField) {
                 byte[] modifiedBytes = modifyYamlConfigClass(javaClass, classFile);
-                try (OutputStream outputStream = new FileOutputStream(classFile)) {
-                    outputStream.write(modifiedBytes);
+                if (modifiedBytes != null) {
+                    try (OutputStream outputStream = new FileOutputStream(classFile)) {
+                        outputStream.write(modifiedBytes);
+                    }
+                }
+            } else if (hasInjectField) {
+                byte[] modifiedBytes = modifyComponentClass(javaClass, classFile);
+                if (modifiedBytes != null) {
+                    try (OutputStream outputStream = new FileOutputStream(classFile)) {
+                        outputStream.write(modifiedBytes);
+                    }
                 }
             }
         }
@@ -217,10 +242,99 @@ public class EntityTransformer extends AbstractMojo {
         }
     }
 
+    /**
+     * Modifies @Component classes to generate @Inject annotated setters for fields with @Inject annotation.
+     * This enables automatic setter generation for dependency injection, providing clean circular dependency handling.
+     */
+    private byte[] modifyComponentClass(JavaClass javaClass, File classFile) throws IOException {
+        ClassGen classGen = new ClassGen(javaClass);
+        ConstantPoolGen constantPool = classGen.getConstantPool();
+        InstructionFactory factory = new InstructionFactory(classGen, constantPool);
+
+        getLog().info("Generating setters for @Inject fields in @Component class: " + javaClass.getClassName());
+
+        // Find all fields with @Inject annotation
+        for (Field field : classGen.getFields()) {
+            // Skip static fields
+            if ((field.getAccessFlags() & Constants.ACC_STATIC) != 0) {
+                continue;
+            }
+
+            // Check if field has @Inject annotation
+            boolean hasInjectAnnotation = Arrays.stream(field.getAnnotationEntries())
+                    .anyMatch(annotation -> annotation.getAnnotationType().equals("Lnet/vortexdevelopment/vinject/annotation/Inject;"));
+
+            if (!hasInjectAnnotation) {
+                continue;
+            }
+
+            String fieldName = field.getName();
+            Type fieldType = field.getType();
+            String setterName = "set" + capitalize(fieldName);
+
+            // Check if setter already exists
+            boolean hasSetter = Arrays.stream(classGen.getMethods())
+                    .anyMatch(m -> m.getName().equals(setterName) && m.getArgumentTypes().length == 1);
+
+            if (hasSetter) {
+                getLog().debug("Setter " + setterName + " already exists, skipping generation");
+                continue;
+            }
+
+            getLog().info("Generating setter: " + setterName + " for field: " + fieldName);
+
+            // Create the setter method
+            MethodGen setter = new MethodGen(
+                    Const.ACC_PUBLIC,
+                    Type.VOID,
+                    new Type[]{fieldType},
+                    new String[]{fieldName},
+                    setterName,
+                    classGen.getClassName(),
+                    new InstructionList(),
+                    constantPool
+            );
+
+            // Build setter body: this.fieldName = fieldName;
+            InstructionList il = setter.getInstructionList();
+            il.append(new ALOAD(0));   // this
+            il.append(InstructionFactory.createLoad(fieldType, 1));   // load parameter
+            il.append(new PUTFIELD(constantPool.addFieldref(
+                    classGen.getClassName(),
+                    fieldName,
+                    fieldType.getSignature()
+            )));
+            il.append(InstructionFactory.createReturn(Type.VOID));
+
+            setter.setMaxStack();
+            setter.setMaxLocals();
+            setter.removeLineNumbers();
+            setter.removeLocalVariables();
+
+            classGen.addMethod(setter.getMethod());
+            il.dispose();
+        }
+
+        // Write the modified class to byte array
+        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+            classGen.getJavaClass().dump(outputStream);
+            return outputStream.toByteArray();
+        }
+    }
+
     private byte[] modifyEntityClass(JavaClass javaClass, File classFile) throws IOException {
         // Modify the class using BCEL
         ClassGen classGen = new ClassGen(javaClass);
         ConstantPoolGen constantPool = classGen.getConstantPool();
+
+        // Check if the class is already transformed by checking for modifiedFields
+        boolean alreadyTransformed = Arrays.stream(classGen.getFields())
+                .anyMatch(field -> field.getName().equals("modifiedFields"));
+
+        if (alreadyTransformed) {
+            getLog().info("Class " + javaClass.getClassName() + " is already transformed, skipping.");
+            return null;
+        }
 
         // Add the modifiedFields field with inline initialization
         String modifiedFieldName = "modifiedFields";

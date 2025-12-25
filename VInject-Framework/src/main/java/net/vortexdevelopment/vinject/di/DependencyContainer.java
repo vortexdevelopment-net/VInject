@@ -1,65 +1,54 @@
 package net.vortexdevelopment.vinject.di;
 
 import lombok.Getter;
+import net.vortexdevelopment.vinject.annotation.ArgumentResolver;
 import net.vortexdevelopment.vinject.annotation.Bean;
 import net.vortexdevelopment.vinject.annotation.Component;
-import net.vortexdevelopment.vinject.annotation.Conditional;
 import net.vortexdevelopment.vinject.annotation.DependsOn;
-import net.vortexdevelopment.vinject.annotation.Inject;
-import net.vortexdevelopment.vinject.annotation.OnDestroy;
-import net.vortexdevelopment.vinject.annotation.OnEvent;
-import net.vortexdevelopment.vinject.annotation.OnLoad;
-import net.vortexdevelopment.vinject.annotation.PostConstruct;
-import net.vortexdevelopment.vinject.annotation.Registry;
+import net.vortexdevelopment.vinject.annotation.OptionalDependency;
 import net.vortexdevelopment.vinject.annotation.Repository;
 import net.vortexdevelopment.vinject.annotation.Root;
 import net.vortexdevelopment.vinject.annotation.Service;
 import net.vortexdevelopment.vinject.annotation.Value;
+import net.vortexdevelopment.vinject.annotation.database.Entity;
 import net.vortexdevelopment.vinject.annotation.database.RegisterDatabaseSerializer;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
-import net.vortexdevelopment.vinject.annotation.yaml.YamlConditional;
+import net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlSerializer;
-import net.vortexdevelopment.vinject.config.Environment;
-import net.vortexdevelopment.vinject.annotation.database.Entity;
 import net.vortexdevelopment.vinject.config.serializer.YamlSerializerBase;
 import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.database.repository.CrudRepository;
 import net.vortexdevelopment.vinject.database.repository.RepositoryContainer;
 import net.vortexdevelopment.vinject.database.repository.RepositoryInvocationHandler;
 import net.vortexdevelopment.vinject.database.serializer.DatabaseSerializer;
-import net.vortexdevelopment.vinject.di.utils.ConditionalOperator;
+import net.vortexdevelopment.vinject.di.engine.ConditionEvaluator;
+import net.vortexdevelopment.vinject.di.engine.DependencyGraphResolver;
+import net.vortexdevelopment.vinject.di.engine.InjectionEngine;
+import net.vortexdevelopment.vinject.di.lifecycle.LifecycleManager;
 import net.vortexdevelopment.vinject.di.registry.AnnotationHandler;
 import net.vortexdevelopment.vinject.di.registry.AnnotationHandlerRegistry;
 import net.vortexdevelopment.vinject.di.registry.RegistryOrder;
-import net.vortexdevelopment.vinject.di.resolver.ArgumentResolverProcessor;
 import net.vortexdevelopment.vinject.di.resolver.ArgumentResolverContext;
+import net.vortexdevelopment.vinject.di.resolver.ArgumentResolverProcessor;
 import net.vortexdevelopment.vinject.di.resolver.ArgumentResolverRegistry;
-import net.vortexdevelopment.vinject.di.resolver.ValueArgumentResolver;
-import net.vortexdevelopment.vinject.di.resolver.InjectArgumentResolver;
-import net.vortexdevelopment.vinject.annotation.ArgumentResolver;
+import net.vortexdevelopment.vinject.di.scan.ClasspathScanner;
+import net.vortexdevelopment.vinject.di.utils.DependencyUtils;
+import net.vortexdevelopment.vinject.event.EventManager;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import org.reflections.Configuration;
 import org.reflections.ReflectionUtils;
 import org.reflections.Reflections;
-import org.reflections.util.ConfigurationBuilder;
-import sun.misc.Unsafe;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
+import java.lang.reflect.Executable;
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
-import java.lang.reflect.ParameterizedType;
-import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -69,38 +58,38 @@ import java.util.stream.Collectors;
 
 public class DependencyContainer implements DependencyRepository {
 
-    private final Map<Class<?>, Object> dependencies;
-    private final Unsafe unsafe;
-    private final Class<?> rootClass;
-    private final Object rootInstance;
+    @Getter private final Map<Class<?>, Object> dependencies;
+    @Getter private final Class<?> rootClass;
     private final Set<Class<?>> entities;
     private final Set<Class<?>> skippedDueToDependsOn;
     private final Map<Class<?>, List<String>> missingDependenciesByClass;
     private AnnotationHandlerRegistry annotationHandlerRegistry;
-    private ArgumentResolverRegistry argumentResolverRegistry;
-    private Consumer<Void> onPreComponentLoad;
-    private Map<String, List<Method>> eventListeners;
-    private List<Method> destroyMethods;
+    private final ArgumentResolverRegistry argumentResolverRegistry;
+    @Getter private final EventManager eventManager;
+    @Getter private final LifecycleManager lifecycleManager;
+    @Getter private final InjectionEngine injectionEngine;
+    private final ConditionEvaluator conditionEvaluator;
+    private final DependencyGraphResolver dependencyGraphResolver;
+    
+    // Circular dependency handling
+    private final ThreadLocal<Set<Class<?>>> currentlyCreating = ThreadLocal.withInitial(HashSet::new);
 
-    @Getter
-    private static DependencyContainer instance;
+    @Getter private static DependencyContainer instance;
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
+    @SuppressWarnings({"unchecked"})
     public DependencyContainer(Root rootAnnotation, Class<?> rootClass, @Nullable Object rootInstance, Database database, RepositoryContainer repositoryContainer, @Nullable Consumer<Void> onPreComponentLoad) {
         instance = this;
-        this.onPreComponentLoad = onPreComponentLoad;
-        eventListeners = new ConcurrentHashMap<>();
+        eventManager = new EventManager(this);
+        lifecycleManager = new LifecycleManager(this);
+        injectionEngine = new InjectionEngine(this);
+        conditionEvaluator = new ConditionEvaluator();
+        dependencyGraphResolver = new DependencyGraphResolver(this);
         dependencies = new ConcurrentHashMap<>();
         entities = ConcurrentHashMap.newKeySet();
         skippedDueToDependsOn = ConcurrentHashMap.newKeySet();
         missingDependenciesByClass = new ConcurrentHashMap<>();
-        destroyMethods = new ArrayList<>();
-        unsafe = getUnsafe();
         annotationHandlerRegistry = new AnnotationHandlerRegistry();
         argumentResolverRegistry = new ArgumentResolverRegistry();
-
-        // Register built-in resolvers
-        registerBuiltInResolvers();
 
         if (rootInstance == null) {
             //Create the root instance if it is null
@@ -115,65 +104,24 @@ public class DependencyContainer implements DependencyRepository {
 
         //Add plugin as bean so components can inject it
         dependencies.put(rootClass, rootInstance);
-        injectRoot(rootInstance);
-
         this.rootClass = rootClass;
-        this.rootInstance = rootInstance;
 
-        String[] ignoredPackages = rootAnnotation.ignoredPackages();
+        // Included packages override ignored packages
+        ClasspathScanner scanner = new ClasspathScanner(rootAnnotation, rootClass);
+        Reflections reflections = scanner.getReflections();
 
-        //included packages override ignored packages
-        String[] includedPackages = rootAnnotation.includedPackages();
-        String rootPackage = getEffectivePackageName(rootAnnotation, rootClass);
-        // Convert package name to path format (e.g., "net.vortexdevelopment.vinject.app" -> "net/vortexdevelopment/vinject/app")
-        String rootPackagePath = rootPackage.replace('.', '/');
-
-        Configuration configuration = new ConfigurationBuilder()
-                .forPackage(rootPackage)
-                .filterInputsBy(s -> {
-                    if (s == null) return false;
-                    if (s.startsWith("META-INF")) return false;
-                    if (!s.endsWith(".class")) return false;
-
-                    // First check: Only include classes that are under the root package
-                    if (!s.startsWith(rootPackagePath + "/") && !s.equals(rootPackagePath + ".class")) {
-                        return false;
-                    }
-
-                    // Check ignored packages (must match the path format)
-                    for (String ignoredPackage : ignoredPackages) {
-                        String ignoredPath = ignoredPackage.replace('.', '/');
-                        if (s.startsWith(ignoredPath)) {
-                            return false;
-                        }
-                    }
-
-                    // Check included packages (override ignored packages)
-                    for (String includedPackage : includedPackages) {
-                        String includedPath = includedPackage.replace('.', '/');
-                        if (s.startsWith(includedPath)) {
-                            return true;
-                        }
-                    }
-
-                    // Default: include if under root package (already checked above)
-                    return true;
-                });
-
-        //Find all classes which annotated as Service
-        Reflections reflections = new Reflections(configuration);
-
-        //Get all entities first so we can initialize the database before components
+        // Get all entities first so we can initialize the database before components
         if (database != null) {
-            entities.addAll(reflections.getTypesAnnotatedWith(Entity.class));
+            entities.addAll(scanner.getTypesAnnotatedWith(Entity.class));
         }
 
-        //Load YAML configuration classes so components/services can depend on them
-        //We collect only classes that can be loaded (respect DependsOn)
-        Set<Class<?>> yamlConfigClasses = reflections.getTypesAnnotatedWith(YamlConfiguration.class)
-                .stream().filter(this::canLoadClass).collect(Collectors.toSet());
+        // Load YAML configuration classes so components/services can depend on them
+        // We collect only classes that can be loaded (respect DependsOn)
+        Set<Class<?>> yamlConfigClasses = scanner.scanAndFilter(YamlConfiguration.class, this::canLoadClass);
+        Set<Class<?>> yamlDirectoryClasses = scanner.scanAndFilter((Class<? extends Annotation>) YamlDirectory.class, this::canLoadClass);
+
         final ConfigurationContainer configurationContainer;
-        if (!yamlConfigClasses.isEmpty()) {
+        if (!yamlConfigClasses.isEmpty() || !yamlDirectoryClasses.isEmpty()) {
             // Create the configuration container and register configs into this dependency container
             configurationContainer = new ConfigurationContainer(this, yamlConfigClasses);
         } else {
@@ -184,22 +132,13 @@ public class DependencyContainer implements DependencyRepository {
             this.dependencies.put(ConfigurationContainer.class, configurationContainer);
         }
 
-        annotationHandlerRegistry.getHandlers(RegistryOrder.ENTITIES).forEach(annotationHandler -> {
-            Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
-            reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
-                if (!canLoadClass(aClass)) {
-                    return;
-                }
-                annotationHandler.handle(aClass, dependencies.get(aClass), this);
-            });
-        });
+        processAnnotationHandlers(RegistryOrder.ENTITIES, scanner);
 
         // Auto-register RegisterDatabaseSerializer implementations FIRST
         // This must happen before repository registration because RepositoryInvocationHandler
         // creates EntityMetadata in its constructor, which needs serializers to be registered
         if (database != null) {
-            reflections.getTypesAnnotatedWith(RegisterDatabaseSerializer.class).forEach(serializerClass -> {
-                if (!canLoadClass(serializerClass)) return;
+            scanner.scanAndFilter(RegisterDatabaseSerializer.class, this::canLoadClass).forEach(serializerClass -> {
                 try {
                     RegisterDatabaseSerializer annotation = serializerClass.getAnnotation(RegisterDatabaseSerializer.class);
                     if (annotation == null) {
@@ -217,10 +156,7 @@ public class DependencyContainer implements DependencyRepository {
         }
         
         // Register Repositories (after serializers are registered)
-        reflections.getTypesAnnotatedWith(Repository.class).forEach(repositoryClass -> {
-            if (!canLoadClass(repositoryClass)) {
-                return;
-            }
+        scanner.scanAndFilter(Repository.class, this::canLoadClass).forEach(repositoryClass -> {
             // Check if the class implements CrudRepository
             if (!ReflectionUtils.getAllSuperTypes(repositoryClass).contains(CrudRepository.class)) {
                 throw new RuntimeException("Class: " + repositoryClass.getName()
@@ -228,12 +164,12 @@ public class DependencyContainer implements DependencyRepository {
             }
 
             // Find the generic type argument of CrudRepository
-            Class<?> entityClass = getGenericTypeFromCrudRepository(repositoryClass);
+            Class<?> entityClass = DependencyUtils.getGenericTypeFromCrudRepository(repositoryClass);
             if (entityClass == null) {
                 throw new RuntimeException("Unable to determine generic type for CrudRepository in class: " + repositoryClass.getName());
             }
 
-            registerEventListeners(repositoryClass);
+            eventManager.registerEventListeners(repositoryClass);
 
             // Register the repository and its entity type
             RepositoryInvocationHandler<?, ?> proxy = repositoryContainer.registerRepository(repositoryClass, entityClass, this);
@@ -251,61 +187,14 @@ public class DependencyContainer implements DependencyRepository {
         }
 
         //Collect all Registry annotations
-        reflections.getTypesAnnotatedWith(Registry.class).forEach(aClass -> {
-            //Check if extends AnnotationHandler class
-            if (aClass.getSuperclass().equals(AnnotationHandler.class)) {
-                AnnotationHandler instance = (AnnotationHandler) newInstance(aClass);
-                Class<? extends Annotation> annotation = getAnnotationFromHandler(instance);
-                if (annotation == null) {
-                    throw new RuntimeException("Annotation not found for class: " + aClass + ". Make sure to return a valid annotation in getAnnotation method");
-                }
-
-                registerEventListeners(aClass);
-
-                annotationHandlerRegistry.registerHandler(annotation, instance);
-            } else {
-                throw new RuntimeException("Class: " + aClass.getName() + " annotated with @Registry does not extend AnnotationHandler");
-            }
-        });
+        registerHandlers(scanner);
 
         //Collect all ArgumentResolver annotations
-        reflections.getTypesAnnotatedWith(ArgumentResolver.class).forEach(aClass -> {
-            //Check if implements ArgumentResolverProcessor interface
-            if (ArgumentResolverProcessor.class.isAssignableFrom(aClass)) {
-                try {
-                    ArgumentResolverProcessor instance = (ArgumentResolverProcessor) newInstance(aClass);
-                    ArgumentResolver annotation = aClass.getAnnotation(ArgumentResolver.class);
-                    if (annotation == null) {
-                        throw new RuntimeException("Annotation not found for class: " + aClass.getName());
-                    }
-
-                    int priority = annotation.priority();
-                    registerEventListeners(aClass);
-
-                    // Handle multiple annotations via values(), or single annotation via value()
-                    Class<? extends Annotation>[] values = annotation.values();
-                    if (values != null && values.length > 0) {
-                        // Register for each annotation in values()
-                        for (Class<? extends Annotation> supportedAnnotation : values) {
-                            argumentResolverRegistry.registerResolver(supportedAnnotation, instance, priority);
-                        }
-                    } else {
-                        // Use single value() (required field)
-                        Class<? extends Annotation> supportedAnnotation = annotation.value();
-                        argumentResolverRegistry.registerResolver(supportedAnnotation, instance, priority);
-                    }
-                } catch (Exception e) {
-                    throw new RuntimeException("Unable to register ArgumentResolverProcessor: " + aClass.getName(), e);
-                }
-            } else {
-                throw new RuntimeException("Class: " + aClass.getName() + " annotated with @ArgumentResolver does not implement ArgumentResolverProcessor");
-            }
-        });
+        registerArgumentResolvers(scanner);
 
         // Auto-register YamlSerializerBase implementations into the configuration container
         if (configurationContainer != null) {
-            reflections.getTypesAnnotatedWith(YamlSerializer.class).forEach(serializerClass -> {
-                if (!canLoadClass(serializerClass)) return;
+            scanner.scanAndFilter(YamlSerializer.class, this::canLoadClass).forEach(serializerClass -> {
                 try {
                     Object instance = newInstance(serializerClass);
                     if (instance instanceof YamlSerializerBase<?> ys) {
@@ -323,304 +212,63 @@ public class DependencyContainer implements DependencyRepository {
             }
         }
 
-        annotationHandlerRegistry.getHandlers(RegistryOrder.FIRST).forEach(annotationHandler -> {
-            Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
-            reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
-                if (!canLoadClass(aClass)) {
-                    return;
-                }
-                annotationHandler.handle(aClass, dependencies.get(aClass), this);
-            });
-        });
+        processAnnotationHandlers(RegistryOrder.FIRST, scanner);
 
         //Register Beans and Services
-        reflections.getTypesAnnotatedWith(Service.class).forEach(serviceClass -> {
-            if (!canLoadClass(serviceClass)) {
-                return;
-            }
-            registerEventListeners(serviceClass);
+        scanner.scanAndFilter(Service.class, this::canLoadClass).forEach(serviceClass -> {
+            eventManager.registerEventListeners(serviceClass);
             registerBeans(serviceClass);
         });
 
-        annotationHandlerRegistry.getHandlers(RegistryOrder.SERVICES).forEach(annotationHandler -> {
-            Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
-            reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
-                if (!canLoadClass(aClass)) {
-                    return;
-                }
-                annotationHandler.handle(aClass, dependencies.get(aClass), this);
-            });
-        });
+        processAnnotationHandlers(RegistryOrder.SERVICES, scanner);
 
-        annotationHandlerRegistry.getHandlers(RegistryOrder.REPOSITORIES).forEach(annotationHandler -> {
-            Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
-            reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
-                if (!canLoadClass(aClass)) {
-                    return;
-                }
-                annotationHandler.handle(aClass, dependencies.get(aClass), this);
-            });
-        });
+        processAnnotationHandlers(RegistryOrder.REPOSITORIES, scanner);
 
         //Register Components
         //Need to create a loading order to avoid circular dependencies and inject issues
-        Set<Class<?>> allComponents = reflections.getTypesAnnotatedWith(Component.class);
+        Set<Class<?>> allComponents = scanner.getTypesAnnotatedWith(Component.class);
         Set<Class<?>> loadableComponents = allComponents.stream().filter(this::canLoadClass).collect(Collectors.toSet());
-        createLoadingOrder(loadableComponents).stream().sorted(Comparator.comparingInt(value -> {
+        dependencyGraphResolver.createLoadingOrder(loadableComponents).stream().sorted(Comparator.comparingInt(value -> {
             Component component = value.getAnnotation(Component.class);
             if (component != null) {
                 return component.priority();
             }
             return 10;
         })).forEach(componentClass -> {
-            registerEventListeners(componentClass);
+            eventManager.registerEventListeners(componentClass);
             registerComponent(componentClass);
         });
 
-        annotationHandlerRegistry.getHandlers(RegistryOrder.COMPONENTS).forEach(annotationHandler -> {
-            Class<? extends Annotation> find = getAnnotationFromHandler(annotationHandler);
-            reflections.getTypesAnnotatedWith(find).forEach(aClass -> {
-                if (!canLoadClass(aClass)) {
-                    return;
-                }
-                annotationHandler.handle(aClass, dependencies.get(aClass), this);
-            });
-        });
+        processAnnotationHandlers(RegistryOrder.COMPONENTS, scanner);
+
+        // Fully inject the root instance after all dependencies are ready
+        injectionEngine.inject(rootInstance);
 
         // Scan for @OnDestroy methods (including root instance)
-        scanDestroyMethods();
-    }
-
-    @Override
-    public void emitEvent(@NotNull String eventName) {
-        List<Method> listeners = eventListeners.get(eventName);
-        if (listeners == null || listeners.isEmpty()) {
-            return; // No listeners for this event
-        }
-        for (Method listenerMethod : listeners) {
-            try {
-                Object instance = dependencies.get(listenerMethod.getDeclaringClass());
-                listenerMethod.setAccessible(true);
-
-                //If it has no parameters, invoke it directly
-                if (listenerMethod.getParameterCount() == 0) {
-                    listenerMethod.invoke(instance);
-                    continue;
-                }
-
-                //else check if we have all the types in the dependency container to invoke it, event listener methods only should have dependencies that are already registered
-                Class<?>[] parameterTypes = listenerMethod.getParameterTypes();
-                Object[] parameters = new Object[parameterTypes.length];
-                for (int i = 0; i < parameterTypes.length; i++) {
-                    Object dependency = dependencies.get(parameterTypes[i]);
-                    if (dependency == null) {
-                        System.err.println("Dependency not found for event listener method: " + listenerMethod.getName() + " with parameter type: " + parameterTypes[i].getName());
-                        continue;
-                    }
-                    parameters[i] = dependency;
-                }
-                listenerMethod.invoke(instance, parameters);
-            } catch (Exception e) {
-                System.err.println("Error invoking event listener: " + listenerMethod.getName() + " for event: " + eventName);
-                e.printStackTrace();
-            }
-        }
-    }
-
-    private void registerEventListeners(Class<?> clazz) {
-        for (Method method : clazz.getDeclaredMethods()) {
-            if (method.isAnnotationPresent(OnEvent.class)) {
-                //We either has a String value or a string array value with the event names
-                OnEvent onEvent = method.getAnnotation(OnEvent.class);
-                String[] values = onEvent.value();
-
-                if (values != null) {
-                    //Register the method for each event in the array
-                    for (String event : values) {
-                        if (event.isEmpty()) {
-                            System.err.println("Event name is empty in method: " + method.getName() + " in class: " + clazz.getName() + ". Skipping registration.");
-                            continue;
-                        }
-                        eventListeners.computeIfAbsent(event, k -> new ArrayList<>()).add(method);
-                    }
-                }
-            }
-        }
+        lifecycleManager.scanDestroyMethods();
     }
 
     /**
-     * Scan all components in the dependency container for @OnDestroy annotated methods.
-     * This includes all components, services, beans, and the root instance.
-     */
-    private void scanDestroyMethods() {
-        destroyMethods.clear();
-
-        // FIRST: Always scan root class immediately, before scanning other components
-        // This ensures the root class is scanned even if something goes wrong later
-        if (rootClass != null) {
-            // Get the root instance from dependencies map (it should be there)
-            Object rootInstanceToScan = dependencies.get(rootClass);
-            if (rootInstanceToScan == null && rootInstance != null) {
-                rootInstanceToScan = rootInstance;
-            }
-        }
-
-        // Then scan all other registered components for @OnDestroy methods
-        for (Map.Entry<Class<?>, Object> entry : dependencies.entrySet()) {
-            Class<?> componentClass = entry.getKey();
-            Object componentInstance = entry.getValue();
-
-            // Skip if instance is null
-            if (componentInstance == null) {
-                continue;
-            }
-
-            // Find all methods annotated with @OnDestroy
-            scanDestroyMethodsForClassOnly(componentClass);
-        }
-    }
-
-    /**
-     * Scan a class for @OnDestroy methods without requiring an instance.
-     * Used when we need to scan the root class but instance might not exist yet.
+     * Get all registered entity classes.
      *
-     * @param clazz The class to scan
+     * @return Set of entity classes
      */
-    private void scanDestroyMethodsForClassOnly(Class<?> clazz) {
-        if (clazz == null) {
-            return;
-        }
-
-        // Find all methods annotated with @OnDestroy
-        // Check both declared methods and all methods (to catch inherited ones)
-        List<Method> methods = new ArrayList<>();
-        methods.addAll(Arrays.asList(clazz.getMethods())); // Gets public methods including inherited
-        methods.addAll(Arrays.asList(clazz.getDeclaredMethods())); // Gets all methods declared in this class
-
-        // First check declared methods
-        for (Method method : methods) {
-            if (method.isAnnotationPresent(OnDestroy.class)) {
-                // Check if this method is already in the list (avoid duplicates)
-                boolean alreadyAdded = destroyMethods.stream().anyMatch(m -> m.getDeclaringClass().equals(method.getDeclaringClass()) && m.getName().equals(method.getName()));
-                if (alreadyAdded) {
-                    continue;
-                }
-
-                // Validate method signature: should have no parameters and return void
-                if (method.getParameterCount() != 0) {
-                    System.err.println("Warning: @OnDestroy method " + method.getName() +
-                            " in class " + clazz.getName() +
-                            " has parameters. It should have no parameters.");
-                    continue;
-                }
-                if (!method.getReturnType().equals(void.class) && !method.getReturnType().equals(Void.class)) {
-                    System.err.println("Warning: @OnDestroy method " + method.getName() +
-                            " in class " + clazz.getName() +
-                            " does not return void. It should return void.");
-                    continue;
-                }
-
-                method.setAccessible(true);
-                destroyMethods.add(method);
-            }
-        }
+    public Set<Class<?>> getAllEntities() {
+        return Collections.unmodifiableSet(entities);
     }
 
     /**
-     * Invoke all methods annotated with @OnDestroy on their respective component instances.
+     * Release all resources held by the dependency container.
+     * Invokes any @OnDestroy methods before clearing dependencies.
      */
-    public void invokeDestroyMethods() {
-        // If no destroy methods were found during startup scanning, try scanning again
-        // This is a fallback in case scanning didn't happen or was incomplete
-        if (destroyMethods.isEmpty()) {
-            // Re-scan, especially the root class
-            if (rootClass != null) {
-                scanDestroyMethodsForClassOnly(rootClass);
-            }
-
-            // Also try to get root instance from dependencies and scan it
-            if (rootClass != null) {
-                Object rootInst = dependencies.get(rootClass);
-                if (rootInst != null) {
-                    scanDestroyMethodsForClassOnly(rootClass);
-                }
-            }
-        }
-
-        if (destroyMethods.isEmpty()) {
-            return;
-        }
-
-        // Invoke destroy methods in reverse order (LIFO - last created, first destroyed)
-        for (int i = destroyMethods.size() - 1; i >= 0; i--) {
-            Method method = destroyMethods.get(i);
-            Class<?> componentClass = method.getDeclaringClass();
-            Object componentInstance = dependencies.get(componentClass);
-
-            if (componentInstance == null) {
-                // Try to find the instance by checking registered subclasses
-                componentInstance = findComponentInstance(componentClass);
-            }
-
-            // If still not found, check if it's the root instance
-            if (componentInstance == null && rootInstance != null && rootClass != null) {
-                if (componentClass.equals(rootClass) || rootClass.isAssignableFrom(componentClass)) {
-                    componentInstance = rootInstance;
-                }
-            }
-
-            if (componentInstance != null) {
-                try {
-                    method.invoke(componentInstance);
-                } catch (Exception e) {
-                    System.err.println("Error invoking @OnDestroy method " + method.getName() +
-                            " on " + componentClass.getName() + ": " + e.getMessage());
-                    e.printStackTrace();
-                }
-            } else {
-                System.err.println("Warning: Could not find instance for component " +
-                        componentClass.getName() + " to invoke @OnDestroy method " + method.getName());
-            }
-        }
-    }
-
-    /**
-     * Find component instance by checking if any registered component implements or extends the given class.
-     */
-    private Object findComponentInstance(Class<?> targetClass) {
-        for (Map.Entry<Class<?>, Object> entry : dependencies.entrySet()) {
-            Class<?> componentClass = entry.getKey();
-            if (targetClass.isAssignableFrom(componentClass)) {
-                return entry.getValue();
-            }
-        }
-        return null;
-    }
-
-    // Clear and set to null everything
     public void release() {
+        // Call any OnDestroy methods before clearing
+        lifecycleManager.invokeDestroyMethods();
         dependencies.clear();
         entities.clear();
         annotationHandlerRegistry = null;
-    }
-
-    private Class<? extends Annotation> getAnnotationFromHandler(AnnotationHandler handler) {
-        //get the @Registry annotation from the handler and get the annotation
-        Registry annotation = handler.getClass().getAnnotation(Registry.class);
-        return annotation.annotation();
-    }
-
-    /**
-     * Register built-in argument resolvers (@Value and @Inject).
-     */
-    private void registerBuiltInResolvers() {
-        // Register @Value resolver with priority 100 (highest)
-        ValueArgumentResolver valueResolver = new ValueArgumentResolver();
-        argumentResolverRegistry.registerResolver(Value.class, valueResolver, 100);
-
-        // Register @Inject resolver with priority 50
-        InjectArgumentResolver injectResolver = new InjectArgumentResolver();
-        argumentResolverRegistry.registerResolver(Inject.class, injectResolver, 50);
+        eventManager.clear();
+        lifecycleManager.clear();
     }
 
     /**
@@ -631,452 +279,133 @@ public class DependencyContainer implements DependencyRepository {
      * @return The resolved value, or null if no resolver handled it
      */
     @Nullable
-    private Object resolveArgument(ArgumentResolverContext context) {
+    public Object resolveArgument(ArgumentResolverContext context) {
         // Try all resolvers in priority order
         for (ArgumentResolverProcessor resolver : argumentResolverRegistry.getAllResolvers()) {
             if (resolver.canResolve(context)) {
-                Object value = resolver.resolve(context);
-                if (value != null) {
-                    return value;
-                }
+                return resolver.resolve(context);
             }
         }
         return null;
-    }
-
-    private void injectRoot(Object rootInstance) {
-        //Find field with the same class as the root class and inject it
-        for (Field field : rootInstance.getClass().getDeclaredFields()) {
-            if (field.getType().equals(rootClass) && field.isAnnotationPresent(Inject.class)) {
-                if (Modifier.isStatic(field.getModifiers())) {
-                    unsafe.putObject(rootInstance, unsafe.staticFieldOffset(field), rootInstance);
-                } else {
-                    unsafe.putObject(rootInstance, unsafe.objectFieldOffset(field), rootInstance);
-                }
-            }
-        }
-    }
-
-    public Object mapEntity(Object entityInstance, Map<String, Object> resultSet) {
-        try {
-            for (Field field : entityInstance.getClass().getDeclaredFields()) {
-                unsafe.putObject(entityInstance, unsafe.objectFieldOffset(field), resultSet.get(field.getName()));
-            }
-            return entityInstance;
-        } catch (Exception e) {
-            throw new RuntimeException("Unable to map entity", e);
-        }
-    }
-
-    private Class<?> getGenericTypeFromCrudRepository(Class<?> repositoryClass) {
-        // Iterate over all implemented interfaces
-        for (Type genericInterface : repositoryClass.getGenericInterfaces()) {
-            // Check if the interface is parameterized and extends CrudRepository
-            if (genericInterface instanceof ParameterizedType parameterizedType) {
-                Type rawType = parameterizedType.getRawType();
-                if (rawType instanceof Class<?> rawClass && CrudRepository.class.isAssignableFrom(rawClass)) {
-                    // Extract the first generic type argument (e.g., User)
-                    Type entityType = parameterizedType.getActualTypeArguments()[0];
-                    if (entityType instanceof Class<?> entityClass) {
-                        return entityClass; // Return the entity class (e.g., User)
-                    }
-                }
-            }
-        }
-        // Recurse up the class hierarchy if no match is found
-        if (repositoryClass.getSuperclass() != null) {
-            return getGenericTypeFromCrudRepository(repositoryClass.getSuperclass());
-        }
-        return null; // Return null if no generic type is found
-    }
-
-    private LinkedList<Class<?>> createLoadingOrder(Set<Class<?>> components) {
-        // Build the dependency graph
-        Map<Class<?>, Set<Class<?>>> dependencyGraph = new HashMap<>();
-        List<Class<?>> provided = new ArrayList<>();
-        for (Class<?> component : components) {
-            Set<Class<?>> dependencies = new HashSet<>();
-
-            // Check constructor parameters
-            if (!hasDefaultConstructor(component)) {
-                //Need to add parameter types to the dependencies, only one constructor is supported
-                Class<?>[] parameterTypes = component.getDeclaredConstructors()[0].getParameterTypes();
-                for (Class<?> parameter : parameterTypes) {
-
-                    // Skip if it is provided by a Bean
-                    if (this.dependencies.containsKey(parameter)) {
-                        continue;
-                    }
-
-                    //Check if a parameter is a component, service or root class
-                    if (parameter.isAnnotationPresent(Component.class)
-                            || parameter.isAnnotationPresent(Service.class)
-                            || parameter.equals(this.rootClass)
-                            || parameter.isAnnotationPresent(Repository.class)
-                    ) {
-                        if (components.contains(parameter)) {
-                            dependencies.add(parameter);
-                        } else {
-                            Class<?> providingClass = getProvidingClass(components, parameter);
-                            if (providingClass != null) {
-                                dependencies.add(providingClass);
-                                provided.add(providingClass);
-                            }
-                        }
-                    } else {
-                        // If the parameter type does not have a component annotation in its class declaration, something is providing it, skip it
-                        Class<?> providingClass = getProvidingClass(components, parameter);
-                        if (providingClass != null) {
-                            dependencies.add(providingClass);
-                            provided.add(providingClass);
-                            continue;
-                        } else {
-                            // Leave unresolved to be handled at injection time
-                        }
-                    }
-                }
-            }
-
-            // Check @Inject annotated fields
-            for (Field field : component.getDeclaredFields()) {
-                if (field.isAnnotationPresent(Inject.class)) {
-                    Class<?> fieldType = field.getType();
-
-                    //Skip Bean provided classes
-                    if (this.dependencies.containsKey(fieldType)) {
-                        continue;
-                    }
-
-                    // Skip fields annotated as Services since they are preloaded
-                    // Skip plugin main class, it will always present in the container when component injection is performed
-                    if (!fieldType.isAnnotationPresent(Service.class) && !fieldType.equals(this.rootClass) && !fieldType.isAnnotationPresent(Repository.class)) {
-                        //if the field type does not have a component annotation in its class declaration, something is providing it, skip it
-                        if (!fieldType.isAnnotationPresent(Component.class) || fieldType.isInterface()) {
-                            Class<?> providingClass = getProvidingClass(components, fieldType);
-                            if (providingClass != null) {
-                                dependencies.add(providingClass);
-                                provided.add(providingClass);
-                                continue;
-                            } else {
-                                // leave unresolved to be handled at injection time
-                            }
-                        }
-                        if (components.contains(fieldType)) {
-                            dependencies.add(fieldType);
-                        } else {
-                            Class<?> providingClass = getProvidingClass(components, fieldType);
-                            if (providingClass != null) {
-                                dependencies.add(providingClass);
-                                provided.add(providingClass);
-                            }
-                        }
-                    }
-                }
-            }
-
-            dependencyGraph.put(component, dependencies);
-        }
-        // Perform topological sort
-        return performTopologicalSort(dependencyGraph);
-    }
-
-    private Class<?> getProvidingClass(Set<Class<?>> components, Class<?> searchedClass) {
-        for (Class<?> clazz : components) {
-            Component component = clazz.getAnnotation(Component.class);
-            if (component != null) {
-                for (Class<?> providingClass : component.registerSubclasses()) {
-                    if (providingClass.equals(searchedClass)) {
-                        return clazz;
-                    }
-                }
-            }
-            Bean bean = clazz.getAnnotation(Bean.class);
-            if (bean != null) {
-                for (Class<?> providingClass : bean.registerSubclasses()) {
-                    if (providingClass.equals(searchedClass)) {
-                        return clazz;
-                    }
-                }
-            }
-        }
-        return null;
-    }
-
-    private LinkedList<Class<?>> performTopologicalSort(Map<Class<?>, Set<Class<?>>> dependencyGraph) {
-        LinkedList<Class<?>> sortedComponents = new LinkedList<>();
-        Set<Class<?>> visited = new HashSet<>();
-        Set<Class<?>> visiting = new HashSet<>();
-
-        for (Class<?> component : dependencyGraph.keySet()) {
-            if (!visited.contains(component)) {
-                performTopologicalSort(component, dependencyGraph, visited, visiting, sortedComponents);
-            }
-        }
-
-        return sortedComponents;
-    }
-
-    private void performTopologicalSort(Class<?> component,
-                                        Map<Class<?>, Set<Class<?>>> graph,
-                                        Set<Class<?>> visited,
-                                        Set<Class<?>> visiting,
-                                        LinkedList<Class<?>> sortedComponents) {
-        if (visiting.contains(component)) {
-            throw new RuntimeException("Circular dependency detected involving: " + component.getName());
-        }
-
-        if (!visited.contains(component)) {
-            visiting.add(component);
-
-            for (Class<?> dependency : graph.getOrDefault(component, Collections.emptySet())) {
-                performTopologicalSort(dependency, graph, visited, visiting, sortedComponents);
-            }
-
-            visiting.remove(component);
-            visited.add(component);
-            // Change made here: Add to the end instead of the front
-            sortedComponents.addLast(component);
-        }
     }
 
     public <T> T newInstance(Class<T> clazz) {
-        Object component = dependencies.get(clazz);
-        if (component != null && !clazz.isAnnotationPresent(Entity.class)) {
-            return (T) component;
+        return newInstance(clazz, !clazz.isAnnotationPresent(Entity.class));
+    }
+
+    public <T> T newInstance(Class<T> clazz, boolean cache) {
+        if (cache) {
+            Object component = dependencies.get(clazz);
+            if (component != null) {
+                return clazz.cast(component);
+            }
         }
+        
+        // Check if we're already creating this class (circular dependency)
+        Set<Class<?>> creating = currentlyCreating.get();
+        if (creating.contains(clazz)) {
+            // Circular dependency detected - this is only allowed for field injection
+            throw new RuntimeException(
+                "Circular dependency detected for class: " + clazz.getName() + 
+                "\nCircular dependencies are only supported with field injection (@Inject on fields)." +
+                "\nConstructor injection cannot handle circular dependencies because the instance must be fully created before it can be injected." +
+                "\n\nTo resolve this issue, use field injection instead of constructor parameters."
+            );
+        }
+        
         try {
-            //Check if we need to inject dependencies into the constructor
-            if (!hasDefaultConstructor(clazz)) {
+            creating.add(clazz);
+            T instance;
+            
+            if (!DependencyUtils.hasDefaultConstructor(clazz)) {
                 Constructor<?> constructor = clazz.getDeclaredConstructors()[0];
-                Class<?>[] parameterTypes = constructor.getParameterTypes();
-                Annotation[][] parameterAnnotations = constructor.getParameterAnnotations();
-                Object[] parameters = new Object[parameterTypes.length];
-                for (int i = 0; i < parameterTypes.length; i++) {
-                    // Try resolver system first
-                    Parameter parameter = constructor.getParameters()[i];
-                    ArgumentResolverContext context = new ArgumentResolverContext.Builder()
-                            .targetType(parameterTypes[i])
-                            .annotations(parameterAnnotations[i])
-                            .parameter(parameter)
-                            .declaringClass(clazz)
-                            .constructor(constructor)
-                            .container(this)
-                            .instance(null) // Constructor doesn't have instance yet
-                            .build();
-
-                    Object resolvedValue = resolveArgument(context);
-                    if (resolvedValue != null) {
-                        parameters[i] = resolvedValue;
-                        continue;
-                    }
-
-                    // Fallback to existing logic for backward compatibility (only for @Value if resolver didn't handle it)
-                    // Note: @Inject is now fully handled by InjectArgumentResolver
-                    Value valueAnnotation = findAnnotation(parameterAnnotations[i], Value.class);
-                    if (valueAnnotation != null) {
-                        parameters[i] = resolveValue(valueAnnotation.value(), parameterTypes[i]);
-                        continue;
-                    }
-
-                    // If no resolver handled it and it's not @Value, throw an error
-                    throw new RuntimeException("Unable to resolve constructor parameter: " + parameterTypes[i].getName() + " in class: " + clazz.getName() + ". Use @Inject, @Value, or @OptionalDependency annotation.");
-                }
-                injectStatic(clazz);
-                T instance = (T) clazz.getDeclaredConstructors()[0].newInstance(parameters);
-                inject(instance);
-
-                if (clazz.isAnnotationPresent(Component.class)) {
-                    Component componentAnnotation = clazz.getAnnotation(Component.class);
-                    for (Class<?> subclass : componentAnnotation.registerSubclasses()) {
-                        dependencies.put(subclass, instance);
-                    }
-                }
-
-                //Register the instance in the dependency container
-                dependencies.put(clazz, instance);
-
-                // Invoke post construct after the instance is registered
-                invokePostConstruct(instance);
-                return instance;
+                Object[] parameters = resolveParameters(clazz, constructor, null);
+                
+                injectionEngine.injectStatic(clazz);
+                instance = clazz.cast(constructor.newInstance(parameters));
+            } else {
+                Constructor<T> constructor = clazz.getDeclaredConstructor();
+                constructor.setAccessible(true);
+                injectionEngine.injectStatic(clazz);
+                instance = constructor.newInstance();
             }
-            Constructor<T> constructor = clazz.getDeclaredConstructor();
-            constructor.setAccessible(true);
-            injectStatic(clazz);
-            T instance = constructor.newInstance();
-            inject(instance);
 
-            //Register the instance in the dependency container
-            dependencies.put(clazz, instance);
+            // Register the instance in the dependency container BEFORE injecting fields
+            Class<?>[] subclasses = {};
             if (clazz.isAnnotationPresent(Component.class)) {
-                Component componentAnnotation = clazz.getAnnotation(Component.class);
-                for (Class<?> subclass : componentAnnotation.registerSubclasses()) {
-                    dependencies.put(subclass, instance);
-                }
+                subclasses = clazz.getAnnotation(Component.class).registerSubclasses();
             }
-
-            // Invoke post construct after the instance is registered
-            invokePostConstruct(instance);
+            registerInstanceAndSubclasses(clazz, instance, subclasses, cache);
+            
+            // Inject fields
+            injectionEngine.inject(instance);
+            
+            // Invoke post construct after all dependencies are injected
+            lifecycleManager.invokePostConstruct(instance);
             return instance;
         } catch (Exception e) {
+            if (e instanceof RuntimeException re) throw re;
             throw new RuntimeException("Unable to create new instance of class: " + clazz.getName(), e);
+        } finally {
+            creating.remove(clazz);
         }
     }
 
-    private boolean hasDefaultConstructor(Class<?> clazz) {
-        try {
-            clazz.getDeclaredConstructor();
-            return true;
-        } catch (NoSuchMethodException e) {
-            return false;
+    private void registerInstanceAndSubclasses(Class<?> clazz, Object instance, Class<?>[] subclasses, boolean cache) {
+        if (!cache) return;
+        dependencies.put(clazz, instance);
+        for (Class<?> subclass : subclasses) {
+            dependencies.put(subclass, instance);
         }
+    }
+
+    private Object[] resolveParameters(Class<?> declaringClass, Executable executable, @Nullable Object instance) {
+        Parameter[] parameters = executable.getParameters();
+        Annotation[][] annotations = executable.getParameterAnnotations();
+        Object[] resolvedValues = new Object[parameters.length];
+        
+        for (int i = 0; i < parameters.length; i++) {
+            ArgumentResolverContext.Builder builder = new ArgumentResolverContext.Builder()
+                    .targetType(parameters[i].getType())
+                    .annotations(annotations[i])
+                    .parameter(parameters[i])
+                    .declaringClass(declaringClass)
+                    .container(this)
+                    .instance(instance);
+            
+            if (executable instanceof Method m) {
+                builder.method(m);
+            } else if (executable instanceof Constructor<?> c) {
+                builder.constructor(c);
+            }
+
+            Object resolvedValue = resolveArgument(builder.build());
+            
+            // Fallback for @Value if not handled by resolver
+            if (resolvedValue == null) {
+                Value valueAnnotation = DependencyUtils.findAnnotation(annotations[i], Value.class);
+                if (valueAnnotation != null) {
+                    resolvedValue = injectionEngine.resolveValue(valueAnnotation.value(), parameters[i].getType());
+                }
+            }
+
+            if (resolvedValue == null && DependencyUtils.findAnnotation(annotations[i], OptionalDependency.class) != null) {
+                String type = (executable instanceof Constructor) ? "constructor parameter" : "@Bean method parameter";
+                String source = (executable instanceof Method m) ? " in method: " + m.getName() : "";
+                throw new RuntimeException("Unable to resolve " + type + ": " + parameters[i].getType().getName() +
+                        source + " in class: " + declaringClass.getName() +
+                        ". Use @Inject, @Value, or @OptionalDependency annotation.");
+            }
+            resolvedValues[i] = resolvedValue;
+        }
+        return resolvedValues;
     }
 
     /**
-     * Invoke all methods annotated with @PostConstruct on the given instance.
-     * PostConstruct methods are called after constructor execution and dependency injection.
-     * Supports dependency injection for method parameters via @Inject or @Value annotations.
-     *
-     * @param instance The instance to invoke PostConstruct methods on
+     * Bridge method for LifecycleManager to resolve arguments for methods.
      */
-    public void invokePostConstruct(Object instance) {
-        if (instance == null) {
-            return;
-        }
-
-        Class<?> clazz = instance.getClass();
-        for (Method method : clazz.getDeclaredMethods()) {
-            if (method.isAnnotationPresent(PostConstruct.class)) {
-                // Validate return type: should return void
-                if (!method.getReturnType().equals(void.class) && !method.getReturnType().equals(Void.class)) {
-                    System.err.println("Warning: @PostConstruct method " + method.getName() +
-                            " in class " + clazz.getName() +
-                            " does not return void. It should return void.");
-                    continue;
-                }
-
-                try {
-                    method.setAccessible(true);
-
-                    // Resolve method parameters with dependency injection support
-                    Class<?>[] parameterTypes = method.getParameterTypes();
-                    Annotation[][] parameterAnnotations = method.getParameterAnnotations();
-                    Object[] parameters = new Object[parameterTypes.length];
-
-                    for (int i = 0; i < parameterTypes.length; i++) {
-                        // Try resolver system first
-                        Parameter parameter = method.getParameters()[i];
-                        ArgumentResolverContext context = new ArgumentResolverContext.Builder()
-                                .targetType(parameterTypes[i])
-                                .annotations(parameterAnnotations[i])
-                                .parameter(parameter)
-                                .declaringClass(clazz)
-                                .method(method)
-                                .container(this)
-                                .instance(instance)
-                                .build();
-
-                        Object resolvedValue = resolveArgument(context);
-                        if (resolvedValue != null) {
-                            parameters[i] = resolvedValue;
-                            continue;
-                        }
-
-                        // Fallback to existing logic for backward compatibility (only for @Value if resolver didn't handle it)
-                        // Note: @Inject is now fully handled by InjectArgumentResolver
-                        Value valueAnnotation = findAnnotation(parameterAnnotations[i], Value.class);
-                        if (valueAnnotation != null) {
-                            parameters[i] = resolveValue(valueAnnotation.value(), parameterTypes[i]);
-                            continue;
-                        }
-
-                        // If no resolver handled it and it's not @Value, throw an error
-                        throw new RuntimeException("@PostConstruct method " + method.getName() +
-                                " in class " + clazz.getName() +
-                                " has parameter " + parameterTypes[i].getName() +
-                                " that cannot be injected. Use @Inject or @Value annotation, or mark with @OptionalDependency.");
-                    }
-
-                    // Invoke the method with resolved parameters
-                    method.invoke(instance, parameters);
-                } catch (Exception e) {
-                    throw new RuntimeException("Error invoking @PostConstruct method " + method.getName() + " on " + clazz.getName(), e);
-                }
-            }
-        }
-    }
-
-    /**
-     * Invoke all methods annotated with @OnLoad on the given entity instance.
-     * OnLoad methods are called after all fields have been loaded from the database.
-     * Supports dependency injection for method parameters via @Inject or @Value annotations.
-     *
-     * @param instance The entity instance to invoke OnLoad methods on
-     */
-    public void invokeOnLoad(Object instance) {
-        if (instance == null) {
-            return;
-        }
-
-        Class<?> clazz = instance.getClass();
-        for (Method method : clazz.getDeclaredMethods()) {
-            if (method.isAnnotationPresent(OnLoad.class)) {
-                // Validate return type: should return void
-                if (!method.getReturnType().equals(void.class) && !method.getReturnType().equals(Void.class)) {
-                    System.err.println("Warning: @OnLoad method " + method.getName() +
-                            " in class " + clazz.getName() +
-                            " does not return void. It should return void.");
-                    continue;
-                }
-
-                try {
-                    method.setAccessible(true);
-
-                    // Resolve method parameters with dependency injection support
-                    Class<?>[] parameterTypes = method.getParameterTypes();
-                    Annotation[][] parameterAnnotations = method.getParameterAnnotations();
-                    Object[] parameters = new Object[parameterTypes.length];
-
-                    for (int i = 0; i < parameterTypes.length; i++) {
-                        // Try resolver system first
-                        Parameter parameter = method.getParameters()[i];
-                        ArgumentResolverContext context = new ArgumentResolverContext.Builder()
-                                .targetType(parameterTypes[i])
-                                .annotations(parameterAnnotations[i])
-                                .parameter(parameter)
-                                .declaringClass(clazz)
-                                .method(method)
-                                .container(this)
-                                .instance(instance)
-                                .build();
-
-                        Object resolvedValue = resolveArgument(context);
-                        if (resolvedValue != null) {
-                            parameters[i] = resolvedValue;
-                            continue;
-                        }
-
-                        // Fallback to existing logic for backward compatibility (only for @Value if resolver didn't handle it)
-                        // Note: @Inject is now fully handled by InjectArgumentResolver
-                        Value valueAnnotation = findAnnotation(parameterAnnotations[i], Value.class);
-                        if (valueAnnotation != null) {
-                            parameters[i] = resolveValue(valueAnnotation.value(), parameterTypes[i]);
-                            continue;
-                        }
-
-                        // If no resolver handled it and it's not @Value, throw an error
-                        throw new RuntimeException("@OnLoad method " + method.getName() +
-                                " in class " + clazz.getName() +
-                                " has parameter " + parameterTypes[i].getName() +
-                                " that cannot be injected. Use @Inject or @Value annotation, or mark with @OptionalDependency.");
-                    }
-
-                    // Invoke the method with resolved parameters
-                    method.invoke(instance, parameters);
-                } catch (Exception e) {
-                    throw new RuntimeException("Error invoking @OnLoad method " + method.getName() + " on " + clazz.getName(), e);
-                }
-            }
-        }
+    public Object resolveLifecycleArgument(Object instance, Method method, Parameter parameter, int index) {
+        return resolveParameter(instance.getClass(), method, index, instance);
     }
 
     @Override
@@ -1085,12 +414,13 @@ public class DependencyContainer implements DependencyRepository {
         if (result == null) {
             throw new RuntimeException("Dependency not found for class: " + dependency.getName());
         }
-        return (T) result;
+        return dependency.cast(result);
     }
 
     @Override
     public <T> @Nullable T getDependencyOrNull(Class<T> dependency) {
-        return (T) dependencies.get(dependency);
+        Object result = dependencies.get(dependency);
+        return result != null ? dependency.cast(result) : null;
     }
 
     /**
@@ -1115,103 +445,9 @@ public class DependencyContainer implements DependencyRepository {
         return missingDependenciesByClass != null ? missingDependenciesByClass.getOrDefault(clazz, Collections.emptyList()) : Collections.emptyList();
     }
 
-    /**
-     * Get the root class.
-     * Used by argument resolvers for validation.
-     *
-     * @return The root class
-     */
-    public Class<?> getRootClass() {
-        return rootClass;
-    }
-
-    @Override
-    public void inject(@NotNull Object object) {
-        //Inject object where @Inject or @Value annotation is present
-        for (Field field : object.getClass().getDeclaredFields()) {
-            if (Modifier.isStatic(field.getModifiers())) {
-                continue; // Skip static fields (handled by injectStatic)
-            }
-
-            // Try resolver system first
-            ArgumentResolverContext context = new ArgumentResolverContext.Builder()
-                    .targetType(field.getType())
-                    .annotations(field.getAnnotations())
-                    .field(field)
-                    .declaringClass(field.getDeclaringClass())
-                    .container(this)
-                    .instance(object)
-                    .build();
-
-            Object resolvedValue = resolveArgument(context);
-            if (resolvedValue != null) {
-                try {
-                    unsafe.putObject(object, unsafe.objectFieldOffset(field), resolvedValue);
-                    continue;
-                } catch (Exception e) {
-                    throw new RuntimeException("Unable to inject resolved value for field: " + field.getName() + " in class: " + object.getClass().getName(), e);
-                }
-            }
-
-            // Fallback to existing logic for backward compatibility (only for @Value if resolver didn't handle it)
-            // Note: @Inject is now fully handled by InjectArgumentResolver
-            if (field.isAnnotationPresent(Value.class)) {
-                Value valueAnnotation = field.getAnnotation(Value.class);
-                try {
-                    Object value = resolveValue(valueAnnotation.value(), field.getType());
-                    unsafe.putObject(object, unsafe.objectFieldOffset(field), value);
-                } catch (Exception e) {
-                    throw new RuntimeException("Unable to inject @Value for field: " + field.getName() + " in class: " + object.getClass().getName(), e);
-                }
-            }
-        }
-    }
-
     @Override
     public void addBean(@NotNull Class<?> dependency, @NotNull Object instance) {
         dependencies.put(dependency, instance);
-    }
-
-    @Override
-    public void injectStatic(@NotNull Class<?> target) {
-        //inject static fields before the class is loaded so injected fields are available in static blocks
-        for (Field field : target.getDeclaredFields()) {
-            if (!Modifier.isStatic(field.getModifiers())) {
-                continue; // Skip non-static fields (handled by inject)
-            }
-
-            // Try resolver system first
-            ArgumentResolverContext context = new ArgumentResolverContext.Builder()
-                    .targetType(field.getType())
-                    .annotations(field.getAnnotations())
-                    .field(field)
-                    .declaringClass(field.getDeclaringClass())
-                    .container(this)
-                    .instance(null) // Static fields have no instance
-                    .build();
-
-            Object resolvedValue = resolveArgument(context);
-            if (resolvedValue != null) {
-                try {
-                    unsafe.putObject(target, unsafe.staticFieldOffset(field), resolvedValue);
-                    continue;
-                } catch (Exception e) {
-                    throw new RuntimeException("Unable to inject resolved value for static field: " + field.getName() + " in class: " + target.getName(), e);
-                }
-            }
-
-            // Fallback to existing logic for backward compatibility (only for @Value if resolver didn't handle it)
-            // Note: @Inject is now fully handled by InjectArgumentResolver
-            if (field.isAnnotationPresent(Value.class)) {
-                Value valueAnnotation = field.getAnnotation(Value.class);
-                try {
-                    Object value = resolveValue(valueAnnotation.value(), field.getType());
-                    unsafe.putObject(target, unsafe.staticFieldOffset(field), value);
-                } catch (Exception e) {
-                    throw new RuntimeException("Unable to inject @Value for static field: " + field.getName() + " in class: " + target.getName(), e);
-                }
-            }
-        }
     }
 
     public void registerComponent(Class<?> clazz) {
@@ -1222,110 +458,54 @@ public class DependencyContainer implements DependencyRepository {
         newInstance(clazz); //This will auto register the component and subclasses if needed
     }
 
+    /**
+     * Register all @Bean methods in the given class.
+     *
+     * @param clazz The class to scan for @Bean methods
+     */
     public void registerBeans(Class<?> clazz) {
-        //Register beans where @Bean annotation is present
-        //Invoke the method and get an instance of the class
         try {
-            //Get all annotated methods from class
-            Set<Method> beans = Arrays.stream(clazz.getDeclaredMethods()).filter(method -> method.isAnnotationPresent(Bean.class)).collect(Collectors.toSet());
-            if (beans.isEmpty()) return; //No beans to register, return
+            Set<Method> beans = Arrays.stream(clazz.getDeclaredMethods())
+                    .filter(method -> method.isAnnotationPresent(Bean.class))
+                    .collect(Collectors.toSet());
+            if (beans.isEmpty()) return;
 
-            //Check if it has a default constructor, if not throw an exception
-            Constructor<?> constructor;
-            try {
-                constructor = clazz.getDeclaredConstructor();
-            } catch (NoSuchMethodException e) {
+            if (!DependencyUtils.hasDefaultConstructor(clazz)) {
                 throw new RuntimeException("Could not register beans, class: " + clazz.getName() + " does not have a default constructor");
             }
 
-            Object instance = newInstance(clazz); //Create new instance of the service and inject dependencies (Root class)
-
-            //Register service as a Bean itself
+            Object instance = newInstance(clazz);
             dependencies.put(clazz, instance);
 
-            for (Method bean : beans) {
-                bean.setAccessible(true);
+            for (Method beanMethod : beans) {
+                beanMethod.setAccessible(true);
+                Object[] parameters = resolveParameters(clazz, beanMethod, instance);
 
-                // Resolve method parameters with @Value annotation support
-                Class<?>[] parameterTypes = bean.getParameterTypes();
-                Annotation[][] parameterAnnotations = bean.getParameterAnnotations();
-                Object[] parameters = new Object[parameterTypes.length];
-
-                for (int i = 0; i < parameterTypes.length; i++) {
-                    // Try resolver system first
-                    Parameter parameter = bean.getParameters()[i];
-                    ArgumentResolverContext context = new ArgumentResolverContext.Builder()
-                            .targetType(parameterTypes[i])
-                            .annotations(parameterAnnotations[i])
-                            .parameter(parameter)
-                            .declaringClass(clazz)
-                            .method(bean)
-                            .container(this)
-                            .instance(instance)
-                            .build();
-
-                    Object resolvedValue = resolveArgument(context);
-                    if (resolvedValue != null) {
-                        parameters[i] = resolvedValue;
-                        continue;
-                    }
-
-                    // Fallback to existing logic for backward compatibility (only for @Value if resolver didn't handle it)
-                    // Note: @Inject is now fully handled by InjectArgumentResolver
-                    Value valueAnnotation = findAnnotation(parameterAnnotations[i], Value.class);
-                    if (valueAnnotation != null) {
-                        parameters[i] = resolveValue(valueAnnotation.value(), parameterTypes[i]);
-                        continue;
-                    }
-
-                    // If no resolver handled it and it's not @Value, throw an error
-                    throw new RuntimeException("Unable to resolve @Bean method parameter: " + parameterTypes[i].getName() +
-                            " in method: " + bean.getName() + " of class: " + clazz.getName() +
-                            ". Use @Inject, @Value, or @OptionalDependency annotation.");
-                }
-
-                Object beanInstance = bean.invoke(instance, parameters); //Invoke the method with resolved parameters
+                Object beanInstance = (Object) beanMethod.invoke(instance, parameters);
                 if (beanInstance == null) {
-                    System.err.println("Unable to register bean for " + bean.getReturnType().getName() + ". Value most not be null!");
+                    System.err.println("Unable to register bean for " + beanMethod.getReturnType().getName() + ". Value must not be null!");
                     continue;
                 }
-                // Invoke PostConstruct on bean instance if present
-                invokePostConstruct(beanInstance);
-                dependencies.put(bean.getReturnType(), beanInstance); //Add the instance to the dependencies map
 
-                Bean annotation = bean.getAnnotation(Bean.class);
-                //Check if it has more classes to register as
-                for (Class<?> register : annotation.registerSubclasses()) {
-                    dependencies.put(register, beanInstance);
-                }
+                lifecycleManager.invokePostConstruct(beanInstance);
+
+                Bean annotation = beanMethod.getAnnotation(Bean.class);
+                registerInstanceAndSubclasses(beanMethod.getReturnType(), beanInstance, annotation.registerSubclasses(), true);
             }
         } catch (Exception e) {
+            if (e instanceof RuntimeException re) throw re;
             throw new RuntimeException("Unable to register beans", e);
         }
-    }
-
-    private Unsafe getUnsafe() {
-        try {
-            Field field = Unsafe.class.getDeclaredField("theUnsafe");
-            field.setAccessible(true); // Make the field accessible
-            return (Unsafe) field.get(null); // Get the Unsafe instance
-        } catch (Exception e) {
-            throw new RuntimeException("Unable to access Unsafe", e);
-        }
-    }
-
-    public Class[] getAllEntities() {
-        return entities.toArray(new Class[0]);
     }
 
     private boolean canLoadClass(Class<?> clazz) {
         if (!checkDependsOnAnnotation(clazz)) {
             return false;
         }
-        if (!checkConditionalAnnotation(clazz)) {
+        if (!conditionEvaluator.checkConditionalAnnotation(clazz)) {
             return false;
         }
-        if (!checkYamlConditionalAnnotation(clazz)) {
+        if (!conditionEvaluator.checkYamlConditionalAnnotation(clazz)) {
             return false;
         }
         return true;
@@ -1341,7 +521,7 @@ public class DependencyContainer implements DependencyRepository {
         try {
             Class<?> val = dependsOn.value();
             if (val != null && val != Void.class) {
-                if (!isClassPresent(val.getName(), loader)) {
+                if (!conditionEvaluator.isClassPresent(val.getName(), loader)) {
                     missing.add(val.getName());
                 }
             }
@@ -1350,7 +530,7 @@ public class DependencyContainer implements DependencyRepository {
         }
         try {
             for (Class<?> c : dependsOn.values()) {
-                if (c != null && !isClassPresent(c.getName(), loader)) {
+                if (c != null && !conditionEvaluator.isClassPresent(c.getName(), loader)) {
                     missing.add(c.getName());
                 }
             }
@@ -1358,11 +538,11 @@ public class DependencyContainer implements DependencyRepository {
             missing.add("<unavailable:values>");
         }
         String className = dependsOn.className();
-        if (className != null && !className.isEmpty() && !isClassPresent(className, loader)) {
+        if (className != null && !className.isEmpty() && !conditionEvaluator.isClassPresent(className, loader)) {
             missing.add(className);
         }
         for (String name : dependsOn.classNames()) {
-            if (name != null && !name.isEmpty() && !isClassPresent(name, loader)) {
+            if (name != null && !name.isEmpty() && !conditionEvaluator.isClassPresent(name, loader)) {
                 missing.add(name);
             }
         }
@@ -1378,177 +558,91 @@ public class DependencyContainer implements DependencyRepository {
         return true;
     }
 
-    private boolean checkConditionalAnnotation(Class<?> clazz) {
-        Conditional conditional = clazz.getAnnotation(Conditional.class);
-        if (conditional == null) {
-            return true;
-        }
-        String propertyName = conditional.property();
-        if (propertyName == null || propertyName.isEmpty()) {
-            return false;
-        }
-        Environment env = Environment.getInstance();
-        String actual = env.getProperty(propertyName);
-        String expected = conditional.value();
-        ConditionalOperator operator = conditional.operator();
-        return evaluateCondition(actual, expected, operator);
-    }
+    private Object resolveParameter(Class<?> declaringClass, Executable executable, int index, @Nullable Object instance) {
+        Parameter parameter = executable.getParameters()[index];
+        Annotation[] annotations = executable.getParameterAnnotations()[index];
 
-    private boolean checkYamlConditionalAnnotation(Class<?> clazz) {
-        YamlConditional yamlConditional = clazz.getAnnotation(YamlConditional.class);
-        if (yamlConditional == null) {
-            return true;
-        }
-        Class<?> configClass = yamlConditional.configuration();
-        if (configClass == null || configClass == Void.class) {
-            return false;
-        }
-        String path = yamlConditional.path();
-        if (path == null || path.isEmpty()) {
-            return false;
-        }
-        Object actualValue = null;
-        try {
-            ConfigurationContainer configurationContainer = ConfigurationContainer.getInstance();
-            if (configurationContainer != null) {
-                actualValue = configurationContainer.getConfigValue(configClass, path);
-            }
-        } catch (Throwable ignored) {
-        }
-        String actual = actualValue != null ? actualValue.toString() : null;
-        String expected = yamlConditional.value();
-        ConditionalOperator operator = yamlConditional.operator();
-        return evaluateCondition(actual, expected, operator);
-    }
+        ArgumentResolverContext.Builder builder = new ArgumentResolverContext.Builder()
+                .targetType(parameter.getType())
+                .annotations(annotations)
+                .parameter(parameter)
+                .declaringClass(declaringClass)
+                .container(this)
+                .instance(instance);
 
-    private boolean evaluateCondition(String actual, String expected, ConditionalOperator operator) {
-        if (operator == null) {
-            operator = ConditionalOperator.EQUALS;
+        if (executable instanceof Method method) {
+            builder.method(method);
+        } else if (executable instanceof Constructor<?> constructor) {
+            builder.constructor(constructor);
         }
-        if (actual == null) {
-            return operator == ConditionalOperator.NOT_EQUALS && expected != null && !expected.isEmpty();
-        }
-        if (expected == null) {
-            expected = "";
-        }
-        switch (operator) {
-            case EQUALS:
-                return actual.equals(expected);
-            case NOT_EQUALS:
-                return !actual.equals(expected);
-            case CONTAINS:
-                return actual.contains(expected);
-            case NOT_CONTAINS:
-                return !actual.contains(expected);
-            case GREATER_THAN:
-                return compareAsNumberOrString(actual, expected) > 0;
-            case LESS_THAN:
-                return compareAsNumberOrString(actual, expected) < 0;
-            case GREATER_THAN_OR_EQUALS:
-                return compareAsNumberOrString(actual, expected) >= 0;
-            case LESS_THAN_OR_EQUALS:
-                return compareAsNumberOrString(actual, expected) <= 0;
-            default:
-                return false;
-        }
-    }
 
-    private int compareAsNumberOrString(String actual, String expected) {
-        try {
-            double a = Double.parseDouble(actual.trim());
-            double b = Double.parseDouble(expected.trim());
-            return Double.compare(a, b);
-        } catch (NumberFormatException ignored) {
+        Object resolvedValue = resolveArgument(builder.build());
+        if (resolvedValue != null) {
+            return resolvedValue;
         }
-        return actual.compareTo(expected);
-    }
 
-    private boolean isClassPresent(String name, ClassLoader loader) {
-        try {
-            Class.forName(name, false, loader);
-            return true;
-        } catch (Throwable e) {
-            return false;
+        // Fallback for @Value
+        Value valueAnnotation = DependencyUtils.findAnnotation(annotations, Value.class);
+        if (valueAnnotation != null) {
+            return injectionEngine.resolveValue(valueAnnotation.value(), parameter.getType());
         }
-    }
 
-    /**
-     * Get the effective package name from the root annotation or detect it from the root class.
-     * If the packageName is specified in the annotation (non-empty), it will be used.
-     * Otherwise, the package name will be detected from the root class.
-     *
-     * @param rootAnnotation The @Root annotation
-     * @param rootClass      The root class
-     * @return The effective package name to scan
-     */
-    private String getEffectivePackageName(Root rootAnnotation, Class<?> rootClass) {
-        String packageName = rootAnnotation.packageName();
-        if (packageName == null || packageName.isEmpty()) {
-            // Auto-detect package name from root class
-            Package pkg = rootClass.getPackage();
-            if (pkg != null) {
-                packageName = pkg.getName();
-            } else {
-                // Fallback: extract package name from class name
-                String className = rootClass.getName();
-                int lastDot = className.lastIndexOf('.');
-                if (lastDot > 0) {
-                    packageName = className.substring(0, lastDot);
-                } else {
-                    // Default package - use empty string
-                    packageName = "";
-                }
-            }
-        }
-        return packageName;
-    }
-
-    /**
-     * Find an annotation of the specified type in an array of annotations.
-     *
-     * @param annotations    The array of annotations to search
-     * @param annotationType The annotation type to find
-     * @param <T>            The annotation type
-     * @return The annotation instance, or null if not found
-     */
-    @SuppressWarnings("unchecked")
-    private <T extends Annotation> T findAnnotation(Annotation[] annotations, Class<T> annotationType) {
-        if (annotations == null) {
-            return null;
-        }
-        for (Annotation annotation : annotations) {
-            if (annotationType.isInstance(annotation)) {
-                return (T) annotation;
-            }
-        }
         return null;
     }
 
-    /**
-     * Resolve a @Value annotation expression to the appropriate type.
-     * Supports Spring Boot-style property resolution with default values.
-     *
-     * @param expression The property expression (e.g., "${app.timeout:5000}")
-     * @param targetType The target type to convert to
-     * @return The resolved and converted value
-     */
-    private Object resolveValue(String expression, Class<?> targetType) {
-        Environment env = Environment.getInstance();
-        String resolvedValue = env.resolveProperty(expression);
+    private void processAnnotationHandlers(RegistryOrder order, ClasspathScanner scanner) {
+        annotationHandlerRegistry.getHandlers(order).forEach(handler -> {
+            Class<? extends Annotation> annotation = DependencyUtils.getAnnotationFromHandler(handler);
+            if (annotation == null) return;
+            scanner.getTypesAnnotatedWith(annotation).forEach(clazz -> {
+                if (canLoadClass(clazz)) {
+                    handler.handle(clazz, dependencies.get(clazz), this);
+                }
+            });
+        });
+    }
 
-        try {
-            return switch (targetType.getName()) {
-                case "java.lang.String" -> resolvedValue;
-                case "int", "java.lang.Integer" -> Integer.parseInt(resolvedValue);
-                case "long", "java.lang.Long" -> Long.parseLong(resolvedValue);
-                case "boolean", "java.lang.Boolean" -> Boolean.parseBoolean(resolvedValue);
-                case "double", "java.lang.Double" -> Double.parseDouble(resolvedValue);
-                case "float", "java.lang.Float" -> Float.parseFloat(resolvedValue);
-                default ->
-                        throw new RuntimeException("Unsupported type for @Value injection: " + targetType.getName() + " for expression: " + expression);
-            };
-        } catch (NumberFormatException e) {
-            throw new RuntimeException("Cannot convert property value '" + resolvedValue + "' to " + targetType.getSimpleName() + " for expression: " + expression, e);
-        }
+    private void registerHandlers(ClasspathScanner scanner) {
+        scanner.scanRegistryHandlers().forEach(clazz -> {
+            if (AnnotationHandler.class.isAssignableFrom(clazz)) {
+                AnnotationHandler instance = (AnnotationHandler) newInstance(clazz);
+                Class<? extends Annotation> annotation = DependencyUtils.getAnnotationFromHandler(instance);
+                if (annotation == null) {
+                    throw new RuntimeException("Annotation not found for class: " + clazz + ". Make sure to return a valid annotation in getAnnotation method");
+                }
+                eventManager.registerEventListeners(clazz);
+                annotationHandlerRegistry.registerHandler(annotation, instance);
+            } else {
+                throw new RuntimeException("Class: " + clazz.getName() + " annotated with @Registry does not extend AnnotationHandler");
+            }
+        });
+    }
+
+    private void registerArgumentResolvers(ClasspathScanner scanner) {
+        scanner.scanArgumentResolvers().forEach(clazz -> {
+            if (ArgumentResolverProcessor.class.isAssignableFrom(clazz)) {
+                try {
+                    ArgumentResolverProcessor instance = (ArgumentResolverProcessor) newInstance(clazz);
+                    ArgumentResolver annotation = clazz.getAnnotation(ArgumentResolver.class);
+                    if (annotation == null) return;
+
+                    eventManager.registerEventListeners(clazz);
+                    int priority = annotation.priority();
+
+                    Class<? extends Annotation>[] values = annotation.values();
+                    if (values != null && values.length > 0) {
+                        for (Class<? extends Annotation> supportedAnnotation : values) {
+                            argumentResolverRegistry.registerResolver(supportedAnnotation, instance, priority);
+                        }
+                    } else {
+                        argumentResolverRegistry.registerResolver(annotation.value(), instance, priority);
+                    }
+                } catch (Exception e) {
+                    throw new RuntimeException("Unable to register ArgumentResolverProcessor: " + clazz.getName(), e);
+                }
+            } else {
+                throw new RuntimeException("Class: " + clazz.getName() + " annotated with @ArgumentResolver does not implement ArgumentResolverProcessor");
+            }
+        });
     }
 }

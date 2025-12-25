@@ -2,7 +2,6 @@ package net.vortexdevelopment.vinject.database.mapper;
 
 import net.vortexdevelopment.vinject.annotation.database.Column;
 import net.vortexdevelopment.vinject.annotation.database.Temporal;
-import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.database.SQLTypeMapper;
 
 public class MySQLMapper implements SQLTypeMapper {
@@ -21,8 +20,6 @@ public class MySQLMapper implements SQLTypeMapper {
         if (column == null) {
             throw new IllegalArgumentException("Column annotation is required for field: " + fieldType.getName() + ". If it is a Date/Time field, use Temporal annotation instead.");
         }
-
-        boolean primaryKey = column.primaryKey();
 
         //When a column auto increment it cannot be nullable
         String nullableConstraint = getColumnModifiers(column, defaultValue, fieldType.isEnum());

@@ -1,5 +1,8 @@
 package net.vortexdevelopment.vinject.di;
 
+import net.vortexdevelopment.vinject.di.engine.InjectionEngine;
+import net.vortexdevelopment.vinject.di.lifecycle.LifecycleManager;
+import net.vortexdevelopment.vinject.event.EventManager;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -23,28 +26,6 @@ public interface DependencyRepository {
     @Nullable <T> T getDependencyOrNull(Class<T> dependency);
 
     /**
-     * Inject the dependencies into the object
-     * <p>
-     * Does not inject static dependencies, use {@link #injectStatic(Class)} for that
-     * @param object The object to inject the dependencies into
-     */
-    void inject(@NotNull Object object);
-
-    /**
-     * Inject the static dependencies into the class
-     * @param clazz The class to inject the dependencies into
-     */
-    void injectStatic(@NotNull Class<?> clazz);
-
-    /**
-     * Inject the static dependencies into the object
-     * @param instance The object to inject the dependencies into
-     */
-    default void injectStatic(@NotNull Object instance) {
-        injectStatic(instance.getClass());
-    }
-
-    /**
      * Add a dependency to the repository
      * @param clazz The class of the dependency
      * @param instance The instance of the dependency
@@ -52,10 +33,25 @@ public interface DependencyRepository {
     void addBean(@NotNull Class<?> clazz, @NotNull Object instance);
 
     /**
-     * Calls all event listener methods for the given event
-     * @param event The event to emit
+     * Get the injection engine
+     * @return The injection engine
      */
-    void emitEvent(@NotNull String event);
+    @NotNull
+    InjectionEngine getInjectionEngine();
+
+    /**
+     * Get the event manager
+     * @return The event manager
+     */
+    @NotNull
+    EventManager getEventManager();
+
+    /**
+     * Get the lifecycle manager
+     * @return The lifecycle manager
+     */
+    @NotNull
+    LifecycleManager getLifecycleManager();
 
     static @NotNull DependencyRepository getInstance() {
         return DependencyContainer.getInstance();

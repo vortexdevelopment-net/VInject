@@ -41,7 +41,7 @@ public class EntityMetadata {
             if (field.isAnnotationPresent(Column.class) || field.isAnnotationPresent(Temporal.class)) {
                 Column column = field.getAnnotation(Column.class);
                 Temporal temporal = field.getAnnotation(Temporal.class);
-                String columnName = (column != null && !column.name().isEmpty()) ? column.name() : temporal != null ? temporal.name() : field.getName();
+                String columnName = (column != null && !column.name().isEmpty()) ? column.name() : (temporal != null && !temporal.name().isEmpty()) ? temporal.name() : field.getName();
                 
                 // Check if this field type has a serializer
                 if (serializerRegistry != null && serializerRegistry.hasSerializer(field.getType())) {
@@ -78,7 +78,7 @@ public class EntityMetadata {
                 }
                 
                 boolean isPrimaryKey = column != null && column.primaryKey();
-                boolean isNullable = column == null || column.nullable();
+                boolean isNullable = (column != null ? column.nullable() : (temporal == null || temporal.nullable()));
                 boolean isUnique = column != null && column.unique();
                 boolean isAutoIncrement = column != null && column.autoIncrement();
 

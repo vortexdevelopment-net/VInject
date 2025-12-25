@@ -5,7 +5,6 @@ import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -28,7 +27,6 @@ public class DBUtils {
         String databaseProductName = metaData.getDatabaseProductName().toLowerCase(Locale.ENGLISH);
         boolean isH2 = databaseProductName.contains("h2");
         Map<String, String> columns = new HashMap<>();
-
         String sql;
         if (isH2) {
             sql = "SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT, IS_IDENTITY " +
@@ -141,34 +139,7 @@ public class DBUtils {
 
 
 
-    /**
-     * Map H2 DATA_TYPE codes to SQL types
-     */
-    private static String mapH2DataType(int dataTypeCode) {
-        switch (dataTypeCode) {
-            case java.sql.Types.VARCHAR:
-                return "VARCHAR";
-            case java.sql.Types.BIGINT:
-                return "BIGINT";
-            case java.sql.Types.INTEGER:
-                return "INT";
-            case java.sql.Types.DOUBLE:
-                return "DOUBLE";
-            case java.sql.Types.FLOAT:
-                return "FLOAT";
-            case java.sql.Types.TIMESTAMP:
-                return "TIMESTAMP";
-            case java.sql.Types.BOOLEAN:
-                return "BOOLEAN";
-            case java.sql.Types.BLOB:
-                return "BLOB";
-            case java.sql.Types.CLOB:
-                return "CLOB";
-            // Add any more types you need
-            default:
-                return "UNKNOWN";
-        }
-    }
+
 
     /**
      * Checks if a table exists in the database.

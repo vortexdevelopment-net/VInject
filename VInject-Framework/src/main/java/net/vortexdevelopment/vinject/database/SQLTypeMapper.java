@@ -46,7 +46,7 @@ public interface SQLTypeMapper {
             } else {
                 sb.append(" DEFAULT '").append(defaultValue.toString()).append("'");
             }
-        } else if (defaultValue == null && !column.autoIncrement()) {
+        } else if (defaultValue == null && !column.autoIncrement() && column.nullable()) {
             sb.append(" DEFAULT NULL");
         }
 

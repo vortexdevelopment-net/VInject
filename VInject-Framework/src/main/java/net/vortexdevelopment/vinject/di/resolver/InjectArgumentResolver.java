@@ -1,16 +1,15 @@
 package net.vortexdevelopment.vinject.di.resolver;
 
 import net.vortexdevelopment.vinject.annotation.ArgumentResolver;
+import net.vortexdevelopment.vinject.annotation.Component;
 import net.vortexdevelopment.vinject.annotation.Conditional;
 import net.vortexdevelopment.vinject.annotation.Inject;
-import net.vortexdevelopment.vinject.annotation.Component;
 import net.vortexdevelopment.vinject.annotation.OptionalDependency;
 import net.vortexdevelopment.vinject.annotation.Repository;
 import net.vortexdevelopment.vinject.annotation.Service;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConditional;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
 
-import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.util.List;
 
@@ -34,6 +33,7 @@ public class InjectArgumentResolver implements ArgumentResolverProcessor {
                 || targetType.isAnnotationPresent(Service.class)
                 || targetType.isAnnotationPresent(Repository.class)
                 || targetType.isAnnotationPresent(YamlConfiguration.class)
+                || targetType.isAnnotationPresent(net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory.class)
                 || context.getContainer().getDependencyOrNull(targetType) != null;
     }
     
@@ -74,9 +74,51 @@ public class InjectArgumentResolver implements ArgumentResolverProcessor {
                             String.join(", ", missing) + ". Consider annotating the field with @OptionalDependency to inject null.");
                 }
                 
-                // Determine error message based on context
-                String errorContext = field.getModifiers() != 0 && java.lang.reflect.Modifier.isStatic(field.getModifiers()) ? "static dependencies" : "dependencies";
-                throw new RuntimeException("Dependency not found for field: " + targetType + " " + field.getName() + " in class: " + declaringClass.getName() + " while injecting " + errorContext + ". Forget to add Bean?");
+                // Try to create the dependency on-the-spot if it's a Component with default constructor
+                if (targetType.isAnnotationPresent(Component.class)) {
+                    try {
+                        // Check if it has a default constructor
+                        targetType.getDeclaredConstructor();
+                        // Try to create it - this will handle circular dependencies via setter injection
+                        dependency = context.getContainer().newInstance(targetType);
+                        if (dependency != null) {
+                            return dependency;
+                        }
+                    } catch (NoSuchMethodException e) {
+                        // No default constructor - throw circular dependency error
+                        throw new RuntimeException(
+                            "Circular dependency detected for field: " + field.getName() + " of type: " + targetType.getName() + 
+                            " in class: " + declaringClass.getName() +
+                            "\n\nCircular dependencies require a default constructor and field/setter injection." +
+                            "\n\nTo resolve this issue:" +
+                            "\n1. Add a default (no-arg) constructor to " + targetType.getSimpleName() +
+                            "\n2. Use @Inject on fields instead of constructor parameters" +
+                            "\n3. Use @PostConstruct for initialization logic that needs injected dependencies" +
+                            "\n\nExample:" +
+                            "\n  @Component" +
+                            "\n  public class " + targetType.getSimpleName() + " {" +
+                            "\n      @Inject" +
+                            "\n      private " + declaringClass.getSimpleName() + " dependency;" +
+                            "\n      " +
+                            "\n      @PostConstruct" +
+                            "\n      public void init() {" +
+                            "\n          // Use dependency here - it's guaranteed to be injected" +
+                            "\n      }"+
+                            "\n  }"
+                        );
+                    } catch (RuntimeException e) {
+                        // If we get a circular dependency error from newInstance, re-throw it
+                        if (e.getMessage() != null && e.getMessage().contains("Circular dependency detected")) {
+                            throw e;
+                        }
+                        // Otherwise, it's a different error
+                        throw new RuntimeException("Unable to create dependency: " + targetType.getName() + " for field: " + field.getName(), e);
+                    }
+                }
+                
+                // Not a Component or couldn't create it - throw error
+                throw new RuntimeException("Dependency not found for field: " + targetType + " " + field.getName() + 
+                        " in class: " + declaringClass.getName() + ". Forget to add @Component?");
             } else if (context.isParameter()) {
                 // Parameter injection error handling
                 Class<?> declaringClass = context.getDeclaringClass();
