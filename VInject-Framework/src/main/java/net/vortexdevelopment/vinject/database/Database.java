@@ -2,7 +2,7 @@ package net.vortexdevelopment.vinject.database;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-import net.vortexdevelopment.vinject.annotation.database.Column;
+import lombok.Getter;
 import net.vortexdevelopment.vinject.annotation.database.Entity;
 import net.vortexdevelopment.vinject.database.formatter.H2SchemaFormatter;
 import net.vortexdevelopment.vinject.database.formatter.MySQLSchemaFormatter;
@@ -11,16 +11,18 @@ import net.vortexdevelopment.vinject.database.mapper.H2Mapper;
 import net.vortexdevelopment.vinject.database.mapper.MySQLMapper;
 import net.vortexdevelopment.vinject.database.meta.EntityMetadata;
 import net.vortexdevelopment.vinject.database.meta.FieldMetadata;
-import net.vortexdevelopment.vinject.database.meta.ForeignKeyMetadata;
 import net.vortexdevelopment.vinject.database.serializer.DatabaseSerializer;
 import net.vortexdevelopment.vinject.database.serializer.SerializerRegistry;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
 
 import java.io.File;
-import java.lang.reflect.Field;
 import java.sql.Connection;
 import java.sql.Statement;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 public class Database implements DatabaseConnector {
 
@@ -29,10 +31,9 @@ public class Database implements DatabaseConnector {
     private Map<Class<?>, EntityMetadata> entityMetadataMap = new HashMap<>();
     private static String TABLE_PREFIX = "example_";
     private final List<String> FOREIGN_KEY_QUERIES = new ArrayList<>();
-    private String database;
     private static SQLTypeMapper sqlTypeMapper;
-    private final SchemaFormatter schemaFormatter;
-    private final SerializerRegistry serializerRegistry;
+    @Getter private final SchemaFormatter schemaFormatter;
+    @Getter private final SerializerRegistry serializerRegistry;
 
     public Database(String host, String port, String database, String type, String username, String password, int maxPoolSize, File h2File) {
         hikariConfig = new HikariConfig();
@@ -48,7 +49,11 @@ public class Database implements DatabaseConnector {
             if (h2File.getName().equalsIgnoreCase("mem")) {
                 hikariConfig.setJdbcUrl("jdbc:h2:mem:" + database + ";DB_CLOSE_DELAY=-1;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE");
             } else {
-                hikariConfig.setJdbcUrl("jdbc:h2:file:./" + h2File.getPath().replaceAll("\\\\", "/") + ";AUTO_RECONNECT=TRUE;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE");
+                // Use AUTO_SERVER=TRUE to allow multiple connections to the same file
+                // AUTO_RECONNECT=TRUE enables automatic reconnection
+                // Note: DB_CLOSE_ON_EXIT cannot be used with AUTO_SERVER
+                String filePath = h2File.getPath().replaceAll("\\\\", "/");
+                hikariConfig.setJdbcUrl("jdbc:h2:file:./" + filePath + ";AUTO_SERVER=TRUE;AUTO_RECONNECT=TRUE;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE");
             }
 
         } else {
@@ -70,8 +75,14 @@ public class Database implements DatabaseConnector {
         hikariConfig.addDataSourceProperty("cachePrepStmts", "true");
         hikariConfig.addDataSourceProperty("prepStmtCacheSize", "250");
         hikariConfig.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
-        this.database = database;
         this.serializerRegistry = new SerializerRegistry();
+    }
+
+    /**
+     * Initialize the database connection pool.
+     */
+    public void init() {
+        hikariDataSource = new HikariDataSource(hikariConfig);
     }
 
     public static boolean isH2() {
@@ -80,19 +91,6 @@ public class Database implements DatabaseConnector {
 
     public static SQLTypeMapper getSQLTypeMapper() {
         return sqlTypeMapper;
-    }
-
-    /**
-     * Returns the schema formatter for this database instance.
-     *
-     * @return the schema formatter
-     */
-    public SchemaFormatter getSchemaFormatter() {
-        return schemaFormatter;
-    }
-
-    public void init() {
-        hikariDataSource = new HikariDataSource(hikariConfig);
     }
 
     public static String getTablePrefix() {
@@ -114,18 +112,8 @@ public class Database implements DatabaseConnector {
         serializerRegistry.registerSerializer(type, serializer);
     }
 
-    /**
-     * Get the serializer registry.
-     * 
-     * @return The serializer registry
-     */
-    public SerializerRegistry getSerializerRegistry() {
-        return serializerRegistry;
-    }
-
     public void initializeEntityMetadata(DependencyContainer dependencyContainer) {
-        Class<?>[] classes = dependencyContainer.getAllEntities();
-        for (Class<?> clazz : classes) {
+        for (Class<?> clazz : dependencyContainer.getAllEntities()) {
             if (clazz.isAnnotationPresent(Entity.class)) {
                 Entity entity = clazz.getAnnotation(Entity.class);
                 String tableName = entity != null && !entity.table().isEmpty() ? entity.table() : clazz.getSimpleName();
@@ -146,6 +134,10 @@ public class Database implements DatabaseConnector {
     }
 
     public void verifyTables() {
+        if (this.hikariDataSource == null) {
+            return; // No database is used, skip verification
+        }
+
         connect(connection -> {
             for (EntityMetadata metadata : entityMetadataMap.values()) {
                 try {
@@ -297,16 +289,6 @@ public class Database implements DatabaseConnector {
         }
     }
 
-    private String getOriginalColumnName(Map<Field, Column> columns, String lowerCaseName) {
-        for (Map.Entry<Field, Column> entry : columns.entrySet()) {
-            String columnName = !entry.getValue().name().isEmpty() ? entry.getValue().name().toLowerCase() : entry.getKey().getName().toLowerCase();
-            if (columnName.equals(lowerCaseName)) {
-                return !entry.getValue().name().isEmpty() ? entry.getValue().name() : entry.getKey().getName();
-            }
-        }
-        return lowerCaseName; // Fallback
-    }
-
     @Override
     public Connection getConnection() throws Exception {
         return hikariDataSource.getConnection();
@@ -315,19 +297,32 @@ public class Database implements DatabaseConnector {
     @Override
     public void connect(VoidConnection connection) {
         try (Connection conn = hikariDataSource.getConnection()) {
-            connection.connect(conn);
+            try {
+                conn.setAutoCommit(false);
+                connection.connect(conn);
+                conn.commit();
+            } catch (Exception e) {
+                conn.rollback();
+                throw e;
+            }
         } catch (Exception e) {
-            e.printStackTrace();
-            throw new RuntimeException("Database connection error", e);
+            throw new RuntimeException(e);
         }
     }
 
     @Override
     public <T> T connect(ConnectionResult<T> connection) {
         try (Connection conn = hikariDataSource.getConnection()) {
-            return connection.connect(conn);
+            try {
+                conn.setAutoCommit(false);
+                T result = connection.connect(conn);
+                conn.commit();
+                return result;
+            } catch (Exception e) {
+                conn.rollback();
+                throw e;
+            }
         } catch (Exception e) {
-            e.printStackTrace();
             throw new RuntimeException("Database connection error", e);
         }
     }
