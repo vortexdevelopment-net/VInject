@@ -1,4 +1,6 @@
-package net.vortexdevelopment.vinject.annotation;
+package net.vortexdevelopment.vinject.annotation.component;
+
+import net.vortexdevelopment.vinject.annotation.Bean;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -6,11 +8,9 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a class as injectable by the DI container even if it is not annotated as a component.
+ * Annotation for {@link Bean} provider classes.
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.TYPE)
-public @interface Injectable {
+public @interface Service {
 }
-
-

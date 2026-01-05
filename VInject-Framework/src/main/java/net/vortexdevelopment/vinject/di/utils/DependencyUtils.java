@@ -1,6 +1,6 @@
 package net.vortexdevelopment.vinject.di.utils;
 
-import net.vortexdevelopment.vinject.annotation.Registry;
+import net.vortexdevelopment.vinject.annotation.component.Registry;
 import net.vortexdevelopment.vinject.database.repository.CrudRepository;
 import net.vortexdevelopment.vinject.di.registry.AnnotationHandler;
 

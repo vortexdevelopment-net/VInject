@@ -3,19 +3,17 @@ package net.vortexdevelopment.vinject.di;
 import lombok.Getter;
 import net.vortexdevelopment.vinject.annotation.ArgumentResolver;
 import net.vortexdevelopment.vinject.annotation.Bean;
-import net.vortexdevelopment.vinject.annotation.Component;
+import net.vortexdevelopment.vinject.annotation.component.Component;
 import net.vortexdevelopment.vinject.annotation.DependsOn;
 import net.vortexdevelopment.vinject.annotation.OptionalDependency;
-import net.vortexdevelopment.vinject.annotation.Repository;
-import net.vortexdevelopment.vinject.annotation.Root;
-import net.vortexdevelopment.vinject.annotation.Service;
+import net.vortexdevelopment.vinject.annotation.component.Repository;
+import net.vortexdevelopment.vinject.annotation.component.Root;
+import net.vortexdevelopment.vinject.annotation.component.Service;
 import net.vortexdevelopment.vinject.annotation.Value;
 import net.vortexdevelopment.vinject.annotation.database.Entity;
 import net.vortexdevelopment.vinject.annotation.database.RegisterDatabaseSerializer;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory;
-import net.vortexdevelopment.vinject.annotation.yaml.YamlSerializer;
-import net.vortexdevelopment.vinject.config.serializer.YamlSerializerBase;
 import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.database.repository.CrudRepository;
 import net.vortexdevelopment.vinject.database.repository.RepositoryContainer;
@@ -106,6 +104,10 @@ public class DependencyContainer implements DependencyRepository {
         dependencies.put(rootClass, rootInstance);
         this.rootClass = rootClass;
 
+        if (onPreComponentLoad != null) {
+            onPreComponentLoad.accept(null);
+        }
+
         // Included packages override ignored packages
         ClasspathScanner scanner = new ClasspathScanner(rootAnnotation, rootClass);
         Reflections reflections = scanner.getReflections();
@@ -123,7 +125,7 @@ public class DependencyContainer implements DependencyRepository {
         final ConfigurationContainer configurationContainer;
         if (!yamlConfigClasses.isEmpty() || !yamlDirectoryClasses.isEmpty()) {
             // Create the configuration container and register configs into this dependency container
-            configurationContainer = new ConfigurationContainer(this, yamlConfigClasses);
+            configurationContainer = new ConfigurationContainer(this, scanner, reflections, yamlConfigClasses);
         } else {
             configurationContainer = null;
         }
@@ -182,35 +184,11 @@ public class DependencyContainer implements DependencyRepository {
             database.verifyTables();
         }
 
-        if (onPreComponentLoad != null) {
-            onPreComponentLoad.accept(null);
-        }
-
         //Collect all Registry annotations
         registerHandlers(scanner);
 
         //Collect all ArgumentResolver annotations
         registerArgumentResolvers(scanner);
-
-        // Auto-register YamlSerializerBase implementations into the configuration container
-        if (configurationContainer != null) {
-            scanner.scanAndFilter(YamlSerializer.class, this::canLoadClass).forEach(serializerClass -> {
-                try {
-                    Object instance = newInstance(serializerClass);
-                    if (instance instanceof YamlSerializerBase<?> ys) {
-                        configurationContainer.registerSerializer(ys);
-                    }
-                } catch (Exception e) {
-                    throw new RuntimeException("Unable to register YamlSerializerBase: " + serializerClass.getName(), e);
-                }
-            });
-            // After registering serializers, load any annotated batch directories
-            try {
-                configurationContainer.loadBatches(reflections, this);
-            } catch (Exception e) {
-                throw new RuntimeException("Unable to load YAML batch directories", e);
-            }
-        }
 
         processAnnotationHandlers(RegistryOrder.FIRST, scanner);
 
@@ -321,12 +299,10 @@ public class DependencyContainer implements DependencyRepository {
                 Constructor<?> constructor = clazz.getDeclaredConstructors()[0];
                 Object[] parameters = resolveParameters(clazz, constructor, null);
                 
-                injectionEngine.injectStatic(clazz);
                 instance = clazz.cast(constructor.newInstance(parameters));
             } else {
                 Constructor<T> constructor = clazz.getDeclaredConstructor();
                 constructor.setAccessible(true);
-                injectionEngine.injectStatic(clazz);
                 instance = constructor.newInstance();
             }
 
@@ -337,7 +313,10 @@ public class DependencyContainer implements DependencyRepository {
             }
             registerInstanceAndSubclasses(clazz, instance, subclasses, cache);
             
-            // Inject fields
+            // Inject static fields (now safe to refer to the class itself)
+            injectionEngine.injectStatic(clazz);
+            
+            // Inject instance fields
             injectionEngine.inject(instance);
             
             // Invoke post construct after all dependencies are injected
@@ -389,7 +368,7 @@ public class DependencyContainer implements DependencyRepository {
                 }
             }
 
-            if (resolvedValue == null && DependencyUtils.findAnnotation(annotations[i], OptionalDependency.class) != null) {
+            if (resolvedValue == null && DependencyUtils.findAnnotation(annotations[i], OptionalDependency.class) == null) {
                 String type = (executable instanceof Constructor) ? "constructor parameter" : "@Bean method parameter";
                 String source = (executable instanceof Method m) ? " in method: " + m.getName() : "";
                 throw new RuntimeException("Unable to resolve " + type + ": " + parameters[i].getType().getName() +
@@ -498,7 +477,7 @@ public class DependencyContainer implements DependencyRepository {
         }
     }
 
-    private boolean canLoadClass(Class<?> clazz) {
+    boolean canLoadClass(Class<?> clazz) {
         if (!checkDependsOnAnnotation(clazz)) {
             return false;
         }

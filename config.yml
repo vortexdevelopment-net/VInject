@@ -1,0 +1,34 @@
+
+App:
+  # This message is displayed to users when they start the application.
+  Welcome Message: "Welcome to VInject Framework - test"
+  # Line 1
+  # Line 2
+  # This is an example list of strings.
+  Example List:
+    - "Item1"
+    - "Item2"
+    - "Item3"
+Settings:
+  Debug:
+    Enabled: true
+  Metrics:
+    Enabled: true
+  # Example YamlItem property using a custom serializer.
+  ItemStack:
+    itemType: "VInject-Item-Stack"
+    quantity: 1
+  EnumTest: STATE_ONE
+  EnumListTest:
+    - STATE_ONE
+    - STATE_TWO
+DynamicSettings:
+  test-item-1:
+    Value: 1.5
+    Actions:
+      - "cmd1"
+      - "cmd2"
+Features:
+  TestComponent:
+    # Enable or disable the test component feature
+    Enabled: false

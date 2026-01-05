@@ -1,29 +1,40 @@
 package net.vortexdevelopment.vinject.di;
 
-import net.vortexdevelopment.vinject.annotation.Injectable;
+import net.vortexdevelopment.vinject.annotation.util.Injectable;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlCollection;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory;
+import net.vortexdevelopment.vinject.annotation.yaml.YamlSerializer;
 import net.vortexdevelopment.vinject.config.ConfigurationSection;
 import net.vortexdevelopment.vinject.config.serializer.YamlSerializerBase;
+import net.vortexdevelopment.vinject.config.yaml.RenderOptions;
 import net.vortexdevelopment.vinject.config.yaml.YamlConfig;
 import net.vortexdevelopment.vinject.di.config.ConfigurationMapper;
+import net.vortexdevelopment.vinject.di.scan.ClasspathScanner;
+import org.reflections.Reflections;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Field;
+import java.net.URL;
+import java.net.URLDecoder;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 import java.util.stream.Stream;
 
 /**
@@ -64,18 +75,49 @@ public class ConfigurationContainer {
 
     private static final class BatchInfo {
         final String rootKey;
+        final String baseDir;
+        final Class<?> targetClass;
+        final Object holderInstance;
 
-        BatchInfo(String rootKey) {
+        BatchInfo(String rootKey, String baseDir, Class<?> targetClass, Object holderInstance) {
             this.rootKey = rootKey;
+            this.baseDir = baseDir;
+            this.targetClass = targetClass;
+            this.holderInstance = holderInstance;
         }
     }
     private final Map<String, BatchInfo> batches = new ConcurrentHashMap<>();
+    private final Map<Class<?>, String> directoryClassToBatchId = new ConcurrentHashMap<>();
 
-    public ConfigurationContainer(DependencyContainer container, Set<Class<?>> yamlConfigClasses) {
+    public ConfigurationContainer(DependencyContainer container, ClasspathScanner scanner, Reflections reflections, Set<Class<?>> yamlConfigClasses) {
+        INSTANCE = this;
         this.container = container;
         this.mapper = new ConfigurationMapper(container);
+        
+        // 1. Auto-register YamlSerializerBase implementations first
+        scanner.scanAndFilter(YamlSerializer.class, container::canLoadClass).forEach(serializerClass -> {
+            try {
+                Object instance = container.newInstance(serializerClass);
+                if (instance instanceof YamlSerializerBase<?> ys) {
+                    registerSerializer(ys);
+                } else {
+                    throw new RuntimeException("Class " + serializerClass.getName() + " is annotated with @YamlSerializer but does not implement YamlSerializerBase.");
+                }
+            } catch (Exception e) {
+                throw new RuntimeException("Unable to register YamlSerializerBase: " + serializerClass.getName(), e);
+            }
+        });
+
+        // 2. Load configurations
         loadConfigs(container, yamlConfigClasses);
-        INSTANCE = this;
+
+        // 3. Load batch directories
+        try {
+            loadBatches(reflections, container);
+        } catch (Exception e) {
+            throw new RuntimeException("Unable to load YAML batch directories", e);
+        }
+
     }
 
     /**
@@ -153,8 +195,11 @@ public class ConfigurationContainer {
                 File file = resolvedPath.toFile();
                 
                 // Use YamlConfig to load the file
-                YamlConfig config = YamlConfig.load(file);
-                fileDataMaps.put(filePath, config);
+                YamlConfig config = fileDataMaps.get(filePath);
+                if (config == null) {
+                    config = YamlConfig.load(file);
+                    fileDataMaps.put(filePath, config);
+                }
 
                 // Map data to instance
                 mapper.mapToInstance(config, instance, cfgClass, annotation.path());
@@ -325,7 +370,7 @@ public class ConfigurationContainer {
     }
 
     public void saveConfig(Class<?> configClass) {
-        saveConfig(configClass, false);
+        saveConfig(configClass, true);
     }
 
     public void markDirty(Class<?> configClass) {
@@ -336,6 +381,10 @@ public class ConfigurationContainer {
     }
 
     public void saveItemObject(Object instance) {
+        saveItemObject(instance, true);
+    }
+
+    public void saveItemObject(Object instance, boolean includeComments) {
         if (instance == null) {
             return;
         }
@@ -365,14 +414,14 @@ public class ConfigurationContainer {
             String fullPath = (rootKey == null || rootKey.isEmpty()) ? itemId : rootKey + "." + itemId;
 
             mapper.applyToConfig(config, instance, instance.getClass(), fullPath);
-            
+            RenderOptions options = new RenderOptions().setIncludeComments(includeComments);
             if (forceSyncSave) {
-                config.save();
+                config.save(options);
             } else {
                 YamlConfig finalConfig = config;
                 executor.submit(() -> {
                     try {
-                        finalConfig.save();
+                        finalConfig.save(options);
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
@@ -384,20 +433,112 @@ public class ConfigurationContainer {
     }
 
     public void saveBatch(String batchId) {
+        saveBatch(batchId, true);
+    }
+
+    public void saveBatch(String batchId, boolean includeComments) {
         Map<String, Object> items = batchStores.get(batchId);
         if (items != null) {
             for (Object item : items.values()) {
-                saveItemObject(item);
+                saveItemObject(item, includeComments);
             }
         }
     }
 
     public void saveItem(String batchId, String itemId) {
+        saveItem(batchId, itemId, true);
+    }
+
+    public void saveItem(String batchId, String itemId, boolean includeComments) {
         Map<String, Object> items = batchStores.get(batchId);
         if (items != null) {
             Object item = items.get(itemId);
             if (item != null) {
-                saveItemObject(item);
+                saveItemObject(item, includeComments);
+            }
+        }
+    }
+
+    public void registerItemObject(Class<?> holderClass, String fileName, Object item) {
+        String batchId = directoryClassToBatchId.get(holderClass);
+        if (batchId == null) {
+            throw new IllegalArgumentException("Holder class " + holderClass.getName() + " is not a registered YamlDirectory.");
+        }
+
+        BatchInfo info = batches.get(batchId);
+        if (!info.targetClass.isAssignableFrom(item.getClass())) {
+            throw new IllegalArgumentException("Item of type " + item.getClass().getName() + " cannot be added to batch " + batchId + " (expected " + info.targetClass.getName() + ")");
+        }
+
+        String actualFileName = fileName;
+        if (!actualFileName.endsWith(".yml") && !actualFileName.endsWith(".yaml")) {
+            actualFileName += ".yml";
+        }
+
+        // Resolve absolute path for synthetic field
+        Path filePath = resolvePath(info.baseDir).resolve(actualFileName).toAbsolutePath();
+        
+        // Instrument
+        instrumentItemInstance(item, batchId, filePath.toString());
+
+        // Registry update
+        Map<String, Object> items = batchStores.computeIfAbsent(batchId, k -> new LinkedHashMap<>());
+        
+        // Try to find the ID from @YamlId
+        String itemId = null;
+        try {
+            Field idField = mapper.findIdFieldForClass(item.getClass());
+            if (idField != null) {
+                idField.setAccessible(true);
+                itemId = (String) idField.get(item);
+            }
+        } catch (Exception ignored) {}
+        
+        if (itemId == null || itemId.isEmpty()) {
+            // Fallback to filename without extension
+            int dotIdx = actualFileName.lastIndexOf('.');
+            itemId = dotIdx == -1 ? actualFileName : actualFileName.substring(0, dotIdx);
+        }
+
+        items.put(itemId, item);
+        
+        // Update holder collections
+        if (info.holderInstance != null) {
+            updateHolderCollections(info.holderInstance, holderClass, items);
+        }
+    }
+
+    public void registerAndSaveItemObject(Class<?> holderClass, String fileName, Object item) {
+        registerItemObject(holderClass, fileName, item);
+        saveItemObject(item);
+    }
+
+    private void updateHolderCollections(Object holderInstance, Class<?> holderClass, Map<String, Object> loadedItems) {
+        for (Field field : holderClass.getDeclaredFields()) {
+            boolean isMap = Map.class.isAssignableFrom(field.getType());
+            boolean isCollection = Collection.class.isAssignableFrom(field.getType());
+            boolean hasAnnotation = field.isAnnotationPresent(YamlCollection.class);
+
+            if (isMap || isCollection || hasAnnotation) {
+                field.setAccessible(true);
+                try {
+                    Object colValue = field.get(holderInstance);
+                    if (colValue == null) continue;
+
+                    if (isMap) {
+                        @SuppressWarnings("unchecked")
+                        Map<Object, Object> holderMap = (Map<Object, Object>) colValue;
+                        holderMap.putAll(loadedItems);
+                    } else if (isCollection) {
+                        @SuppressWarnings("unchecked")
+                        Collection<Object> holderColl = (Collection<Object>) colValue;
+                        for (Object val : loadedItems.values()) {
+                            if (!holderColl.contains(val)) {
+                                holderColl.add(val);
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
             }
         }
     }
@@ -412,15 +553,21 @@ public class ConfigurationContainer {
         }
     }
 
-    private String loadBatchDirectory(YamlDirectory ann, Class<?> holderClass) {
+    public String loadBatchDirectory(YamlDirectory ann, Class<?> holderClass) {
         String dir = ann.dir();
         String id = holderClass.getName() + "::" + dir;
-        batches.put(id, new BatchInfo(ann.rootKey()));
         
         // Instantiate the holder class so it can be injected and used to access the batch
         Object holderInstance = container.newInstance(holderClass);
         
+        batches.put(id, new BatchInfo(ann.rootKey(), dir, ann.target(), holderInstance));
+        directoryClassToBatchId.put(holderClass, id);
+        
         Path start = resolvePath(dir);
+        if (ann.copyDefaults()) {
+            copyResourceDirectory(holderClass, dir, start);
+        }
+
         if (!Files.exists(start)) {
             return id;
         }
@@ -467,30 +614,9 @@ public class ConfigurationContainer {
             if (holderInstance != null) {
                 Map<String, Object> loadedItems = batchStores.get(id);
                 if (loadedItems != null) {
-                    for (Field field : holderClass.getDeclaredFields()) {
-                        boolean isMap = Map.class.isAssignableFrom(field.getType());
-                        boolean isCollection = Collection.class.isAssignableFrom(field.getType());
-                        boolean hasAnnotation = field.isAnnotationPresent(YamlCollection.class);
-
-                        if (isMap || isCollection || hasAnnotation) {
-                            field.setAccessible(true);
-                            try {
-                                Object colValue = field.get(holderInstance);
-                                if (colValue == null) continue;
-
-                                if (isMap) {
-                                    @SuppressWarnings("unchecked")
-                                    Map<Object, Object> holderMap = (Map<Object, Object>) colValue;
-                                    holderMap.putAll(loadedItems);
-                                } else if (isCollection) {
-                                    @SuppressWarnings("unchecked")
-                                    Collection<Object> holderColl = (Collection<Object>) colValue;
-                                    holderColl.addAll(loadedItems.values());
-                                }
-                            } catch (Exception e) {
-                                // Ignore population errors
-                            }
-                        }
+                    updateHolderCollections(holderInstance, holderClass, loadedItems);
+                    if (container != null) {
+                        container.getLifecycleManager().invokeOnLoad(holderInstance);
                     }
                 }
             }
@@ -558,16 +684,92 @@ public class ConfigurationContainer {
 
     private void instrumentItemInstance(Object instance, String batchId, String filePath) {
         try {
-            Field bField = findFieldInHierarchy(instance.getClass(), SYNTHETIC_BATCH_FIELD);
-            if (bField != null) {
-                bField.setAccessible(true);
-                bField.set(instance, batchId);
+            Field batchField = findFieldInHierarchy(instance.getClass(), SYNTHETIC_BATCH_FIELD);
+            Field fileField = findFieldInHierarchy(instance.getClass(), SYNTHETIC_FILE_FIELD);
+            
+            if (batchField != null && fileField != null) {
+                batchField.setAccessible(true);
+                fileField.setAccessible(true);
+                batchField.set(instance, batchId);
+                fileField.set(instance, filePath);
             }
-            Field fField = findFieldInHierarchy(instance.getClass(), SYNTHETIC_FILE_FIELD);
-            if (fField != null) {
-                fField.setAccessible(true);
-                fField.set(instance, filePath);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void copyResourceDirectory(Class<?> holderClass, String resourceDir, Path targetPath) {
+        try {
+            // Ensure target directory exists
+            Files.createDirectories(targetPath);
+
+            ClassLoader loader = holderClass.getClassLoader();
+            String relPath = resourceDir.startsWith("/") ? resourceDir.substring(1) : resourceDir;
+            if (!relPath.endsWith("/")) relPath += "/";
+
+            URL url = loader.getResource(relPath);
+            
+            // 1. Try filesystem (IDE/Local) case
+            if (url != null && "file".equals(url.getProtocol())) {
+                Path source = Paths.get(url.toURI());
+                Files.walk(source).forEach(p -> {
+                    try {
+                        Path destination = targetPath.resolve(source.relativize(p));
+                        if (Files.isDirectory(p)) {
+                            Files.createDirectories(destination);
+                        } else if (!Files.exists(destination)) {
+                            Files.createDirectories(destination.getParent());
+                            Files.copy(p, destination);
+                        }
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                });
+                return;
             }
-        } catch (Exception ignored) {}
+
+            // 2. Fallback for JAR (iterate JAR entries)
+            // Either getResource was null (missing dir entry) or it's a jar protocol
+            URL codeSourceUrl = holderClass.getProtectionDomain().getCodeSource().getLocation();
+            if (codeSourceUrl == null) return;
+
+            File jarFile;
+            try {
+                jarFile = new File(codeSourceUrl.toURI());
+            } catch (Exception e) {
+                // Fallback for complex URLs
+                String path = codeSourceUrl.getPath();
+                if (path.startsWith("file:")) path = path.substring(5);
+                if (path.contains("!")) path = path.substring(0, path.indexOf("!"));
+                jarFile = new File(URLDecoder.decode(path, StandardCharsets.UTF_8.name()));
+            }
+
+            if (jarFile.exists() && jarFile.isFile()) {
+                try (JarFile jar = new JarFile(jarFile)) {
+                    Enumeration<JarEntry> entries = jar.entries();
+                    while (entries.hasMoreElements()) {
+                        JarEntry entry = entries.nextElement();
+                        String name = entry.getName();
+                        
+                        if (name.startsWith(relPath)) {
+                            String entryRelPath = name.substring(relPath.length());
+                            if (entryRelPath.isEmpty()) continue;
+
+                            Path dest = targetPath.resolve(entryRelPath);
+                            if (entry.isDirectory()) {
+                                Files.createDirectories(dest);
+                            } else if (!Files.exists(dest)) {
+                                Files.createDirectories(dest.getParent());
+                                try (InputStream is = jar.getInputStream(entry)) {
+                                    Files.copy(is, dest);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 }

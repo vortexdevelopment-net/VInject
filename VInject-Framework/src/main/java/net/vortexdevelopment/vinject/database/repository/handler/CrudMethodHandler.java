@@ -88,12 +88,14 @@ public class CrudMethodHandler extends BaseMethodHandler {
     }
 
     private Iterable<?> saveAll(RepositoryInvocationContext<?, ?> context, Iterable<?> entities) throws Exception {
-        List<Object> result = new ArrayList<>();
-        for (Object entity : entities) {
-            save(context, entity);
-            result.add(entity);
-        }
-        return result;
+        return context.getDatabase().transaction(connection -> {
+            List<Object> result = new ArrayList<>();
+            for (Object entity : entities) {
+                save(context, entity);
+                result.add(entity);
+            }
+            return result;
+        });
     }
 
     private Object findById(RepositoryInvocationContext<?, ?> context, Object id) throws Exception {

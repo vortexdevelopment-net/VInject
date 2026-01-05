@@ -1,4 +1,6 @@
-package net.vortexdevelopment.vinject.annotation;
+package net.vortexdevelopment.vinject.annotation.component;
+
+import net.vortexdevelopment.vinject.annotation.template.TemplateDependency;
 
 import java.lang.annotation.Annotation;
 import java.lang.annotation.ElementType;

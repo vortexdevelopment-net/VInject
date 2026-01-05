@@ -56,11 +56,11 @@ public class H2Mapper implements SQLTypeMapper {
                     yield "REAL";
                 }
             }
-            case "Boolean", "boolean" -> "TINYINT(1)";
+            case "Boolean", "boolean" -> "TINYINT";
             case "Date" -> "DATETIME";
-            case "Byte[]", "byte[]" -> "BLOB";
+            case "Byte[]", "byte[]" -> (column.length() != -1 && column.length() != 255) ? "BINARY VARYING(" + column.length() + ")" : "BLOB";
             case "UUID" -> "UUID";
-            case "BigDecimal" -> "DECIMAL(" + (column.precision() != -1 ? column.precision() : 10) + ","
+            case "BigDecimal" -> "NUMERIC(" + (column.precision() != -1 ? column.precision() : 10) + ","
                     + (column.scale() != -1 ? column.scale() : 2) + ")";
             case "BigInteger" -> "NUMERIC(" + (column.precision() != -1 ? column.precision() : 38) + ",0)";
             default -> throw new UnsupportedOperationException("Unsupported field type: " + fieldType.getName());

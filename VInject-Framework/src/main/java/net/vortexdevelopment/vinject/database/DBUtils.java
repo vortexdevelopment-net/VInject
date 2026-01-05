@@ -29,7 +29,7 @@ public class DBUtils {
         Map<String, String> columns = new HashMap<>();
         String sql;
         if (isH2) {
-            sql = "SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT, IS_IDENTITY " +
+            sql = "SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, IS_NULLABLE, COLUMN_DEFAULT, IS_IDENTITY " +
                     "FROM INFORMATION_SCHEMA.COLUMNS " +
                     "WHERE TABLE_NAME = ?";
         } else {
@@ -50,10 +50,14 @@ public class DBUtils {
 
                     if (isH2) {
                         String typeName = rs.getString("DATA_TYPE").toUpperCase(Locale.ENGLISH);
-                        int maxLength = rs.getInt("CHARACTER_MAXIMUM_LENGTH");
+                        long maxLength = rs.getLong("CHARACTER_MAXIMUM_LENGTH");
 
-                        if (maxLength > 0 && (typeName.contains("CHAR") || typeName.contains("BINARY"))) {
+                        if (maxLength > 0 && maxLength < Integer.MAX_VALUE && (typeName.contains("CHAR") || typeName.contains("BINARY"))) {
                             columnType = typeName + "(" + maxLength + ")";
+                        } else if ("DECIMAL".equals(typeName) || "NUMERIC".equals(typeName)) {
+                            long precision = rs.getLong("NUMERIC_PRECISION");
+                            long scale = rs.getLong("NUMERIC_SCALE");
+                            columnType = typeName + "(" + precision + "," + scale + ")";
                         } else {
                             columnType = typeName;
                         }

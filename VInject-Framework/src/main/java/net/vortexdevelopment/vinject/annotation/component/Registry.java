@@ -1,4 +1,4 @@
-package net.vortexdevelopment.vinject.annotation;
+package net.vortexdevelopment.vinject.annotation.component;
 
 import net.vortexdevelopment.vinject.di.registry.RegistryOrder;
 

@@ -1,10 +1,10 @@
 package net.vortexdevelopment.vinject.di.engine;
 
 import net.vortexdevelopment.vinject.annotation.Bean;
-import net.vortexdevelopment.vinject.annotation.Component;
+import net.vortexdevelopment.vinject.annotation.component.Component;
 import net.vortexdevelopment.vinject.annotation.Inject;
-import net.vortexdevelopment.vinject.annotation.Repository;
-import net.vortexdevelopment.vinject.annotation.Service;
+import net.vortexdevelopment.vinject.annotation.component.Repository;
+import net.vortexdevelopment.vinject.annotation.component.Service;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
 import net.vortexdevelopment.vinject.di.utils.DependencyUtils;
 

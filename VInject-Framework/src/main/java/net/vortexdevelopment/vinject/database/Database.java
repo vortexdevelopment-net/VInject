@@ -75,6 +75,13 @@ public class Database implements DatabaseConnector {
         hikariConfig.addDataSourceProperty("cachePrepStmts", "true");
         hikariConfig.addDataSourceProperty("prepStmtCacheSize", "250");
         hikariConfig.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
+        hikariConfig.addDataSourceProperty("useServerPrepStmts", "true");
+        hikariConfig.addDataSourceProperty("useLocalSessionState", "true");
+        hikariConfig.addDataSourceProperty("rewriteBatchedStatements", "true");
+        hikariConfig.addDataSourceProperty("cacheResultSetMetadata", "true");
+        hikariConfig.addDataSourceProperty("cacheServerConfiguration", "true");
+        hikariConfig.addDataSourceProperty("elideSetAutoCommits", "true");
+        hikariConfig.addDataSourceProperty("maintainTimeStats", "false");
         this.serializerRegistry = new SerializerRegistry();
     }
 
@@ -297,6 +304,25 @@ public class Database implements DatabaseConnector {
     @Override
     public void connect(VoidConnection connection) {
         try (Connection conn = hikariDataSource.getConnection()) {
+            connection.connect(conn);
+        } catch (Exception e) {
+            throw new RuntimeException("Database connection error", e);
+        }
+    }
+
+    @Override
+    public <T> T connect(ConnectionResult<T> connection) {
+        try (Connection conn = hikariDataSource.getConnection()) {
+            return connection.connect(conn);
+        } catch (Exception e) {
+            throw new RuntimeException("Database connection error", e);
+        }
+    }
+
+    @Override
+    public void transaction(VoidConnection connection) {
+        try (Connection conn = hikariDataSource.getConnection()) {
+            boolean originalAutoCommit = conn.getAutoCommit();
             try {
                 conn.setAutoCommit(false);
                 connection.connect(conn);
@@ -304,15 +330,18 @@ public class Database implements DatabaseConnector {
             } catch (Exception e) {
                 conn.rollback();
                 throw e;
+            } finally {
+                conn.setAutoCommit(originalAutoCommit);
             }
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException("Transaction error", e);
         }
     }
 
     @Override
-    public <T> T connect(ConnectionResult<T> connection) {
+    public <T> T transaction(ConnectionResult<T> connection) {
         try (Connection conn = hikariDataSource.getConnection()) {
+            boolean originalAutoCommit = conn.getAutoCommit();
             try {
                 conn.setAutoCommit(false);
                 T result = connection.connect(conn);
@@ -321,9 +350,11 @@ public class Database implements DatabaseConnector {
             } catch (Exception e) {
                 conn.rollback();
                 throw e;
+            } finally {
+                conn.setAutoCommit(originalAutoCommit);
             }
         } catch (Exception e) {
-            throw new RuntimeException("Database connection error", e);
+            throw new RuntimeException("Transaction error", e);
         }
     }
 

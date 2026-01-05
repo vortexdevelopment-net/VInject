@@ -1,27 +1,35 @@
 package net.vortexdevelopment.vinject.config.yaml;
 
 public class ListItemNode extends YamlNode {
-    private String value;
+    private Object value;
 
-    public ListItemNode(int indentation, String value) {
+    public ListItemNode(int indentation, Object value) {
         super(indentation);
         this.value = value;
     }
 
-    public String getValue() {
+    public Object getValue() {
         return value;
     }
 
-    public void setValue(String value) {
+    public void setValue(Object value) {
         this.value = value;
     }
 
     @Override
-    public String render() {
+    public String render(RenderOptions options) {
         StringBuilder sb = new StringBuilder();
-        sb.append(" ".repeat(getIndentation())).append("- ").append(value);
+        sb.append(" ".repeat(getIndentation())).append("-");
+        String serialized = YamlValueFormatter.serialize(value);
+        if (!serialized.equals("~")) {
+            sb.append(" ").append(serialized);
+        }
+        
         for (YamlNode child : getChildren()) {
-            sb.append("\n").append(child.render());
+            String rendered = child.render(options);
+            if (!rendered.isEmpty() || child instanceof BlankLineNode) {
+                sb.append("\n").append(rendered);
+            }
         }
         return sb.toString();
     }

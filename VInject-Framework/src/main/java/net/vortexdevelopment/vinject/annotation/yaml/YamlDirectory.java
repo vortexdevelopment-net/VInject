@@ -11,6 +11,7 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.TYPE)
 public @interface YamlDirectory {
+
     /**
      * Directory path relative to the ConfigurationContainer root directory (or absolute).
      */
@@ -31,6 +32,11 @@ public @interface YamlDirectory {
      * Whether to recurse into subdirectories.
      */
     boolean recursive() default true;
+
+    /**
+     * Whether to copy matching directory from jar resources if the disk directory is empty or doesn't exist.
+     */
+    boolean copyDefaults() default true;
 
     /**
      * Note: batch id is now generated automatically as <holder-class-fqcn>::<dir>

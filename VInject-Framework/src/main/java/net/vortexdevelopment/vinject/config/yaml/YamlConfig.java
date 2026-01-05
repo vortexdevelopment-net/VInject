@@ -2,9 +2,12 @@ package net.vortexdevelopment.vinject.config.yaml;
 
 import net.vortexdevelopment.vinject.annotation.yaml.Comment;
 import net.vortexdevelopment.vinject.annotation.yaml.Key;
+import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlId;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlItem;
 import net.vortexdevelopment.vinject.config.ConfigurationSection;
+import net.vortexdevelopment.vinject.config.serializer.YamlSerializerBase;
+import net.vortexdevelopment.vinject.config.serializer.YamlSerializerRegistry;
 
 import java.io.File;
 import java.io.IOException;
@@ -95,7 +98,11 @@ public class YamlConfig implements ConfigurationSection {
     }
 
     public String render() {
-        return root.render();
+        return render(RenderOptions.defaultOptions());
+    }
+
+    public String render(RenderOptions options) {
+        return root.render(options);
     }
 
     public static ConfigurationSection fromMap(Map<String, Object> map) {
@@ -112,29 +119,40 @@ public class YamlConfig implements ConfigurationSection {
         }
     }
 
-    private String serializeSimple(Object val) {
-        if (val == null) return "~"; // Standard YAML null representation
-        if (val instanceof String s) {
-            // Check if string needs quoting (contains special characters, starts with special chars, or is multiline)
-            if (s.contains("\n") || s.contains(":") || s.startsWith("-") || s.startsWith("#") || s.startsWith(" ") || s.endsWith(" ")) {
-                return "\"" + s.replace("\"", "\\\"") + "\"";
-            }
-            return s;
-        }
-        return val.toString();
-    }
 
     public void inject(String path, Object value, String comment) {
-        setInternal(path, value, comment);
+        if (!contains(path)) {
+            setInternal(path, value, comment);
+        } else if (comment != null && !comment.isEmpty()) {
+            KeyedNode node = getNode(path);
+            if (node != null) {
+                ensureCommentPresent(node, comment);
+            }
+        }
     }
 
     @Override
-    public void set(String path, Object value) {
-        setInternal(path, value, null);
+    public void set(String path, Object value, String comment) {
+        setInternal(path, value, comment);
     }
 
     private void setInternal(String path, Object value, String comment) {
-        if (path == null || path.isEmpty()) return;
+        if (path == null) return;
+        if (path.isEmpty()) {
+            // Full document replace if path is empty
+            if (value instanceof Map) {
+                root.getChildren().clear();
+                @SuppressWarnings("unchecked")
+                Map<String, Object> map = (Map<String, Object>) value;
+                updateSectionFromMap(root, map);
+            } else if (value != null && (value.getClass().isAnnotationPresent(YamlItem.class) || value.getClass().isAnnotationPresent(YamlConfiguration.class))) {
+                root.getChildren().clear();
+                updateNodeFromObject(root, value);
+            }
+            rebuildIndex();
+            dirty = true;
+            return;
+        }
 
         String[] parts = path.split("\\.");
         YamlNode current = root;
@@ -153,6 +171,7 @@ public class YamlConfig implements ConfigurationSection {
 
             if (existing == null) {
                 if (i == parts.length - 1) {
+                    if (isAbsent(value)) return;
                     YamlNode newNode = createNode(nextIndent, part, value);
                     if (comment != null && !comment.isEmpty()) {
                         current.addChild(new CommentNode(nextIndent, comment));
@@ -160,6 +179,7 @@ public class YamlConfig implements ConfigurationSection {
                     current.addChild(newNode);
                     if (newNode instanceof KeyedNode kn) pathIndex.put(currentPath, kn);
                 } else {
+                    if (isAbsent(value)) return;
                     SectionNode newNode = new SectionNode(nextIndent, part);
                     current.addChild(newNode);
                     pathIndex.put(currentPath, newNode);
@@ -168,6 +188,16 @@ public class YamlConfig implements ConfigurationSection {
                 dirty = true;
             } else {
                 if (i == parts.length - 1) {
+                    if (isAbsent(value)) {
+                        YamlNode parent = existing.getParent();
+                        if (parent != null) {
+                            parent.getChildren().remove(existing);
+                            pathIndex.remove(currentPath);
+                            rebuildIndex();
+                            dirty = true;
+                        }
+                        return;
+                    }
                     updateExistingNode(existing, currentPath, value, comment);
                     dirty = true;
                 } else {
@@ -177,6 +207,7 @@ public class YamlConfig implements ConfigurationSection {
                             int idx = parent.getChildren().indexOf(existing);
                             SectionNode sn = new SectionNode(existing.getIndentation(), part);
                             parent.getChildren().set(idx, sn);
+                            sn.setParent(parent);
                             pathIndex.put(currentPath, sn);
                             current = sn;
                         } else {
@@ -189,6 +220,13 @@ public class YamlConfig implements ConfigurationSection {
             }
         }
         if (dirty) rebuildIndex();
+    }
+
+    private boolean isAbsent(Object value) {
+        if (value == null) return true;
+        if (value instanceof java.util.Collection && ((java.util.Collection<?>) value).isEmpty()) return true;
+        if (value instanceof java.util.Map && ((java.util.Map<?, ?>) value).isEmpty()) return true;
+        return false;
     }
 
     private void setRelative(YamlNode parent, String relativePath, Object value, String comment) {
@@ -205,27 +243,35 @@ public class YamlConfig implements ConfigurationSection {
 
             if (child == null) {
                 if (i == parts.length - 1) { // Last part, create the value node
+                    if (isAbsent(value)) return;
                     YamlNode newNode = createNode(nextIndent, part, value);
                     if (comment != null && !comment.isEmpty()) {
                         current.addChild(new CommentNode(nextIndent, comment));
                     }
                     current.addChild(newNode);
                 } else { // Not last part, create a section node
+                    if (isAbsent(value)) return;
                     SectionNode newNode = new SectionNode(nextIndent, part);
                     current.addChild(newNode);
                     current = newNode;
                 }
             } else {
                 if (i == parts.length - 1) { // Last part, update existing node
+                    if (isAbsent(value)) {
+                        current.getChildren().remove(child);
+                        return;
+                    }
                     if (child instanceof KeyedNode keyed) {
                         updateExistingNodeQuiet(keyed, value, comment);
                     }
                 } else { // Not last part, navigate to existing section
                     if (!(child instanceof SectionNode)) {
+                        if (isAbsent(value)) return;
                         // Replace KV or List with Section if it's not already a section
                         int idx = current.getChildren().indexOf(child);
                         SectionNode sn = new SectionNode(nextIndent, part); // Use nextIndent for the new section
                         current.getChildren().set(idx, sn);
+                        sn.setParent(current);
                         current = sn;
                     } else {
                         current = child;
@@ -243,16 +289,17 @@ public class YamlConfig implements ConfigurationSection {
         YamlNode newNode = null;
         // If the new value is a complex type (Map, List, YamlItem annotated object),
         // or if the existing node is not a KeyValueNode, we need to replace the node.
-        if (value instanceof Map || value instanceof List || (value != null && value.getClass().isAnnotationPresent(YamlItem.class)) || !(existing instanceof KeyValueNode)) {
+        if (value instanceof Map || value instanceof List || (value != null && (value.getClass().isAnnotationPresent(YamlItem.class) || value.getClass().isAnnotationPresent(YamlConfiguration.class))) || !(existing instanceof KeyValueNode)) {
             YamlNode parent = existing.getParent();
             if (parent != null) {
                 int idx = parent.getChildren().indexOf(existing);
                 newNode = createNode(existing.getIndentation(), existing.getKey(), value);
                 parent.getChildren().set(idx, newNode);
+                newNode.setParent(parent);
             }
         } else if (existing instanceof KeyValueNode kv) {
             // If it's a simple value and existing is a KeyValueNode, just update its value.
-            kv.setValue(serializeSimple(value));
+            kv.setValue(value);
             newNode = kv;
         }
         // If newNode is still null, it means no change was made or existing was not a KeyedNode with a parent.
@@ -295,7 +342,9 @@ public class YamlConfig implements ConfigurationSection {
 
         if (!hasComment) {
             // Add comment just before the node
-            parent.getChildren().add(idx, new CommentNode(node.getIndentation(), comment));
+            CommentNode cn = new CommentNode(node.getIndentation(), comment);
+            parent.getChildren().add(idx, cn);
+            cn.setParent(parent);
         }
     }
 
@@ -385,12 +434,19 @@ public class YamlConfig implements ConfigurationSection {
         if (value instanceof List<?> list) {
             ListNode ln = new ListNode(indent, key);
             for (Object item : list) {
-                if (item instanceof Map || (item != null && item.getClass().isAnnotationPresent(YamlItem.class))) {
-                    ListItemNode li = new ListItemNode(indent + indentStep, "");
+                if (item instanceof Map || (item != null && (item.getClass().isAnnotationPresent(YamlItem.class) || item.getClass().isAnnotationPresent(YamlConfiguration.class)))) {
+                    ListItemNode li = new ListItemNode(indent + indentStep, null);
                     updateNodeFromObject(li, item);
                     ln.addChild(li);
+                } else if (item != null && YamlSerializerRegistry.hasSerializer(item.getClass())) {
+                    ListItemNode li = new ListItemNode(indent + indentStep, null);
+                    @SuppressWarnings("unchecked")
+                    YamlSerializerBase<Object> ser = (YamlSerializerBase<Object>) YamlSerializerRegistry.getSerializer(item.getClass());
+                    Map<String, Object> serialized = ser.serialize(item);
+                    updateSectionFromMap(li, serialized);
+                    ln.addChild(li);
                 } else {
-                    ln.addChild(new ListItemNode(indent + indentStep, serializeSimple(item)));
+                    ln.addChild(new ListItemNode(indent + indentStep, item));
                 }
             }
             return ln;
@@ -400,12 +456,17 @@ public class YamlConfig implements ConfigurationSection {
             Map<String, Object> stringMap = (Map<String, Object>) value;
             updateSectionFromMap(sn, stringMap);
             return sn;
-        } else if (value != null && value.getClass().isAnnotationPresent(YamlItem.class)) {
+        } else if (value != null && (value.getClass().isAnnotationPresent(YamlItem.class) || value.getClass().isAnnotationPresent(YamlConfiguration.class))) {
             SectionNode sn = new SectionNode(indent, key);
             updateNodeFromObject(sn, value);
             return sn;
+        } else if (value != null && YamlSerializerRegistry.hasSerializer(value.getClass())) {
+            @SuppressWarnings("unchecked")
+            YamlSerializerBase<Object> ser = (YamlSerializerBase<Object>) YamlSerializerRegistry.getSerializer(value.getClass());
+            Map<String, Object> serialized = ser.serialize(value);
+            return createNode(indent, key, serialized);
         } else {
-            return new KeyValueNode(indent, key, serializeSimple(value));
+            return new KeyValueNode(indent, key, value);
         }
     }
 
@@ -417,28 +478,75 @@ public class YamlConfig implements ConfigurationSection {
             return;
         }
 
-        for (Field field : value.getClass().getDeclaredFields()) {
-            if (Modifier.isStatic(field.getModifiers())) continue;
-            if (field.isAnnotationPresent(YamlId.class) || field.getName().startsWith("__vinject_yaml")) continue;
-            field.setAccessible(true);
-            try {
-                Object val = field.get(value);
-                String key = field.isAnnotationPresent(Key.class) ? field.getAnnotation(Key.class).value() : field.getName();
-                String commentText = null;
-                if (field.isAnnotationPresent(Comment.class)) {
-                    String[] lines = field.getAnnotation(Comment.class).value();
-                    commentText = String.join("\n", lines);
+        Class<?> currentClass = value.getClass();
+        while (currentClass != null && currentClass != Object.class) {
+            for (Field field : currentClass.getDeclaredFields()) {
+                if (Modifier.isStatic(field.getModifiers())) continue;
+                if (field.isAnnotationPresent(YamlId.class) || field.getName().startsWith("__vinject_yaml")) continue;
+                field.setAccessible(true);
+                try {
+                    Object val = field.get(value);
+                    String key = field.isAnnotationPresent(Key.class) ? field.getAnnotation(Key.class).value() : field.getName();
+                    String commentText = null;
+                    if (field.isAnnotationPresent(Comment.class)) {
+                        String[] lines = field.getAnnotation(Comment.class).value();
+                        commentText = String.join("\n", lines);
+                    }
+                    setRelative(parent, key, val, commentText);
+                } catch (Exception ignored) {
                 }
-                setRelative(parent, key, val, commentText);
-            } catch (Exception ignored) {
             }
+            currentClass = currentClass.getSuperclass();
         }
     }
+
 
 
     @Override
     public boolean contains(String path) {
         return pathIndex.containsKey(path);
+    }
+
+    @Override
+    public boolean isString(String path) {
+        KeyedNode node = getNode(path);
+        return node instanceof KeyValueNode kv && kv.getValue() instanceof String;
+    }
+
+    @Override
+    public boolean isInt(String path) {
+        KeyedNode node = getNode(path);
+        return node instanceof KeyValueNode kv && kv.getValue() instanceof Number n && n.doubleValue() == n.intValue();
+    }
+
+    @Override
+    public boolean isLong(String path) {
+        KeyedNode node = getNode(path);
+        return node instanceof KeyValueNode kv && kv.getValue() instanceof Number n && n.doubleValue() == n.longValue();
+    }
+
+    @Override
+    public boolean isDouble(String path) {
+        KeyedNode node = getNode(path);
+        return node instanceof KeyValueNode kv && kv.getValue() instanceof Number;
+    }
+
+    @Override
+    public boolean isBoolean(String path) {
+        KeyedNode node = getNode(path);
+        return node instanceof KeyValueNode kv && kv.getValue() instanceof Boolean;
+    }
+
+    @Override
+    public boolean isList(String path) {
+        KeyedNode node = getNode(path);
+        return node instanceof ListNode;
+    }
+
+    @Override
+    public boolean isSection(String path) {
+        KeyedNode node = getNode(path);
+        return node instanceof SectionNode;
     }
 
     @Override
@@ -459,9 +567,13 @@ public class YamlConfig implements ConfigurationSection {
 
     @Override
     public void save() {
+        save(RenderOptions.defaultOptions());
+    }
+
+    public void save(RenderOptions options) {
         if (file == null) return;
         try {
-            Files.writeString(file.toPath(), render(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            Files.writeString(file.toPath(), render(options), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
             dirty = false;
         } catch (IOException e) {
             throw new RuntimeException("Failed to save YAML config to " + file.getAbsolutePath(), e);
@@ -473,6 +585,7 @@ public class YamlConfig implements ConfigurationSection {
         return dirty;
     }
 
+
     private String getPathPrefix(String[] parts, int length) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < length; i++) {
@@ -482,7 +595,15 @@ public class YamlConfig implements ConfigurationSection {
         return sb.toString();
     }
 
+    @SuppressWarnings("unchecked")
     private Object convertValue(Object value, Class<?> type) {
+        if (value == null) return null;
+        
+        YamlSerializerBase<?> ser = YamlSerializerRegistry.getSerializer(type);
+        if (ser != null && value instanceof Map) {
+            return ser.deserialize((Map<String, Object>) value);
+        }
+        
         String str = value.toString();
         if (type == String.class) return str;
         if (type == int.class || type == Integer.class) return Integer.parseInt(str);
@@ -534,6 +655,41 @@ public class YamlConfig implements ConfigurationSection {
         @Override
         public boolean contains(String path) {
             return root.contains(fullPath(path));
+        }
+
+        @Override
+        public boolean isString(String path) {
+            return root.isString(fullPath(path));
+        }
+
+        @Override
+        public boolean isInt(String path) {
+            return root.isInt(fullPath(path));
+        }
+
+        @Override
+        public boolean isLong(String path) {
+            return root.isLong(fullPath(path));
+        }
+
+        @Override
+        public boolean isDouble(String path) {
+            return root.isDouble(fullPath(path));
+        }
+
+        @Override
+        public boolean isBoolean(String path) {
+            return root.isBoolean(fullPath(path));
+        }
+
+        @Override
+        public boolean isList(String path) {
+            return root.isList(fullPath(path));
+        }
+
+        @Override
+        public boolean isSection(String path) {
+            return root.isSection(fullPath(path));
         }
 
         @Override

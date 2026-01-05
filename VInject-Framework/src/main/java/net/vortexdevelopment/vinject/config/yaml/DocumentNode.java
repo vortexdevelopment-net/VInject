@@ -6,10 +6,13 @@ public class DocumentNode extends YamlNode {
     }
 
     @Override
-    public String render() {
+    public String render(RenderOptions options) {
         StringBuilder sb = new StringBuilder();
         for (YamlNode child : getChildren()) {
-            sb.append(child.render()).append("\n");
+            String rendered = child.render(options);
+            if (!rendered.isEmpty() || child instanceof BlankLineNode) {
+                sb.append(rendered).append("\n");
+            }
         }
         return sb.toString();
     }

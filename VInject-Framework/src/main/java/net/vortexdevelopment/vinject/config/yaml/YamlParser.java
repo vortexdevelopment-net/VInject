@@ -41,7 +41,7 @@ public class YamlParser {
             Matcher liMatcher = LIST_ITEM_PATTERN.matcher(line);
             if (liMatcher.find()) {
                 String fullValue = liMatcher.group(1);
-                String value = parseValue(fullValue);
+                Object value = parseValue(fullValue);
 
 
                 if (parent instanceof SectionNode section) {
@@ -70,10 +70,10 @@ public class YamlParser {
             if (kvMatcher.find()) {
                 String key = kvMatcher.group(1).trim();
                 String fullValue = kvMatcher.group(2);
-                String value = parseValue(fullValue);
+                Object value = parseValue(fullValue);
 
                 YamlNode node;
-                if (value.isEmpty()) {
+                if (value == null) {
                     node = new SectionNode(indent, key);
                 } else {
                     node = new KeyValueNode(indent, key, value);
@@ -89,55 +89,23 @@ public class YamlParser {
         return root;
     }
 
-    private String parseValue(String fullValue) {
+    private Object parseValue(String fullValue) {
         String trimmed = fullValue.trim();
-        if (trimmed.isEmpty()) return "";
-
-        if (trimmed.startsWith("\"")) {
-            StringBuilder sb = new StringBuilder();
-            boolean escaped = false;
-            for (int i = 1; i < trimmed.length(); i++) {
-                char c = trimmed.charAt(i);
-                if (escaped) {
-                    if (c == 'n') sb.append('\n');
-                    else if (c == 'r') sb.append('\r');
-                    else if (c == 't') sb.append('\t');
-                    else sb.append(c);
-                    escaped = false;
-                } else if (c == '\\') {
-                    escaped = true;
-                } else if (c == '"') {
-                    return sb.toString();
-                } else {
-                    sb.append(c);
-                }
-            }
-            return sb.toString();
-        }
-
-        if (trimmed.startsWith("'")) {
-            StringBuilder sb = new StringBuilder();
-            for (int i = 1; i < trimmed.length(); i++) {
-                char c = trimmed.charAt(i);
-                if (c == '\'' && i + 1 < trimmed.length() && trimmed.charAt(i + 1) == '\'') {
-                    sb.append('\'');
-                    i++;
-                } else if (c == '\'') {
-                    return sb.toString();
-                } else {
-                    sb.append(c);
-                }
-            }
-            return sb.toString();
-        }
+        if (trimmed.isEmpty()) return null;
 
         // Unquoted: handle comments
-        int hashIdx = trimmed.indexOf(" #");
-        if (hashIdx == -1 && trimmed.startsWith("#")) hashIdx = 0;
-        if (hashIdx != -1) {
-            return trimmed.substring(0, hashIdx).trim();
+        int hashIdx = -1;
+        if (trimmed.startsWith("#")) {
+            hashIdx = 0;
+        } else {
+            hashIdx = trimmed.indexOf(" #");
         }
-        return trimmed;
+        
+        if (hashIdx != -1) {
+            trimmed = trimmed.substring(0, hashIdx).trim();
+        }
+        
+        return YamlValueFormatter.deserialize(trimmed);
     }
 
     private int getIndentation(String line) {

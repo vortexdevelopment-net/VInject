@@ -1,12 +1,13 @@
 package net.vortexdevelopment.vinject.di.resolver;
 
 import net.vortexdevelopment.vinject.annotation.ArgumentResolver;
-import net.vortexdevelopment.vinject.annotation.Component;
+import net.vortexdevelopment.vinject.annotation.component.Component;
 import net.vortexdevelopment.vinject.annotation.Conditional;
 import net.vortexdevelopment.vinject.annotation.Inject;
 import net.vortexdevelopment.vinject.annotation.OptionalDependency;
-import net.vortexdevelopment.vinject.annotation.Repository;
-import net.vortexdevelopment.vinject.annotation.Service;
+import net.vortexdevelopment.vinject.annotation.component.Repository;
+import net.vortexdevelopment.vinject.annotation.component.Service;
+import net.vortexdevelopment.vinject.annotation.lifecycle.PostConstruct;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConditional;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
 
@@ -27,14 +28,40 @@ public class InjectArgumentResolver implements ArgumentResolverProcessor {
             return true;
         }
         
-        // Also handle default dependency injection for component types and YAML configs
+        // For parameters (constructors, @PostConstruct methods, etc.), handle default dependency injection
+        // whenever the type is a complex object. Unannotated fields however are ignored.
+        if (context.isField()) {
+            return false;
+        }
+        
         Class<?> targetType = context.getTargetType();
+        Class<?> declaringClass = context.getDeclaringClass();
+        
+        // Don't auto-inject if it's the same class to avoid unintentional circular dependencies
+        if (targetType.equals(declaringClass)) {
+            return false;
+        }
+
+        // Handle if it's a known component type, already in container, or any complex object (potential dependency)
         return targetType.isAnnotationPresent(Component.class) 
-                || targetType.isAnnotationPresent(Service.class)
+                || targetType.isAnnotationPresent(Service.class) 
                 || targetType.isAnnotationPresent(Repository.class)
                 || targetType.isAnnotationPresent(YamlConfiguration.class)
                 || targetType.isAnnotationPresent(net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory.class)
-                || context.getContainer().getDependencyOrNull(targetType) != null;
+                || context.getContainer().getDependencyOrNull(targetType) != null
+                || isComplexType(targetType);
+    }
+
+    /**
+     * Check if a type is considered a "complex" type suitable for automatic injection.
+     * Excludes primitives, strings, and standard wrapper classes.
+     */
+    private boolean isComplexType(Class<?> type) {
+        if (type.isPrimitive()) return false;
+        if (type == String.class || type == Object.class) return false;
+        if (Number.class.isAssignableFrom(type)) return false;
+        if (type == Boolean.class || type == Character.class) return false;
+        return true;
     }
     
     @Override
@@ -142,7 +169,7 @@ public class InjectArgumentResolver implements ArgumentResolverProcessor {
                 }
                 
                 // Standard error message
-                if (context.getMethod() != null && context.getMethod().isAnnotationPresent(net.vortexdevelopment.vinject.annotation.PostConstruct.class)) {
+                if (context.getMethod() != null && context.getMethod().isAnnotationPresent(PostConstruct.class)) {
                     throw new RuntimeException("Dependency not found for @PostConstruct method parameter: " + 
                             targetType.getName() + " in method: " + context.getMethod().getName() + 
                             " of class: " + declaringClass.getName());

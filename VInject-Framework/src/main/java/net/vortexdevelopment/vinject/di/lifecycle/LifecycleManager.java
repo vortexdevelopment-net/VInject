@@ -1,8 +1,8 @@
 package net.vortexdevelopment.vinject.di.lifecycle;
 
-import net.vortexdevelopment.vinject.annotation.OnDestroy;
-import net.vortexdevelopment.vinject.annotation.OnLoad;
-import net.vortexdevelopment.vinject.annotation.PostConstruct;
+import net.vortexdevelopment.vinject.annotation.lifecycle.OnDestroy;
+import net.vortexdevelopment.vinject.annotation.lifecycle.OnLoad;
+import net.vortexdevelopment.vinject.annotation.lifecycle.PostConstruct;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
 
 import java.lang.reflect.Method;

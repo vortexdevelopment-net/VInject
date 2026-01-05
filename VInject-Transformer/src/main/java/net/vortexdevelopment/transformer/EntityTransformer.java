@@ -8,6 +8,7 @@ import org.apache.bcel.classfile.ElementValuePair;
 import org.apache.bcel.classfile.Field;
 import org.apache.bcel.classfile.JavaClass;
 import org.apache.bcel.classfile.Method;
+import org.apache.bcel.classfile.ClassElementValue;
 import org.apache.bcel.classfile.SimpleElementValue;
 import org.apache.bcel.generic.ALOAD;
 import org.apache.bcel.generic.ClassGen;
@@ -67,6 +68,8 @@ public class EntityTransformer extends AbstractMojo {
     @Parameter(defaultValue = "${mojoExecution}", readonly = true)
     private MojoExecution session;
 
+    private final Set<String> customRegistryAnnotations = new HashSet<>();
+
     @Override
     public void execute() throws MojoExecutionException {
         String phase = session != null ? session.getLifecyclePhase() : null;
@@ -85,6 +88,7 @@ public class EntityTransformer extends AbstractMojo {
             } else {
                 getLog().warn("Configured classes directory does not exist: " + classesDirectory);
             }
+            generateCustomRegistryMetadata();
             return;
         }
 
@@ -118,6 +122,8 @@ public class EntityTransformer extends AbstractMojo {
                 getLog().warn("Test output directory does not exist: " + testOutputDirectory);
             }
         }
+        
+        generateCustomRegistryMetadata();
     }
 
     private String capitalize(String s) {
@@ -145,6 +151,22 @@ public class EntityTransformer extends AbstractMojo {
 
             String className = javaClass.getClassName();
             getLog().debug("Processing class file: " + className + " from " + classFile.getName());
+
+            // Check for @Registry annotation
+            for (AnnotationEntry annotation : javaClass.getAnnotationEntries()) {
+                if (annotation.getAnnotationType().equals("Lnet/vortexdevelopment/vinject/annotation/Registry;")) {
+                    for (ElementValuePair pair : annotation.getElementValuePairs()) {
+                        if ("annotation".equals(pair.getNameString())) {
+                            if (pair.getValue() instanceof ClassElementValue) {
+                                String signature = ((ClassElementValue) pair.getValue()).getClassString();
+                                String classNameStr = Type.getType(signature).getClassName();
+                                customRegistryAnnotations.add(classNameStr);
+                                getLog().info("Found custom registry annotation: " + classNameStr + " in " + javaClass.getClassName());
+                            }
+                        }
+                    }
+                }
+            }
 
             boolean hasEntityAnnotation = Arrays.stream(javaClass.getAnnotationEntries())
                     .anyMatch(annotation -> annotation.getAnnotationType().equals("Lnet/vortexdevelopment/vinject/annotation/database/Entity;"));
@@ -723,6 +745,28 @@ public class EntityTransformer extends AbstractMojo {
         methodGen.removeLineNumbers();
         methodGen.removeLocalVariables();
         classGen.replaceMethod(method, methodGen.getMethod());
+    }
+
+    private void generateCustomRegistryMetadata() throws MojoExecutionException {
+        if (customRegistryAnnotations.isEmpty()) {
+            return;
+        }
+
+        File metaInfDir = new File(outputDirectory, "META-INF/vinject");
+        if (!metaInfDir.exists()) {
+            metaInfDir.mkdirs();
+        }
+
+        File metadataFile = new File(metaInfDir, "custom-registries.list");
+        getLog().info("Writing custom registry metadata to: " + metadataFile.getAbsolutePath());
+
+        try (FileOutputStream fos = new FileOutputStream(metadataFile)) {
+            for (String annotationClass : customRegistryAnnotations) {
+                fos.write((annotationClass + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+        } catch (IOException e) {
+            throw new MojoExecutionException("Failed to write custom registry metadata", e);
+        }
     }
 
 }

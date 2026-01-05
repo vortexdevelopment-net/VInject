@@ -1,6 +1,6 @@
 package net.vortexdevelopment.vinject;
 
-import net.vortexdevelopment.vinject.annotation.Root;
+import net.vortexdevelopment.vinject.annotation.component.Root;
 import net.vortexdevelopment.vinject.annotation.database.Entity;
 import net.vortexdevelopment.vinject.config.Environment;
 import net.vortexdevelopment.vinject.database.Database;

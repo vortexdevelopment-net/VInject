@@ -33,5 +33,9 @@ public abstract class YamlNode {
         children.add(child);
     }
 
-    public abstract String render();
+    public String render() {
+        return render(RenderOptions.defaultOptions());
+    }
+
+    public abstract String render(RenderOptions options);
 }

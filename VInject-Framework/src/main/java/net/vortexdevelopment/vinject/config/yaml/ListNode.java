@@ -6,11 +6,14 @@ public class ListNode extends KeyedNode {
     }
 
     @Override
-    public String render() {
+    public String render(RenderOptions options) {
         StringBuilder sb = new StringBuilder();
         sb.append(" ".repeat(getIndentation())).append(getKey()).append(":");
         for (YamlNode child : getChildren()) {
-            sb.append("\n").append(child.render());
+            String rendered = child.render(options);
+            if (!rendered.isEmpty() || child instanceof BlankLineNode) {
+                sb.append("\n").append(rendered);
+            }
         }
         return sb.toString();
     }

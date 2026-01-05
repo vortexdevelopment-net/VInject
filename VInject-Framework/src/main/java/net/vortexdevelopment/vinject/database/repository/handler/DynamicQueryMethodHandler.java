@@ -10,11 +10,15 @@ import java.sql.ResultSet;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Handles dynamic findBy, findAllBy, deleteBy, and deleteAllBy methods.
  */
 public class DynamicQueryMethodHandler extends BaseMethodHandler {
+
+    private final Map<Method, QueryInfo> queryCache = new ConcurrentHashMap<>();
 
     @Override
     public boolean canHandle(Method method) {
@@ -28,140 +32,144 @@ public class DynamicQueryMethodHandler extends BaseMethodHandler {
         String methodName = method.getName();
         long startTime = System.currentTimeMillis();
 
+        QueryInfo info = queryCache.computeIfAbsent(method, m -> buildQueryInfo(context, m));
+        long prepTime = System.currentTimeMillis() - startTime;
+
+        long queryStartTime = System.currentTimeMillis();
+        long[] internalTimings = new long[2]; // [0] = connTime, [1] = execTime
+        
         Object result = switch (methodName) {
-            case String n when n.startsWith("findBy") -> handleFindBy(context, method, args);
-            case String n when n.startsWith("findAllBy") -> handleFindAllBy(context, method, args);
-            case String n when n.startsWith("deleteBy") -> handleDeleteBy(context, method, args);
-            case String n when n.startsWith("deleteAllBy") -> handleDeleteAllBy(context, method, args);
+            case String n when n.startsWith("findBy") || n.startsWith("findAllBy") -> handleFind(context, method, args, info, internalTimings);
+            case String n when n.startsWith("deleteBy") || n.startsWith("deleteAllBy") -> handleDelete(context, method, args, info, internalTimings);
             default -> null;
         };
+        long queryTime = System.currentTimeMillis() - queryStartTime;
 
-        System.out.println("Query '" + methodName + "' took: " + (System.currentTimeMillis() - startTime) + "ms");
+        if (queryTime > 10 || prepTime > 5) {
+            System.out.println("Query '" + methodName + "' took: " + (System.currentTimeMillis() - startTime) + 
+                "ms (Prep: " + prepTime + "ms, Conn: " + internalTimings[0] + "ms, Exec: " + internalTimings[1] + "ms)");
+        }
         return result;
     }
 
-    private Object handleFindBy(RepositoryInvocationContext<?, ?> context, Method method, Object[] args) throws Exception {
+    private QueryInfo buildQueryInfo(RepositoryInvocationContext<?, ?> context, Method method) {
         String methodName = method.getName();
-        Class<?> returnType = method.getReturnType();
         EntityMetadata metadata = context.getEntityMetadata();
+        
+        int prefixLength;
+        boolean isDelete = false;
+        boolean isMultiple = false;
 
-        boolean isIterable = Iterable.class.isAssignableFrom(returnType) ||
+        if (methodName.startsWith("findBy")) {
+            prefixLength = 6;
+        } else if (methodName.startsWith("findAllBy")) {
+            prefixLength = 9;
+            isMultiple = true;
+        } else if (methodName.startsWith("deleteBy")) {
+            prefixLength = 8;
+            isDelete = true;
+        } else if (methodName.startsWith("deleteAllBy")) {
+            prefixLength = 11;
+            isDelete = true;
+            isMultiple = true;
+        } else {
+            throw new IllegalArgumentException("Unsupported method: " + methodName);
+        }
+
+        String[] fieldNames = parseFieldNames(methodName, prefixLength);
+        StringBuilder sql = new StringBuilder();
+        
+        if (isDelete) {
+            sql.append("DELETE FROM ");
+        } else {
+            sql.append("SELECT * FROM ");
+        }
+        
+        sql.append(context.getSchemaFormatter().formatTableName(metadata.getTableName()));
+        sql.append(" WHERE ");
+
+        for (int i = 0; i < fieldNames.length; i++) {
+            String fieldName = fieldNames[i];
+            String columnName = metadata.getColumnName(fieldName);
+            if (columnName == null) {
+                throw new IllegalArgumentException("No such field: " + fieldName + " in entity " + context.getEntityClass().getName());
+            }
+            if (i > 0) {
+                sql.append(" AND ");
+            }
+            sql.append(context.getSchemaFormatter().formatColumnName(columnName)).append(" = ?");
+        }
+
+        return new QueryInfo(sql.toString(), fieldNames, isDelete, isMultiple);
+    }
+
+    private Object handleFind(RepositoryInvocationContext<?, ?> context, Method method, Object[] args, QueryInfo info, long[] timings) throws Exception {
+        Class<?> returnType = method.getReturnType();
+        boolean isCollection = Iterable.class.isAssignableFrom(returnType) ||
                 Collection.class.isAssignableFrom(returnType) ||
                 returnType.isArray();
 
-        String[] fieldNames = parseFieldNames(methodName, 6);
-
-        if (fieldNames.length != (args == null ? 0 : args.length)) {
-            throw new IllegalArgumentException("Mismatch between fields and arguments in method: " + methodName);
+        List<Object> parameters = new ArrayList<>();
+        for (int i = 0; i < info.fieldNames.length; i++) {
+            parameters.add(RepositoryUtils.unwrapEntityId(args[i], context));
         }
 
-        WhereClause where = buildWhereClause(context, fieldNames, args);
-        String sql = "SELECT * FROM " + context.getSchemaFormatter().formatTableName(metadata.getTableName()) +
-                " WHERE " + where.sql;
-
-        if (isIterable) {
-            return context.getDatabase().connect(connection -> {
+        long connStart = System.currentTimeMillis();
+        return context.getDatabase().connect(connection -> {
+            timings[0] = System.currentTimeMillis() - connStart;
+            long execStart = System.currentTimeMillis();
+            
+            Object result;
+            if (isCollection || info.isMultiple) {
                 List<Object> results = new ArrayList<>();
-                try (PreparedStatement statement = connection.prepareStatement(sql)) {
-                    RepositoryUtils.setStatementParameters(statement, where.parameters);
+                try (PreparedStatement statement = connection.prepareStatement(info.sql)) {
+                    RepositoryUtils.setStatementParameters(statement, parameters);
                     try (ResultSet rs = statement.executeQuery()) {
                         while (rs.next()) {
                             results.add(mapEntity(context, connection, context.getEntityClass(), rs));
                         }
                     }
                 }
-                return results;
-            });
-        } else {
-            return context.getDatabase().connect(connection -> {
-                try (PreparedStatement statement = connection.prepareStatement(sql)) {
-                    RepositoryUtils.setStatementParameters(statement, where.parameters);
+                result = results;
+            } else {
+                result = null;
+                try (PreparedStatement statement = connection.prepareStatement(info.sql)) {
+                    RepositoryUtils.setStatementParameters(statement, parameters);
                     try (ResultSet rs = statement.executeQuery()) {
                         if (rs.next()) {
-                            return mapEntity(context, connection, context.getEntityClass(), rs);
+                            result = mapEntity(context, connection, context.getEntityClass(), rs);
                         }
                     }
                 }
-                return null;
-            });
-        }
-    }
-
-    private Object handleFindAllBy(RepositoryInvocationContext<?, ?> context, Method method, Object[] args) throws Exception {
-        String methodName = method.getName();
-        EntityMetadata metadata = context.getEntityMetadata();
-
-        String[] fieldNames = parseFieldNames(methodName, 9);
-
-        if (fieldNames.length != (args == null ? 0 : args.length)) {
-            throw new IllegalArgumentException("Mismatch between fields and arguments in method: " + methodName);
-        }
-
-        WhereClause where = buildWhereClause(context, fieldNames, args);
-        String sql = "SELECT * FROM " + context.getSchemaFormatter().formatTableName(metadata.getTableName()) +
-                " WHERE " + where.sql;
-
-        return context.getDatabase().connect(connection -> {
-            List<Object> found = new ArrayList<>();
-            try (PreparedStatement statement = connection.prepareStatement(sql)) {
-                RepositoryUtils.setStatementParameters(statement, where.parameters);
-                try (ResultSet rs = statement.executeQuery()) {
-                    while (rs.next()) {
-                        found.add(mapEntity(context, connection, context.getEntityClass(), rs));
-                    }
-                }
             }
-            return found;
+            timings[1] = System.currentTimeMillis() - execStart;
+            return result;
         });
     }
 
-    private Object handleDeleteBy(RepositoryInvocationContext<?, ?> context, Method method, Object[] args) throws Exception {
-        String methodName = method.getName();
-        EntityMetadata metadata = context.getEntityMetadata();
-
-        String[] fieldNames = parseFieldNames(methodName, 8);
-
-        if (fieldNames.length != (args == null ? 0 : args.length)) {
-            throw new IllegalArgumentException("Mismatch between fields and arguments in method: " + methodName);
+    private Object handleDelete(RepositoryInvocationContext<?, ?> context, Method method, Object[] args, QueryInfo info, long[] timings) throws Exception {
+        List<Object> parameters = new ArrayList<>();
+        for (int i = 0; i < info.fieldNames.length; i++) {
+            parameters.add(RepositoryUtils.unwrapEntityId(args[i], context));
         }
 
-        WhereClause where = buildWhereClause(context, fieldNames, args);
-        String sql = "DELETE FROM " + context.getSchemaFormatter().formatTableName(metadata.getTableName()) +
-                " WHERE " + where.sql;
-
+        long connStart = System.currentTimeMillis();
         context.getDatabase().connect(connection -> {
-            try (PreparedStatement statement = connection.prepareStatement(sql)) {
-                RepositoryUtils.setStatementParameters(statement, where.parameters);
+            timings[0] = System.currentTimeMillis() - connStart;
+            long execStart = System.currentTimeMillis();
+            
+            try (PreparedStatement statement = connection.prepareStatement(info.sql)) {
+                RepositoryUtils.setStatementParameters(statement, parameters);
                 statement.executeUpdate();
             }
+            
+            timings[1] = System.currentTimeMillis() - execStart;
             return null;
         });
         return null;
     }
 
-    private Object handleDeleteAllBy(RepositoryInvocationContext<?, ?> context, Method method, Object[] args) throws Exception {
-        String methodName = method.getName();
-        EntityMetadata metadata = context.getEntityMetadata();
 
-        String[] fieldNames = parseFieldNames(methodName, 11);
-
-        if (fieldNames.length != (args == null ? 0 : args.length)) {
-            throw new IllegalArgumentException("Mismatch between fields and arguments in method: " + methodName);
-        }
-
-        WhereClause where = buildWhereClause(context, fieldNames, args);
-        String sql = "DELETE FROM " + context.getSchemaFormatter().formatTableName(metadata.getTableName()) +
-                " WHERE " + where.sql;
-
-        context.getDatabase().connect(connection -> {
-            try (PreparedStatement statement = connection.prepareStatement(sql)) {
-                RepositoryUtils.setStatementParameters(statement, where.parameters);
-                statement.executeUpdate();
-            }
-            return null;
-        });
-        return null;
-    }
 
     private String[] parseFieldNames(String methodName, int prefixLength) {
         String[] parts = methodName.substring(prefixLength).split("And");
@@ -170,27 +178,5 @@ public class DynamicQueryMethodHandler extends BaseMethodHandler {
                 .toArray(String[]::new);
     }
 
-    private WhereClause buildWhereClause(RepositoryInvocationContext<?, ?> context, String[] fieldNames, Object[] args) {
-        StringBuilder sql = new StringBuilder();
-        List<Object> parameters = new ArrayList<>();
-        EntityMetadata metadata = context.getEntityMetadata();
-
-        for (int i = 0; i < fieldNames.length; i++) {
-            String fieldName = fieldNames[i];
-            String columnName = metadata.getColumnName(fieldName);
-
-            if (columnName == null) {
-                throw new IllegalArgumentException("No such field: " + fieldName + " in entity " + context.getEntityClass().getName());
-            }
-
-            if (i > 0) {
-                sql.append(" AND ");
-            }
-            sql.append(context.getSchemaFormatter().formatColumnName(columnName)).append(" = ?");
-            parameters.add(RepositoryUtils.unwrapEntityId(args[i], context));
-        }
-        return new WhereClause(sql.toString(), parameters);
-    }
-
-    private record WhereClause(String sql, List<Object> parameters) {}
+    private record QueryInfo(String sql, String[] fieldNames, boolean isDelete, boolean isMultiple) {}
 }

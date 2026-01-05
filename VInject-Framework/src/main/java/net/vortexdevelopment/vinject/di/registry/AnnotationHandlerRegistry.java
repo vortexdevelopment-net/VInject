@@ -1,6 +1,6 @@
 package net.vortexdevelopment.vinject.di.registry;
 
-import net.vortexdevelopment.vinject.annotation.Registry;
+import net.vortexdevelopment.vinject.annotation.component.Registry;
 
 import java.lang.annotation.Annotation;
 import java.util.List;

@@ -2,8 +2,8 @@ package net.vortexdevelopment.vinject.di.scan;
 
 import lombok.Getter;
 import net.vortexdevelopment.vinject.annotation.ArgumentResolver;
-import net.vortexdevelopment.vinject.annotation.Registry;
-import net.vortexdevelopment.vinject.annotation.Root;
+import net.vortexdevelopment.vinject.annotation.component.Registry;
+import net.vortexdevelopment.vinject.annotation.component.Root;
 import org.reflections.Configuration;
 import org.reflections.Reflections;
 import org.reflections.util.ConfigurationBuilder;

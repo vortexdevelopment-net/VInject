@@ -48,8 +48,12 @@ public interface ConfigurationSection {
     }
 
     default void set(String path, Object value) {
+        set(path, value, null);
+    }
+
+    default void set(String path, Object value, String comment) {
         if (getConfigurationSection() != this) {
-            getConfigurationSection().set(path, value);
+            getConfigurationSection().set(path, value, comment);
         }
     }
 
@@ -154,6 +158,97 @@ public interface ConfigurationSection {
             return result;
         }
         return new java.util.ArrayList<>();
+    }
+
+    default List<Integer> getIntegerList(String path) {
+        Object val = get(path);
+        if (val instanceof List) {
+            java.util.List<Integer> result = new java.util.ArrayList<>();
+            for (Object obj : (List<?>) val) {
+                if (obj instanceof Number n) result.add(n.intValue());
+                else if (obj != null) try { result.add(Integer.parseInt(obj.toString())); } catch (NumberFormatException ignored) {}
+            }
+            return result;
+        }
+        return new java.util.ArrayList<>();
+    }
+
+    default List<Long> getLongList(String path) {
+        Object val = get(path);
+        if (val instanceof List) {
+            java.util.List<Long> result = new java.util.ArrayList<>();
+            for (Object obj : (List<?>) val) {
+                if (obj instanceof Number n) result.add(n.longValue());
+                else if (obj != null) try { result.add(Long.parseLong(obj.toString())); } catch (NumberFormatException ignored) {}
+            }
+            return result;
+        }
+        return new java.util.ArrayList<>();
+    }
+
+    default List<Double> getDoubleList(String path) {
+        Object val = get(path);
+        if (val instanceof List) {
+            java.util.List<Double> result = new java.util.ArrayList<>();
+            for (Object obj : (List<?>) val) {
+                if (obj instanceof Number n) result.add(n.doubleValue());
+                else if (obj != null) try { result.add(Double.parseDouble(obj.toString())); } catch (NumberFormatException ignored) {}
+            }
+            return result;
+        }
+        return new java.util.ArrayList<>();
+    }
+
+    default List<Boolean> getBooleanList(String path) {
+        Object val = get(path);
+        if (val instanceof List) {
+            java.util.List<Boolean> result = new java.util.ArrayList<>();
+            for (Object obj : (List<?>) val) {
+                if (obj instanceof Boolean b) result.add(b);
+                else if (obj != null) result.add(Boolean.parseBoolean(obj.toString()));
+            }
+            return result;
+        }
+        return new java.util.ArrayList<>();
+    }
+
+    default boolean isString(String path) {
+        if (getConfigurationSection() != this) return getConfigurationSection().isString(path);
+        return get(path) instanceof String;
+    }
+
+    default boolean isInt(String path) {
+        if (getConfigurationSection() != this) return getConfigurationSection().isInt(path);
+        Object val = get(path);
+        return val instanceof Integer;
+    }
+
+    default boolean isLong(String path) {
+        if (getConfigurationSection() != this) return getConfigurationSection().isLong(path);
+        Object val = get(path);
+        return val instanceof Long || val instanceof Integer;
+    }
+
+    default boolean isDouble(String path) {
+        if (getConfigurationSection() != this) return getConfigurationSection().isDouble(path);
+        Object val = get(path);
+        return val instanceof Double || val instanceof Float;
+    }
+
+    default boolean isBoolean(String path) {
+        if (getConfigurationSection() != this) return getConfigurationSection().isBoolean(path);
+        return get(path) instanceof Boolean;
+    }
+
+    default boolean isList(String path) {
+        if (getConfigurationSection() != this) return getConfigurationSection().isList(path);
+        return get(path) instanceof List;
+    }
+
+    default boolean isSection(String path) {
+        if (getConfigurationSection() != this) return getConfigurationSection().isSection(path);
+        Object val = get(path);
+        return val instanceof java.util.Map || getSection(path) != null;
     }
 
     default void setObject(String path, Object value) {

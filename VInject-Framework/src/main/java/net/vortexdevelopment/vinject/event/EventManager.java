@@ -1,6 +1,6 @@
 package net.vortexdevelopment.vinject.event;
 
-import net.vortexdevelopment.vinject.annotation.OnEvent;
+import net.vortexdevelopment.vinject.annotation.lifecycle.OnEvent;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
 import org.jetbrains.annotations.NotNull;
 

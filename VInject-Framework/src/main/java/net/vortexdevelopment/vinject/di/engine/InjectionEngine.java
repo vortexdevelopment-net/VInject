@@ -1,6 +1,7 @@
 package net.vortexdevelopment.vinject.di.engine;
 
 import net.vortexdevelopment.vinject.annotation.Inject;
+import net.vortexdevelopment.vinject.annotation.util.IgnoreJavaxInject;
 import net.vortexdevelopment.vinject.annotation.Value;
 import net.vortexdevelopment.vinject.config.Environment;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
@@ -38,6 +39,8 @@ public class InjectionEngine {
             if (Modifier.isStatic(field.getModifiers())) {
                 continue;
             }
+
+            checkJavaxInject(field);
 
             ArgumentResolverContext context = new ArgumentResolverContext.Builder()
                     .targetType(field.getType())
@@ -87,6 +90,8 @@ public class InjectionEngine {
             if (!Modifier.isStatic(field.getModifiers())) {
                 continue;
             }
+
+            checkJavaxInject(field);
 
             ArgumentResolverContext context = new ArgumentResolverContext.Builder()
                     .targetType(field.getType())
@@ -161,6 +166,7 @@ public class InjectionEngine {
         }
 
         for (Method method : clazz.getDeclaredMethods()) {
+            checkJavaxInject(method);
             boolean hasInjectAnnotation = method.isAnnotationPresent(Inject.class);
             boolean isSetterForInjectField = false;
             if (method.getName().startsWith("set") && method.getParameterCount() == 1) {
@@ -214,6 +220,29 @@ public class InjectionEngine {
             } catch (Exception e) {
                 throw new RuntimeException("Error invoking @Inject setter method " + method.getName() + 
                                            " on " + clazz.getName(), e);
+            }
+        }
+    }
+
+    private void checkJavaxInject(java.lang.reflect.AccessibleObject accessible) {
+        if (accessible.isAnnotationPresent(IgnoreJavaxInject.class)) {
+            return;
+        }
+
+        for (java.lang.annotation.Annotation annotation : accessible.getAnnotations()) {
+            if (annotation.annotationType().getName().equals("javax.inject.Inject")) {
+                String name = "";
+                String className = "";
+                if (accessible instanceof Field f) {
+                    name = f.getName();
+                    className = f.getDeclaringClass().getName();
+                } else if (accessible instanceof Method m) {
+                    name = m.getName();
+                    className = m.getDeclaringClass().getName();
+                }
+                throw new RuntimeException("Detected 'javax.inject.Inject' on " + 
+                    (accessible instanceof Field ? "field" : "method") + " '" + name + "' in class '" + className + 
+                    "'. Please use 'net.vortexdevelopment.vinject.annotation.Inject' instead, or annotate with @IgnoreJavaxInject if this is intentional.");
             }
         }
     }

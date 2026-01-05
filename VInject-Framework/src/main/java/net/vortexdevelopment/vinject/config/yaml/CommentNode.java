@@ -13,8 +13,8 @@ public class CommentNode extends YamlNode {
     }
 
     @Override
-    public String render() {
-        if (comment == null) return "";
+    public String render(RenderOptions options) {
+        if (comment == null || !options.isIncludeComments()) return "";
         StringBuilder sb = new StringBuilder();
         String indentStr = " ".repeat(getIndentation());
         String[] lines = comment.split("\n");

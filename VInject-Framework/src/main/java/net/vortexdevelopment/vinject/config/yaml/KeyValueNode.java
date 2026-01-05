@@ -1,23 +1,23 @@
 package net.vortexdevelopment.vinject.config.yaml;
 
 public class KeyValueNode extends KeyedNode {
-    private String value;
+    private Object value;
 
-    public KeyValueNode(int indentation, String key, String value) {
+    public KeyValueNode(int indentation, String key, Object value) {
         super(indentation, key);
         this.value = value;
     }
 
-    public String getValue() {
+    public Object getValue() {
         return value;
     }
 
-    public void setValue(String value) {
+    public void setValue(Object value) {
         this.value = value;
     }
 
     @Override
-    public String render() {
-        return " ".repeat(getIndentation()) + getKey() + ": " + value;
+    public String render(RenderOptions options) {
+        return " ".repeat(getIndentation()) + getKey() + ": " + YamlValueFormatter.serialize(value);
     }
 }

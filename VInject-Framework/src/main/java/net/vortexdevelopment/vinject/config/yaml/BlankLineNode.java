@@ -6,7 +6,7 @@ public class BlankLineNode extends YamlNode {
     }
 
     @Override
-    public String render() {
+    public String render(RenderOptions options) {
         return "";
     }
 }

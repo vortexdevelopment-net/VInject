@@ -8,6 +8,7 @@ import net.vortexdevelopment.vinject.config.ConfigurationSection;
 import net.vortexdevelopment.vinject.config.serializer.YamlSerializerBase;
 import net.vortexdevelopment.vinject.config.yaml.YamlConfig;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
+import net.vortexdevelopment.vinject.config.serializer.YamlSerializerRegistry;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
@@ -19,7 +20,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Handles mapping between YAML configuration sections and Java objects.
@@ -28,20 +28,14 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ConfigurationMapper {
 
     private final DependencyContainer container;
-    private final Map<Class<?>, YamlSerializerBase<?>> serializers = new ConcurrentHashMap<>();
+
 
     public ConfigurationMapper(DependencyContainer container) {
         this.container = container;
     }
 
     public void registerSerializer(YamlSerializerBase<?> serializer) {
-        if (serializer == null) {
-            return;
-        }
-        Class<?> target = serializer.getTargetType();
-        if (target != null) {
-            serializers.put(target, serializer);
-        }
+        YamlSerializerRegistry.registerSerializer(serializer);
     }
 
     public void mapToInstance(ConfigurationSection root, Object instance, Class<?> clazz, String basePath) throws Exception {
@@ -60,20 +54,30 @@ public class ConfigurationMapper {
     }
 
     public void applyToConfig(ConfigurationSection root, Object instance, Class<?> clazz, String basePath) throws Exception {
-        for (Field field : clazz.getDeclaredFields()) {
-            if (Modifier.isStatic(field.getModifiers())) continue;
-            field.setAccessible(true);
+        // holistic sync: treat memory as the absolute source of truth
+        // This will replace the section at basePath with the current state of instance
+        if (clazz.isAnnotationPresent(YamlItem.class) 
+                || YamlSerializerRegistry.hasSerializer(clazz)) {
+            root.set(basePath, instance);
+        } else {
+            // Fallback for classes that aren't explicitly annotated but still used in config (rare in VInject)
+            for (Field field : clazz.getDeclaredFields()) {
+                if (Modifier.isStatic(field.getModifiers())) continue;
+                // Skip YamlId and synthetic fields
+                if (field.isAnnotationPresent(YamlId.class) || field.getName().startsWith("__vinject_yaml")) continue;
+                field.setAccessible(true);
 
-            String keyPath = getKeyPath(field, basePath);
-            Object value = field.get(instance);
+                String keyPath = getKeyPath(field, basePath);
+                Object value = field.get(instance);
 
-            // Handle comments
-            if (field.isAnnotationPresent(Comment.class) && root instanceof YamlConfig yamlRoot) {
-                Comment comment = field.getAnnotation(Comment.class);
-                String commentText = String.join("\n", comment.value());
-                yamlRoot.inject(keyPath, value, commentText);
-            } else {
-                root.set(keyPath, value);
+                // Handle comments
+                if (field.isAnnotationPresent(Comment.class)) {
+                    Comment comment = field.getAnnotation(Comment.class);
+                    String commentText = String.join("\n", comment.value());
+                    root.set(keyPath, value, commentText);
+                } else {
+                    root.set(keyPath, value);
+                }
             }
         }
     }
@@ -94,7 +98,7 @@ public class ConfigurationMapper {
         Class<?> targetClass = getRawClass(targetType);
 
         // 1. If a custom serializer exists for this target type, use it
-        YamlSerializerBase<?> ser = serializers.get(targetClass);
+        YamlSerializerBase<?> ser = YamlSerializerRegistry.getSerializer(targetClass);
         if (ser != null) {
             YamlSerializerBase<Object> s = (YamlSerializerBase<Object>) ser;
             if (value instanceof Map) {

@@ -1,4 +1,4 @@
-package net.vortexdevelopment.vinject.annotation;
+package net.vortexdevelopment.vinject.annotation.component;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
