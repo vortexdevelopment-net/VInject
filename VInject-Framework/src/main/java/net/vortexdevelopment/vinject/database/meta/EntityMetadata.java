@@ -3,6 +3,7 @@ package net.vortexdevelopment.vinject.database.meta;
 import lombok.Getter;
 import net.vortexdevelopment.vinject.annotation.database.Column;
 import net.vortexdevelopment.vinject.annotation.database.ColumnPrefix;
+import net.vortexdevelopment.vinject.annotation.database.Id;
 import net.vortexdevelopment.vinject.annotation.database.Temporal;
 import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.database.serializer.DatabaseSerializer;
@@ -38,7 +39,7 @@ public class EntityMetadata {
         Object entityInstance = clazz.getDeclaredConstructor().newInstance();
         for (Field field : clazz.getDeclaredFields()) {
             field.setAccessible(true);
-            if (field.isAnnotationPresent(Column.class) || field.isAnnotationPresent(Temporal.class)) {
+            if (field.isAnnotationPresent(Column.class) || field.isAnnotationPresent(Temporal.class) || field.isAnnotationPresent(Id.class)) {
                 Column column = field.getAnnotation(Column.class);
                 Temporal temporal = field.getAnnotation(Temporal.class);
                 String columnName = (column != null && !column.name().isEmpty()) ? column.name() : (temporal != null && !temporal.name().isEmpty()) ? temporal.name() : field.getName();
@@ -77,10 +78,10 @@ public class EntityMetadata {
                     continue;
                 }
                 
-                boolean isPrimaryKey = column != null && column.primaryKey();
-                boolean isNullable = (column != null ? column.nullable() : (temporal == null || temporal.nullable()));
+                boolean isPrimaryKey = (column != null && column.primaryKey()) || field.isAnnotationPresent(Id.class);
+                boolean isNullable = (column != null ? column.nullable() : (temporal == null || temporal.nullable())) && !field.isAnnotationPresent(Id.class);
                 boolean isUnique = column != null && column.unique();
-                boolean isAutoIncrement = column != null && column.autoIncrement();
+                boolean isAutoIncrement = (column != null && column.autoIncrement()) || field.isAnnotationPresent(Id.class);
 
                 String sqlType;
                 ForeignKeyMetadata foreignKey = null;
@@ -97,7 +98,10 @@ public class EntityMetadata {
                         //Try to load manually
                         Field[] fields = relatedClass.getDeclaredFields();
                         for (Field f : fields) {
-                            if (f.isAnnotationPresent(Column.class)) {
+                            if (f.isAnnotationPresent(Id.class)) {
+                                pkField = new FieldMetadata(f.getName(), f.getName(), Database.getSQLTypeMapper().getSQLType(f.getType(), null, null, null), true, false, false, true, null, f, null);
+                                break;
+                            } else if (f.isAnnotationPresent(Column.class)) {
                                 Column c = f.getAnnotation(Column.class);
                                 if (c.primaryKey()) {
                                     pkField = new FieldMetadata(f.getName(), c.name().isEmpty() ? f.getName() : c.name(), Database.getSQLTypeMapper().getSQLType(f.getType(), c, null, null), true, c.nullable(), c.unique(), c.autoIncrement(), null, f, null);

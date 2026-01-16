@@ -12,6 +12,12 @@ public class YamlParser {
     private int discoveredIndentWidth = -1;
 
     public DocumentNode parse(String content) {
+        if (content == null) {
+            return new DocumentNode();
+        }
+        if (content.startsWith("\uFEFF")) {
+            content = content.substring(1);
+        }
         DocumentNode root = new DocumentNode();
         this.discoveredIndentWidth = -1; // Reset for discovery on each parse
         String[] lines = content.split("\r?\n");

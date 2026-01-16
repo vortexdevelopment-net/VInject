@@ -4,6 +4,7 @@ import lombok.Getter;
 import net.vortexdevelopment.vinject.annotation.database.Column;
 import net.vortexdevelopment.vinject.annotation.database.ColumnPrefix;
 import net.vortexdevelopment.vinject.annotation.database.Entity;
+import net.vortexdevelopment.vinject.annotation.database.Id;
 import net.vortexdevelopment.vinject.annotation.database.Temporal;
 import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.database.serializer.DatabaseSerializer;
@@ -42,7 +43,10 @@ public class EntityMetadata {
         for (Field field : entityClass.getDeclaredFields()) {
             field.setAccessible(true);
             String columnName = field.getName();
-            if (field.isAnnotationPresent(Column.class)) {
+            if (field.isAnnotationPresent(Id.class)) {
+                pkColumn = columnName;
+                pkField = field;
+            } else if (field.isAnnotationPresent(Column.class)) {
                 Column column = field.getAnnotation(Column.class);
                 if (!column.name().isEmpty()) {
                     columnName = column.name();
@@ -77,7 +81,7 @@ public class EntityMetadata {
                 continue;
             }
 
-            if (field.isAnnotationPresent(Column.class) || field.isAnnotationPresent(Temporal.class)) {
+            if (field.isAnnotationPresent(Column.class) || field.isAnnotationPresent(Temporal.class) || field.isAnnotationPresent(Id.class)) {
                 fieldToColumnMap.put(field.getName(), columnName);
             }
             fieldsMap.put(field.getName(), field);

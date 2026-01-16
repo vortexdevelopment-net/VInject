@@ -71,6 +71,8 @@ public class DependencyGraphResolver {
                 }
             }
 
+
+
             // Check @Inject annotated fields
             for (Field field : component.getDeclaredFields()) {
                 if (field.isAnnotationPresent(Inject.class)) {
@@ -98,6 +100,38 @@ public class DependencyGraphResolver {
                             if (providingClass != null) {
                                 dependencies.add(providingClass);
                             }
+                        }
+                    }
+                }
+            }
+
+            // Check @PostConstruct annotated methods with parameters
+            for (java.lang.reflect.Method method : component.getDeclaredMethods()) {
+                if (method.isAnnotationPresent(net.vortexdevelopment.vinject.annotation.lifecycle.PostConstruct.class)) {
+                    for (Class<?> parameter : method.getParameterTypes()) {
+                        // Same dependency logic as constructor parameters
+                        if (container.getDependencies().containsKey(parameter)) {
+                            continue;
+                        }
+
+                        if (parameter.isAnnotationPresent(Component.class)
+                                || parameter.isAnnotationPresent(Service.class)
+                                || parameter.equals(container.getRootClass())
+                                || parameter.isAnnotationPresent(Repository.class)) {
+                            
+                            if (components.contains(parameter)) {
+                                dependencies.add(parameter);
+                            } else {
+                                Class<?> providingClass = getProvidingClass(components, parameter);
+                                if (providingClass != null) {
+                                    dependencies.add(providingClass);
+                                }
+                            }
+                        } else {
+                             Class<?> providingClass = getProvidingClass(components, parameter);
+                             if (providingClass != null) {
+                                 dependencies.add(providingClass);
+                             }
                         }
                     }
                 }

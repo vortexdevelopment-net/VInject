@@ -32,7 +32,7 @@ public enum RegistryOrder {
     REPOSITORIES,
 
     /**
-     * Registers after Components
+     * Registers before Loading Components (But after Services and Repositories)
      */
     COMPONENTS;
 

@@ -176,6 +176,10 @@ public class DependencyContainer implements DependencyRepository {
             // Register the repository and its entity type
             RepositoryInvocationHandler<?, ?> proxy = repositoryContainer.registerRepository(repositoryClass, entityClass, this);
             this.dependencies.put(repositoryClass, proxy.create());
+            
+            // Process debug and system property annotations for repositories
+            lifecycleManager.processDebugAnnotations(repositoryClass);
+            lifecycleManager.processSystemPropertyAnnotations(repositoryClass);
         });
         
         //Run database initialization (Create, Update tables)
@@ -202,22 +206,51 @@ public class DependencyContainer implements DependencyRepository {
 
         processAnnotationHandlers(RegistryOrder.REPOSITORIES, scanner);
 
-        //Register Components
-        //Need to create a loading order to avoid circular dependencies and inject issues
-        Set<Class<?>> allComponents = scanner.getTypesAnnotatedWith(Component.class);
-        Set<Class<?>> loadableComponents = allComponents.stream().filter(this::canLoadClass).collect(Collectors.toSet());
-        dependencyGraphResolver.createLoadingOrder(loadableComponents).stream().sorted(Comparator.comparingInt(value -> {
-            Component component = value.getAnnotation(Component.class);
-            if (component != null) {
-                return component.priority();
+        // Unified loading for Components and Registry-handled classes
+        // This takes into account dependencies between registry-handled classes and components
+        Map<Class<?>, List<AnnotationHandler>> classHandlers = new java.util.HashMap<>();
+        Set<Class<?>> loadableClasses = new HashSet<>();
+
+        // 1. Collect Registry items
+        annotationHandlerRegistry.getHandlers(RegistryOrder.COMPONENTS).forEach(handler -> {
+            Class<? extends Annotation> annotation = DependencyUtils.getAnnotationFromHandler(handler);
+            if (annotation != null) {
+                scanner.getTypesAnnotatedWith(annotation).forEach(clazz -> {
+                    if (canLoadClass(clazz)) {
+                        loadableClasses.add(clazz);
+                        classHandlers.computeIfAbsent(clazz, k -> new ArrayList<>()).add(handler);
+                    }
+                });
             }
-            return 10;
-        })).forEach(componentClass -> {
-            eventManager.registerEventListeners(componentClass);
-            registerComponent(componentClass);
         });
 
-        processAnnotationHandlers(RegistryOrder.COMPONENTS, scanner);
+        // 2. Collect Components
+        scanner.getTypesAnnotatedWith(Component.class).stream()
+                .filter(this::canLoadClass)
+                .forEach(loadableClasses::add);
+
+        // 3. Resolve Graph and Sort
+        dependencyGraphResolver.createLoadingOrder(loadableClasses).stream()
+            .sorted(Comparator.comparingInt(value -> {
+                Component component = value.getAnnotation(Component.class);
+                return component != null ? component.priority() : 10;
+            }))
+            .forEach(clazz -> {
+                // Process Handlers first
+                if (classHandlers.containsKey(clazz)) {
+                    classHandlers.get(clazz).forEach(handler -> {
+                        handler.handle(clazz, dependencies.get(clazz), this);
+                    });
+                }
+                
+                // Process Component Registration
+                if (clazz.isAnnotationPresent(Component.class)) {
+                    eventManager.registerEventListeners(clazz);
+                    registerComponent(clazz);
+                }
+            });
+
+
 
         // Fully inject the root instance after all dependencies are ready
         injectionEngine.inject(rootInstance);

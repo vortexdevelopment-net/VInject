@@ -3,6 +3,11 @@ package net.vortexdevelopment.vinject.di.lifecycle;
 import net.vortexdevelopment.vinject.annotation.lifecycle.OnDestroy;
 import net.vortexdevelopment.vinject.annotation.lifecycle.OnLoad;
 import net.vortexdevelopment.vinject.annotation.lifecycle.PostConstruct;
+import net.vortexdevelopment.vinject.annotation.util.EnableDebug;
+import net.vortexdevelopment.vinject.annotation.util.EnableDebugFor;
+import net.vortexdevelopment.vinject.annotation.util.SetSystemProperty;
+import net.vortexdevelopment.vinject.annotation.util.SetSystemProperties;
+import net.vortexdevelopment.vinject.debug.DebugLogger;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
 
 import java.lang.reflect.Method;
@@ -32,6 +37,10 @@ public class LifecycleManager {
     public void invokePostConstruct(Object instance) {
         Class<?> clazz = instance.getClass();
         Method[] methods = clazz.getDeclaredMethods();
+        
+        // Process utility annotations
+        processDebugAnnotations(clazz);
+        processSystemPropertyAnnotations(clazz);
 
 
         for (Method method : methods) {
@@ -48,6 +57,14 @@ public class LifecycleManager {
      */
     public void invokeOnLoad(Object instance) {
         Class<?> clazz = instance.getClass();
+        
+        // Process debug annotations
+        processDebugAnnotations(clazz);
+        
+        // Process system property annotations
+        processSystemPropertyAnnotations(clazz);
+        
+        // Invoke @OnLoad methods
         for (Method method : clazz.getDeclaredMethods()) {
             if (method.isAnnotationPresent(OnLoad.class)) {
                 invokeLifecycleMethod(instance, method);
@@ -130,5 +147,40 @@ public class LifecycleManager {
      */
     public void clear() {
         destroyMethods.clear();
+    }
+    
+    /**
+     * Process @EnableDebug and @EnableDebugFor annotations.
+     */
+    public void processDebugAnnotations(Class<?> clazz) {
+        // Check for @EnableDebug (enable debug for this class)
+        if (clazz.isAnnotationPresent(EnableDebug.class)) {
+            DebugLogger.enableDebugFor(clazz);
+        }
+        
+        // Check for @EnableDebugFor (enable debug for other classes)
+        if (clazz.isAnnotationPresent(EnableDebugFor.class)) {
+            EnableDebugFor annotation = clazz.getAnnotation(EnableDebugFor.class);
+            DebugLogger.enableDebugFor(annotation.value());
+        }
+    }
+    
+    /**
+     * Process @SetSystemProperty annotations.
+     */
+    public void processSystemPropertyAnnotations(Class<?> clazz) {
+        // Check for single @SetSystemProperty
+        if (clazz.isAnnotationPresent(SetSystemProperty.class)) {
+            SetSystemProperty annotation = clazz.getAnnotation(SetSystemProperty.class);
+            System.setProperty(annotation.name(), annotation.value());
+        }
+        
+        // Check for multiple @SetSystemProperties
+        if (clazz.isAnnotationPresent(SetSystemProperties.class)) {
+            SetSystemProperties annotation = clazz.getAnnotation(SetSystemProperties.class);
+            for (SetSystemProperty property : annotation.value()) {
+                System.setProperty(property.name(), property.value());
+            }
+        }
     }
 }

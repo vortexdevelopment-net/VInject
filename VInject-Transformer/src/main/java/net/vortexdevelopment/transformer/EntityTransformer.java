@@ -349,17 +349,17 @@ public class EntityTransformer extends AbstractMojo {
         ClassGen classGen = new ClassGen(javaClass);
         ConstantPoolGen constantPool = classGen.getConstantPool();
 
-        // Check if the class is already transformed by checking for modifiedFields
+        // Check if the class is already transformed by checking for __vinject_dirty_fields
         boolean alreadyTransformed = Arrays.stream(classGen.getFields())
-                .anyMatch(field -> field.getName().equals("modifiedFields"));
+                .anyMatch(field -> field.getName().equals("__vinject_dirty_fields"));
 
         if (alreadyTransformed) {
             getLog().info("Class " + javaClass.getClassName() + " is already transformed, skipping.");
             return null;
         }
 
-        // Add the modifiedFields field with inline initialization
-        String modifiedFieldName = "modifiedFields";
+        // Add the __vinject_dirty_fields field with inline initialization
+        String modifiedFieldName = "__vinject_dirty_fields";
         ObjectType setType = new ObjectType("java.util.Set");
         FieldGen modifiedFieldsField = new FieldGen(
                 Constants.ACC_PRIVATE,
@@ -402,6 +402,9 @@ public class EntityTransformer extends AbstractMojo {
 
         // Add isFieldModified method
         addIsFieldModifiedMethod(classGen, constantPool);
+
+        // Add __vinject_isDirty method
+        addIsDirtyMethod(classGen, constantPool);
 
         // Write the modified class to byte array
         byte[] bcelBytes;
@@ -619,7 +622,7 @@ public class EntityTransformer extends AbstractMojo {
     }
 
     /**
-     * Adds a resetModifiedFields method to clear the modifiedFields set.
+     * Adds a __vinject_markClean method to clear the __vinject_dirty_fields set.
      */
     private void addResetMethod(ClassGen classGen, ConstantPoolGen constantPool) {
         MethodGen resetMethod = new MethodGen(
@@ -627,7 +630,7 @@ public class EntityTransformer extends AbstractMojo {
                 Type.VOID,
                 Type.NO_ARGS,
                 null,
-                "resetModifiedFields",
+                "__vinject_markClean",
                 classGen.getClassName(),
                 new InstructionList(),
                 constantPool
@@ -635,7 +638,7 @@ public class EntityTransformer extends AbstractMojo {
         resetMethod.getInstructionList().append(new ALOAD(0));
         resetMethod.getInstructionList().append(new GETFIELD(constantPool.addFieldref(
                 classGen.getClassName(),
-                "modifiedFields",
+                "__vinject_dirty_fields",
                 "Ljava/util/Set;"))
         );
         resetMethod.getInstructionList().append(new INVOKEINTERFACE(constantPool.addInterfaceMethodref(
@@ -664,12 +667,12 @@ public class EntityTransformer extends AbstractMojo {
                 constantPool
         );
 
-        // this.modifiedFields.contains(fieldName)
+        // this.__vinject_dirty_fields.contains(fieldName)
         isFieldModifiedMethod.getInstructionList().append(new ALOAD(0));
         isFieldModifiedMethod.getInstructionList().append(
                 new GETFIELD(constantPool.addFieldref(
                         classGen.getClassName(),
-                        "modifiedFields",
+                        "__vinject_dirty_fields",
                         "Ljava/util/Set;"))
         );
         isFieldModifiedMethod.getInstructionList().append(new ALOAD(1)); // fieldName
@@ -686,6 +689,51 @@ public class EntityTransformer extends AbstractMojo {
         isFieldModifiedMethod.removeLocalVariables();
         classGen.addMethod(isFieldModifiedMethod.getMethod());
         isFieldModifiedMethod.getInstructionList().dispose();
+    }
+
+    /**
+     * Adds a __vinject_isDirty method to check if any fields have been modified.
+     * Returns true if the dirty fields set is not empty.
+     */
+    private void addIsDirtyMethod(ClassGen classGen, ConstantPoolGen constantPool) {
+        MethodGen isDirtyMethod = new MethodGen(
+                Constants.ACC_PUBLIC,
+                Type.BOOLEAN,
+                Type.NO_ARGS,
+                null,
+                "__vinject_isDirty",
+                classGen.getClassName(),
+                new InstructionList(),
+                constantPool
+        );
+
+        // return !this.__vinject_dirty_fields.isEmpty();
+        isDirtyMethod.getInstructionList().append(new ALOAD(0));
+        isDirtyMethod.getInstructionList().append(
+                new GETFIELD(constantPool.addFieldref(
+                        classGen.getClassName(),
+                        "__vinject_dirty_fields",
+                        "Ljava/util/Set;"))
+        );
+        isDirtyMethod.getInstructionList().append(new INVOKEINTERFACE(
+                constantPool.addInterfaceMethodref("java/util/Set", "isEmpty", "()Z"),
+                1 // argument slots
+        ));
+        
+        // Invert the result (isEmpty() returns true when empty, we want false)
+        // Use ICONST_1 and IXOR to flip the boolean
+        isDirtyMethod.getInstructionList().append(InstructionConstants.ICONST_1);
+        isDirtyMethod.getInstructionList().append(InstructionConstants.IXOR);
+        
+        isDirtyMethod.getInstructionList().append(InstructionFactory.createReturn(Type.BOOLEAN));
+
+        // Finalize and add the method
+        isDirtyMethod.setMaxStack();
+        isDirtyMethod.setMaxLocals();
+        isDirtyMethod.removeLineNumbers();
+        isDirtyMethod.removeLocalVariables();
+        classGen.addMethod(isDirtyMethod.getMethod());
+        isDirtyMethod.getInstructionList().dispose();
     }
 
     private void modifyConstructor(ClassGen classGen, Method method, ConstantPoolGen constantPool, String fieldName) {

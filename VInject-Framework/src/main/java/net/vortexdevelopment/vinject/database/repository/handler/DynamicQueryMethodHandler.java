@@ -3,6 +3,7 @@ package net.vortexdevelopment.vinject.database.repository.handler;
 import net.vortexdevelopment.vinject.database.repository.EntityMetadata;
 import net.vortexdevelopment.vinject.database.repository.RepositoryInvocationContext;
 import net.vortexdevelopment.vinject.database.repository.RepositoryUtils;
+import net.vortexdevelopment.vinject.debug.DebugLogger;
 
 import java.lang.reflect.Method;
 import java.sql.PreparedStatement;
@@ -30,12 +31,10 @@ public class DynamicQueryMethodHandler extends BaseMethodHandler {
     @Override
     public Object handle(RepositoryInvocationContext<?, ?> context, Object proxy, Method method, Object[] args) throws Throwable {
         String methodName = method.getName();
-        long startTime = System.currentTimeMillis();
+        long start = System.nanoTime();
 
         QueryInfo info = queryCache.computeIfAbsent(method, m -> buildQueryInfo(context, m));
-        long prepTime = System.currentTimeMillis() - startTime;
 
-        long queryStartTime = System.currentTimeMillis();
         long[] internalTimings = new long[2]; // [0] = connTime, [1] = execTime
         
         Object result = switch (methodName) {
@@ -43,12 +42,11 @@ public class DynamicQueryMethodHandler extends BaseMethodHandler {
             case String n when n.startsWith("deleteBy") || n.startsWith("deleteAllBy") -> handleDelete(context, method, args, info, internalTimings);
             default -> null;
         };
-        long queryTime = System.currentTimeMillis() - queryStartTime;
+        long end = System.nanoTime();
+        long totalNano = end - start;
 
-        if (queryTime > 10 || prepTime > 5) {
-            System.out.println("Query '" + methodName + "' took: " + (System.currentTimeMillis() - startTime) + 
-                "ms (Prep: " + prepTime + "ms, Conn: " + internalTimings[0] + "ms, Exec: " + internalTimings[1] + "ms)");
-        }
+        DebugLogger.log(context.getRepositoryClass(), "DYNAMIC QUERY '%s' executed. Total Time: %d ns (%.3f ms)",
+                methodName, totalNano, totalNano / 1_000_000.0);
         return result;
     }
 

@@ -3,6 +3,7 @@ package net.vortexdevelopment.vinject.database.repository.handler;
 import net.vortexdevelopment.vinject.database.repository.EntityMetadata;
 import net.vortexdevelopment.vinject.database.repository.RepositoryInvocationContext;
 import net.vortexdevelopment.vinject.database.repository.RepositoryUtils;
+import net.vortexdevelopment.vinject.debug.DebugLogger;
 
 import java.lang.reflect.Method;
 import java.sql.PreparedStatement;
@@ -27,7 +28,6 @@ public class TopQueryMethodHandler extends BaseMethodHandler {
         String methodName = method.getName();
         Class<?> returnType = method.getReturnType();
         EntityMetadata metadata = context.getEntityMetadata();
-        long startTime = System.currentTimeMillis();
 
         boolean isIterable = Iterable.class.isAssignableFrom(returnType) ||
                 Collection.class.isAssignableFrom(returnType) ||
@@ -125,6 +125,7 @@ public class TopQueryMethodHandler extends BaseMethodHandler {
         sql.append(" ORDER BY ").append(context.getSchemaFormatter().formatColumnName(orderByColumn)).append(" ").append(orderDirection);
         sql.append(" LIMIT ").append(limit);
 
+        long start = System.nanoTime();
         Object result;
         if (isIterable) {
             result = context.getDatabase().connect(connection -> {
@@ -152,8 +153,11 @@ public class TopQueryMethodHandler extends BaseMethodHandler {
                 return null;
             });
         }
+        long end = System.nanoTime();
+        long totalNano = end - start;
 
-        System.out.println("Query '" + methodName + "' took: " + (System.currentTimeMillis() - startTime) + "ms");
+        DebugLogger.log(context.getRepositoryClass(), "TOP QUERY '%s' executed. Total Time: %d ns (%.3f ms)",
+                methodName, totalNano, totalNano / 1_000_000.0);
         return result;
     }
 }

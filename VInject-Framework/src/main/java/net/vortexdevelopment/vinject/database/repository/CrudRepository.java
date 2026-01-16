@@ -3,6 +3,8 @@ package net.vortexdevelopment.vinject.database.repository;
 import org.jetbrains.annotations.NotNull;
 
 import javax.annotation.Nullable;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 
 /**
@@ -123,4 +125,27 @@ public interface CrudRepository<T, ID> {
      * @return number of rows affected
      */
     int deleteAll();
+    
+    /**
+     * Saves an entity asynchronously.
+     * Returns a CompletableFuture that completes when the entity is saved.
+     * 
+     * @param entity the entity to save
+     * @return CompletableFuture with the saved entity
+     */
+    default <S extends T> CompletableFuture<S> saveAsync(S entity) {
+        return CompletableFuture.supplyAsync(() -> save(entity));
+    }
+    
+    /**
+     * Flushes dirty entities to the database (for write-back cache strategy).
+     * Only relevant when using @EnableCaching with WRITE_BACK strategy.
+     * 
+     * @return number of entities flushed
+     */
+    default int flushCache() {
+        // Default implementation does nothing (no caching)
+        return 0;
+    }
 }
+

@@ -18,6 +18,12 @@ public class H2Mapper implements SQLTypeMapper {
             };
         }
 
+        if (column == null && temporal == null) {
+            // This is likely an @Id field - create a synthetic column with sensible defaults
+            // @Id fields are: primaryKey=true, autoIncrement=true, nullable=false
+            return getSQLTypeForIdField(fieldType);
+        }
+
         if (column == null) {
             throw new IllegalArgumentException("Column annotation is required for field: " + fieldType.getName() + ". If it is a Date/Time field, use Temporal annotation instead.");
         }
@@ -49,9 +55,10 @@ public class H2Mapper implements SQLTypeMapper {
             case "Float", "float" -> {
                 // H2 doesn't support FLOAT(precision, scale), use DECIMAL instead when precision/scale are specified
                 // or REAL/FLOAT when they're not
-                if (column.precision() != -1 || column.scale() != -1) {
-                    yield "DECIMAL(" + (column.precision() != -1 ? column.precision() : 10) + ","
-                            + (column.scale() != -1 ? column.scale() : 2) + ")";
+                if (column.precision() != -1 || column.scale() != -1 || column.length() != -1) {
+                    int p = column.precision() != -1 ? column.precision() : (column.length() != -1 ? column.length() : 10);
+                    int s = column.scale() != -1 ? column.scale() : 2;
+                    yield "DECIMAL(" + p + "," + s + ")";
                 } else {
                     yield "REAL";
                 }
@@ -60,10 +67,31 @@ public class H2Mapper implements SQLTypeMapper {
             case "Date" -> "DATETIME";
             case "Byte[]", "byte[]" -> (column.length() != -1 && column.length() != 255) ? "BINARY VARYING(" + column.length() + ")" : "BLOB";
             case "UUID" -> "UUID";
-            case "BigDecimal" -> "NUMERIC(" + (column.precision() != -1 ? column.precision() : 10) + ","
-                    + (column.scale() != -1 ? column.scale() : 2) + ")";
-            case "BigInteger" -> "NUMERIC(" + (column.precision() != -1 ? column.precision() : 38) + ",0)";
+            case "BigDecimal" -> {
+                int p = column.precision() != -1 ? column.precision() : (column.length() != -1 ? column.length() : 10);
+                int s = column.scale() != -1 ? column.scale() : 2;
+                yield "NUMERIC(" + p + "," + s + ")";
+            }
+            case "BigInteger" -> {
+                int p = column.precision() != -1 ? column.precision() : (column.length() != -1 ? column.length() : 38);
+                yield "NUMERIC(" + p + ",0)";
+            }
             default -> throw new UnsupportedOperationException("Unsupported field type: " + fieldType.getName());
         } + nullableConstraint;
+    }
+
+    private String getSQLTypeForIdField(Class<?> fieldType) {
+        // For @Id fields, we don't have nullable constraint (they're always NOT NULL and AUTO_INCREMENT for numeric types)
+        String notNullIdentity = " NOT NULL AUTO_INCREMENT";
+        String notNull = " NOT NULL";
+
+        return switch (fieldType.getSimpleName()) {
+            case "String" -> "CHARACTER VARYING(255)" + notNull;
+            case "Integer", "int" -> "INTEGER" + notNullIdentity;
+            case "Long", "long" -> "BIGINT" + notNullIdentity;
+            case "BigInteger" -> "BIGINT" + notNullIdentity;
+            case "UUID" -> "UUID" + notNull;
+            default -> throw new UnsupportedOperationException("Unsupported @Id field type: " + fieldType.getName());
+        };
     }
 }

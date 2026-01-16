@@ -13,6 +13,7 @@ import net.vortexdevelopment.vinject.database.meta.EntityMetadata;
 import net.vortexdevelopment.vinject.database.meta.FieldMetadata;
 import net.vortexdevelopment.vinject.database.serializer.DatabaseSerializer;
 import net.vortexdevelopment.vinject.database.serializer.SerializerRegistry;
+import net.vortexdevelopment.vinject.debug.DebugLogger;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
 
 import java.io.File;
@@ -149,15 +150,15 @@ public class Database implements DatabaseConnector {
             for (EntityMetadata metadata : entityMetadataMap.values()) {
                 try {
                     if (!DBUtils.tableExists(connection, metadata.getTableName())) {
-                        System.out.println("Table does not exist: '" + metadata.getTableName() + "' creating...");
+                        DebugLogger.log(Database.class, "Table does not exist: '" + metadata.getTableName() + "' creating...");
                         // Table doesn't exist; create it
                         createTable(connection, metadata);
-                        System.out.println("Table created: " + metadata.getTableName());
+                        DebugLogger.log(Database.class, "Table created: " + metadata.getTableName());
                     } else {
                         // Table exists; synchronize columns and relationships
-                        System.out.println("Syncing table: " + metadata.getTableName());
+                        DebugLogger.log(Database.class, "Syncing table: " + metadata.getTableName());
                         synchronizeTable(connection, metadata);
-                        System.out.println("Table synced: " + metadata.getTableName());
+                        DebugLogger.log(Database.class, "Table synced: " + metadata.getTableName());
                     }
                 } catch (Exception e) {
                     System.err.println("Error processing table " + metadata.getTableName() + ": " + e.getMessage());
@@ -168,7 +169,7 @@ public class Database implements DatabaseConnector {
             for (String query : FOREIGN_KEY_QUERIES) {
                 try (Statement stmt = connection.createStatement()) {
                     stmt.executeUpdate(query);
-                    System.out.println("Created foreign key: " + query);
+                    DebugLogger.log(Database.class, "Created foreign key: " + query);
                 } catch (Exception e) {
                     System.err.println("Error creating foreign key: " + query + ": " + e.getMessage());
                     e.printStackTrace();
@@ -215,7 +216,7 @@ public class Database implements DatabaseConnector {
 
         try (Statement stmt = connection.createStatement()) {
             stmt.executeUpdate(sql);
-            System.out.println("Created table: " + sql);
+            DebugLogger.log(Database.class, "Created table: " + sql);
         } catch (Exception e) {
             System.err.println("SQL: " + sql);
             System.err.println("Error creating table " + metadata.getTableName() + ": " + e.getMessage());
@@ -247,7 +248,7 @@ public class Database implements DatabaseConnector {
                 String actual = existingColumns.get(col).toUpperCase(Locale.ENGLISH);
                 if (!actual.equals(desired.toUpperCase(Locale.ENGLISH))) {
                     modifyColumns.add(schemaFormatter.formatColumnDefinition(col, desired));
-                    System.out.println("Type mismatch for column: " + col + " Expected: " + desired + " Actual: " + actual);
+                    DebugLogger.log(Database.class, "Type mismatch for column: " + col + " Expected: " + desired + " Actual: " + actual);
                 }
             }
         }
@@ -275,7 +276,7 @@ public class Database implements DatabaseConnector {
                 alter.append(String.join(",\n", clauses)).append(";");
                 String sql = schemaFormatter.convertSqlSyntax(alter.toString());
                 stmt.executeUpdate(sql);
-                System.out.println("Alter SQL: " + sql);
+                DebugLogger.log(Database.class, "Alter SQL: " + sql);
             } else {
                 // For H2, execute each ALTER statement separately
                 for (String clause : addColumns) {

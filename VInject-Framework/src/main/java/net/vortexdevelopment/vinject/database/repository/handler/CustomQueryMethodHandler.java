@@ -3,6 +3,7 @@ package net.vortexdevelopment.vinject.database.repository.handler;
 import net.vortexdevelopment.vinject.annotation.database.Entity;
 import net.vortexdevelopment.vinject.database.repository.RepositoryInvocationContext;
 import net.vortexdevelopment.vinject.database.repository.RepositoryUtils;
+import net.vortexdevelopment.vinject.debug.DebugLogger;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Type;
@@ -68,7 +69,8 @@ public class CustomQueryMethodHandler extends BaseMethodHandler {
             throw new IllegalArgumentException("Mismatch between query parameters and arguments. Expected " + paramCount + ", got " + passedParams);
         }
 
-        return context.getDatabase().connect(connection -> {
+        long start = System.nanoTime();
+        Object result = context.getDatabase().connect(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 RepositoryUtils.setStatementParameters(statement, Arrays.asList(params));
 
@@ -153,5 +155,11 @@ public class CustomQueryMethodHandler extends BaseMethodHandler {
                 }
             }
         });
+        long end = System.nanoTime();
+        long totalNano = end - start;
+
+        DebugLogger.log(context.getRepositoryClass(), "CUSTOM QUERY EXECUTED: %s. Time: %d ns (%.3f ms)",
+                sql, totalNano, totalNano / 1_000_000.0);
+        return result;
     }
 }
