@@ -6,6 +6,8 @@ import net.vortexdevelopment.vinject.event.EventManager;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Collection;
+
 public interface DependencyRepository {
 
     /**
@@ -52,6 +54,15 @@ public interface DependencyRepository {
      */
     @NotNull
     LifecycleManager getLifecycleManager();
+
+    /**
+     * Collect all element annotated types.
+     * @param superType The super type of the elements to collect
+     * @param extraArgs Extra arguments to pass to the constructor of the elements
+     * @return A collection of instances of the collected elements
+     * @param <T> The type of the elements
+     */
+    <T> Collection<T> collectElements(Class<T> superType, Object... extraArgs);
 
     static @NotNull DependencyRepository getInstance() {
         return DependencyContainer.getInstance();

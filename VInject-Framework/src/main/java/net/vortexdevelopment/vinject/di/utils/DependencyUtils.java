@@ -83,4 +83,31 @@ public class DependencyUtils {
             return false;
         }
     }
+
+    /**
+     * Checks if a value is compatible with a target type, including primitives.
+     *
+     * @param targetType The target type
+     * @param value      The value to check
+     * @return true if compatible
+     */
+    public static boolean isCompatible(Class<?> targetType, Object value) {
+        if (value == null) {
+            return !targetType.isPrimitive();
+        }
+        if (targetType.isInstance(value)) {
+            return true;
+        }
+        if (targetType.isPrimitive()) {
+            if (targetType == int.class) return value instanceof Integer;
+            if (targetType == long.class) return value instanceof Long;
+            if (targetType == double.class) return value instanceof Double;
+            if (targetType == float.class) return value instanceof Float;
+            if (targetType == boolean.class) return value instanceof Boolean;
+            if (targetType == byte.class) return value instanceof Byte;
+            if (targetType == short.class) return value instanceof Short;
+            if (targetType == char.class) return value instanceof Character;
+        }
+        return false;
+    }
 }

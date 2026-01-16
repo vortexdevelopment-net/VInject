@@ -6,6 +6,7 @@ import net.vortexdevelopment.vinject.annotation.Bean;
 import net.vortexdevelopment.vinject.annotation.component.Component;
 import net.vortexdevelopment.vinject.annotation.DependsOn;
 import net.vortexdevelopment.vinject.annotation.OptionalDependency;
+import net.vortexdevelopment.vinject.annotation.component.Element;
 import net.vortexdevelopment.vinject.annotation.component.Repository;
 import net.vortexdevelopment.vinject.annotation.component.Root;
 import net.vortexdevelopment.vinject.annotation.component.Service;
@@ -44,6 +45,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -59,6 +61,7 @@ public class DependencyContainer implements DependencyRepository {
     @Getter private final Map<Class<?>, Object> dependencies;
     @Getter private final Class<?> rootClass;
     private final Set<Class<?>> entities;
+    private final Set<Class<?>> elementClasses;
     private final Set<Class<?>> skippedDueToDependsOn;
     private final Map<Class<?>, List<String>> missingDependenciesByClass;
     private AnnotationHandlerRegistry annotationHandlerRegistry;
@@ -84,6 +87,7 @@ public class DependencyContainer implements DependencyRepository {
         dependencyGraphResolver = new DependencyGraphResolver(this);
         dependencies = new ConcurrentHashMap<>();
         entities = ConcurrentHashMap.newKeySet();
+        elementClasses = ConcurrentHashMap.newKeySet();
         skippedDueToDependsOn = ConcurrentHashMap.newKeySet();
         missingDependenciesByClass = new ConcurrentHashMap<>();
         annotationHandlerRegistry = new AnnotationHandlerRegistry();
@@ -133,6 +137,9 @@ public class DependencyContainer implements DependencyRepository {
         if (configurationContainer != null) {
             this.dependencies.put(ConfigurationContainer.class, configurationContainer);
         }
+
+        // Collect all classes annotated with @Element
+        elementClasses.addAll(scanner.scanAndFilter(Element.class, this::canLoadClass));
 
         processAnnotationHandlers(RegistryOrder.ENTITIES, scanner);
 
@@ -305,6 +312,10 @@ public class DependencyContainer implements DependencyRepository {
     }
 
     public <T> T newInstance(Class<T> clazz, boolean cache) {
+        return newInstance(clazz, cache, (Object[]) null);
+    }
+
+    public <T> T newInstance(Class<T> clazz, boolean cache, Object... extraArgs) {
         if (cache) {
             Object component = dependencies.get(clazz);
             if (component != null) {
@@ -318,8 +329,8 @@ public class DependencyContainer implements DependencyRepository {
             // Circular dependency detected - this is only allowed for field injection
             throw new RuntimeException(
                 "Circular dependency detected for class: " + clazz.getName() + 
-                "\nCircular dependencies are only supported with field injection (@Inject on fields)." +
-                "\nConstructor injection cannot handle circular dependencies because the instance must be fully created before it can be injected." +
+                "\nCircular dependencies are only supported with field injection (@Inject on fields)." + 
+                "\nConstructor injection cannot handle circular dependencies because the instance must be fully created before it can be injected." + 
                 "\n\nTo resolve this issue, use field injection instead of constructor parameters."
             );
         }
@@ -330,7 +341,7 @@ public class DependencyContainer implements DependencyRepository {
             
             if (!DependencyUtils.hasDefaultConstructor(clazz)) {
                 Constructor<?> constructor = clazz.getDeclaredConstructors()[0];
-                Object[] parameters = resolveParameters(clazz, constructor, null);
+                Object[] parameters = resolveParameters(clazz, constructor, null, extraArgs);
                 
                 instance = clazz.cast(constructor.newInstance(parameters));
             } else {
@@ -371,10 +382,12 @@ public class DependencyContainer implements DependencyRepository {
         }
     }
 
-    private Object[] resolveParameters(Class<?> declaringClass, Executable executable, @Nullable Object instance) {
+    private Object[] resolveParameters(Class<?> declaringClass, Executable executable, @Nullable Object instance, Object... extraArgs) {
         Parameter[] parameters = executable.getParameters();
         Annotation[][] annotations = executable.getParameterAnnotations();
         Object[] resolvedValues = new Object[parameters.length];
+        
+        int extraArgsIndex = 0;
         
         for (int i = 0; i < parameters.length; i++) {
             ArgumentResolverContext.Builder builder = new ArgumentResolverContext.Builder()
@@ -398,6 +411,15 @@ public class DependencyContainer implements DependencyRepository {
                 Value valueAnnotation = DependencyUtils.findAnnotation(annotations[i], Value.class);
                 if (valueAnnotation != null) {
                     resolvedValue = injectionEngine.resolveValue(valueAnnotation.value(), parameters[i].getType());
+                }
+            }
+
+            // Fallback for extraArgs if still not resolved
+            if (resolvedValue == null && extraArgs != null && extraArgsIndex < extraArgs.length) {
+                Object nextArg = extraArgs[extraArgsIndex];
+                if (DependencyUtils.isCompatible(parameters[i].getType(), nextArg)) {
+                    resolvedValue = nextArg;
+                    extraArgsIndex++;
                 }
             }
 
@@ -491,7 +513,7 @@ public class DependencyContainer implements DependencyRepository {
 
             for (Method beanMethod : beans) {
                 beanMethod.setAccessible(true);
-                Object[] parameters = resolveParameters(clazz, beanMethod, instance);
+                Object[] parameters = resolveParameters(clazz, beanMethod, instance, (Object[]) null);
 
                 Object beanInstance = (Object) beanMethod.invoke(instance, parameters);
                 if (beanInstance == null) {
@@ -656,5 +678,22 @@ public class DependencyContainer implements DependencyRepository {
                 throw new RuntimeException("Class: " + clazz.getName() + " annotated with @ArgumentResolver does not implement ArgumentResolverProcessor");
             }
         });
+    }
+    @Override
+    public <T> Collection<T> collectElements(Class<T> superType, Object... extraArgs) {
+        List<T> results = new ArrayList<>();
+        for (Class<?> clazz : elementClasses) {
+            if (superType.isAssignableFrom(clazz)) {
+                // If it's already a managed dependency, use that
+                if (dependencies.containsKey(clazz)) {
+                    results.add(superType.cast(dependencies.get(clazz)));
+                } else {
+                    // Otherwise create a new instance, but DON'T cache it in the main dependencies map
+                    // Elements that are not components are created fresh for each collection request
+                    results.add(superType.cast(newInstance(clazz, false, extraArgs)));
+                }
+            }
+        }
+        return results;
     }
 }
