@@ -2,6 +2,7 @@ package net.vortexdevelopment.vinject.config;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -70,6 +71,11 @@ public interface ConfigurationSection {
     default ConfigurationSection getSection(String path) {
         if (getConfigurationSection() == this) return null;
         return getConfigurationSection().getSection(path);
+    }
+
+    default Map<String, Object> getValues(boolean deep) {
+        if (getConfigurationSection() == this) return Collections.emptyMap();
+        return getConfigurationSection().getValues(deep);
     }
 
     default ConfigurationSection getConfigurationSection(String path) {

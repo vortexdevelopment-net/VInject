@@ -5,6 +5,11 @@ package net.vortexdevelopment.vinject.database.cache;
  */
 public enum WriteStrategy {
     /**
+     * Internal sentinel value for inherited configurations.
+     */
+    UNDEFINED,
+
+    /**
      * Write-through strategy: updates are immediately persisted to the database.
      * Cache stays consistent with the database at all times.
      * Safer but potentially slower for write-heavy workloads.

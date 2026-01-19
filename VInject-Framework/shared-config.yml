@@ -1,0 +1,6 @@
+
+Modules:
+  Items:
+    MaxItems: 64
+  Blocks:
+    Enabled: true

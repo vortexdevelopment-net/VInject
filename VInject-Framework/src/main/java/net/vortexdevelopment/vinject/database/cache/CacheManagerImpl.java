@@ -84,6 +84,12 @@ public class CacheManagerImpl implements CacheManager {
     public <K, V> Cache<K, V> getCache(String name) {
         return (Cache<K, V>) caches.get(name);
     }
+
+    @Override
+    public void registerCache(String name, Cache<?, ?> cache) {
+        caches.put(name, cache);
+        DebugLogger.log("Registered custom cache: %s", name);
+    }
     
     @Override
     public void shutdown() {

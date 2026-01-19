@@ -1,6 +1,7 @@
 package net.vortexdevelopment.vinject.annotation.database;
 
 import net.vortexdevelopment.vinject.database.cache.CachePolicy;
+import net.vortexdevelopment.vinject.database.cache.CacheResolver;
 import net.vortexdevelopment.vinject.database.cache.WriteStrategy;
 
 import java.lang.annotation.ElementType;
@@ -20,37 +21,37 @@ public @interface EnableCaching {
      * Cache policy to use.
      * Default: LRU (Least Recently Used)
      */
-    CachePolicy policy() default CachePolicy.LRU;
+    CachePolicy policy() default CachePolicy.UNDEFINED;
     
     /**
      * Maximum number of entities in NORMAL tier (or total if single-tier).
      * Default: 1000
      */
-    int maxSize() default 1000;
+    int maxSize() default -1;
     
     /**
      * Maximum number of entities in HOT tier (only for HOT_AWARE policy).
      * Default: 100
      */
-    int hotTierSize() default 100;
+    int hotTierSize() default -1;
     
     /**
      * Time-to-live for cached entries in seconds (only for TTL policy).
      * Default: 300 seconds (5 minutes)
      */
-    long ttlSeconds() default 300;
+    long ttlSeconds() default -1;
     
     /**
      * Write strategy: WRITE_THROUGH or WRITE_BACK.
      * Default: WRITE_THROUGH (safer)
      */
-    WriteStrategy writeStrategy() default WriteStrategy.WRITE_THROUGH;
+    WriteStrategy writeStrategy() default WriteStrategy.UNDEFINED;
     
     /**
      * Flush interval in seconds for WRITE_BACK strategy.
      * Default: 10 seconds
      */
-    int flushIntervalSeconds() default 10;
+    int flushIntervalSeconds() default -1;
     
     /**
      * Whether caching is enabled.
@@ -58,4 +59,18 @@ public @interface EnableCaching {
      * Default: true
      */
     boolean enabled() default true;
+
+    /**
+     * Custom cache resolver class.
+     * Used when policy is set to CUSTOM.
+     * Default: void.class (no resolver)
+     */
+    Class<? extends CacheResolver> resolver() default CacheResolver.class;
+
+    /**
+     * Whether to preload the cache on initialization.
+     * Only works with STATIC policy.
+     * Default: false
+     */
+    boolean preload() default false;
 }

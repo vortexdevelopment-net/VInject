@@ -20,6 +20,8 @@ public class CacheConfig {
     private WriteStrategy writeStrategy;
     private int flushIntervalSeconds;
     private boolean enabled;
+    private Class<? extends CacheResolver> resolverClass;
+    private boolean preload;
     
     /**
      * Creates a default configuration with sensible defaults.

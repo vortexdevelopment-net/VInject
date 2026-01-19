@@ -12,10 +12,13 @@ import net.vortexdevelopment.vinject.annotation.component.Root;
 import net.vortexdevelopment.vinject.annotation.component.Service;
 import net.vortexdevelopment.vinject.annotation.Value;
 import net.vortexdevelopment.vinject.annotation.database.Entity;
+import net.vortexdevelopment.vinject.annotation.database.RegisterCacheContributor;
 import net.vortexdevelopment.vinject.annotation.database.RegisterDatabaseSerializer;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory;
 import net.vortexdevelopment.vinject.database.Database;
+import net.vortexdevelopment.vinject.database.cache.CacheContributor;
+import net.vortexdevelopment.vinject.database.cache.CacheCoordinator;
 import net.vortexdevelopment.vinject.database.repository.CrudRepository;
 import net.vortexdevelopment.vinject.database.repository.RepositoryContainer;
 import net.vortexdevelopment.vinject.database.repository.RepositoryInvocationHandler;
@@ -71,6 +74,7 @@ public class DependencyContainer implements DependencyRepository {
     @Getter private final InjectionEngine injectionEngine;
     private final ConditionEvaluator conditionEvaluator;
     private final DependencyGraphResolver dependencyGraphResolver;
+    @Getter private final CacheCoordinator cacheCoordinator;
     
     // Circular dependency handling
     private final ThreadLocal<Set<Class<?>>> currentlyCreating = ThreadLocal.withInitial(HashSet::new);
@@ -92,6 +96,7 @@ public class DependencyContainer implements DependencyRepository {
         missingDependenciesByClass = new ConcurrentHashMap<>();
         annotationHandlerRegistry = new AnnotationHandlerRegistry();
         argumentResolverRegistry = new ArgumentResolverRegistry();
+        cacheCoordinator = new CacheCoordinator();
 
         if (rootInstance == null) {
             //Create the root instance if it is null
@@ -107,6 +112,13 @@ public class DependencyContainer implements DependencyRepository {
         //Add plugin as bean so components can inject it
         dependencies.put(rootClass, rootInstance);
         this.rootClass = rootClass;
+        
+        // Add core services as beans
+        dependencies.put(CacheCoordinator.class, cacheCoordinator);
+        if (eventManager != null) dependencies.put(EventManager.class, eventManager);
+        if (repositoryContainer != null) {
+            dependencies.put(RepositoryContainer.class, repositoryContainer);
+        }
 
         if (onPreComponentLoad != null) {
             onPreComponentLoad.accept(null);
@@ -264,6 +276,14 @@ public class DependencyContainer implements DependencyRepository {
 
         // Scan for @OnDestroy methods (including root instance)
         lifecycleManager.scanDestroyMethods();
+
+        // Register Cache Contributors
+        scanner.scanAndFilter(RegisterCacheContributor.class, this::canLoadClass).forEach(contributorClass -> {
+            if (CacheContributor.class.isAssignableFrom(contributorClass)) {
+                CacheContributor<?> contributor = (CacheContributor<?>) newInstance(contributorClass);
+                cacheCoordinator.registerContributor(contributor);
+            }
+        });
     }
 
     /**

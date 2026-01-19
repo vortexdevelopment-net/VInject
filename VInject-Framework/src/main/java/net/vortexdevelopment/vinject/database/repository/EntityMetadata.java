@@ -1,6 +1,7 @@
 package net.vortexdevelopment.vinject.database.repository;
 
 import lombok.Getter;
+import net.vortexdevelopment.vinject.annotation.database.AutoLoad;
 import net.vortexdevelopment.vinject.annotation.database.Column;
 import net.vortexdevelopment.vinject.annotation.database.ColumnPrefix;
 import net.vortexdevelopment.vinject.annotation.database.Entity;
@@ -29,6 +30,7 @@ public class EntityMetadata {
     @Getter private final Field primaryKeyField;
     private final Map<String, Field> fieldsMap = new HashMap<>();
     private final Map<String, SerializedFieldInfo> serializedFields = new HashMap<>(); // columnName -> info
+    @Getter private final Map<String, Field> autoLoadFields = new HashMap<>(); // namespace -> field
 
     public EntityMetadata(Class<?> entityClass, SerializerRegistry serializerRegistry) {
         Entity entity = entityClass.getAnnotation(Entity.class);
@@ -84,6 +86,9 @@ public class EntityMetadata {
             if (field.isAnnotationPresent(Column.class) || field.isAnnotationPresent(Temporal.class) || field.isAnnotationPresent(Id.class)) {
                 fieldToColumnMap.put(field.getName(), columnName);
             }
+            if (field.isAnnotationPresent(AutoLoad.class)) {
+                autoLoadFields.put(field.getAnnotation(AutoLoad.class).value(), field);
+            }
             fieldsMap.put(field.getName(), field);
         }
 
@@ -128,5 +133,13 @@ public class EntityMetadata {
             }
         }
         return columnNames;
+    }
+
+    public Object getPrimaryKeyFieldContent(Object entity) {
+        try {
+            return primaryKeyField.get(entity);
+        } catch (IllegalAccessException e) {
+            return null;
+        }
     }
 }

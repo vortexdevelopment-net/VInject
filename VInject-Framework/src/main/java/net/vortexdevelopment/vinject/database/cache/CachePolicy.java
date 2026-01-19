@@ -5,6 +5,11 @@ package net.vortexdevelopment.vinject.database.cache;
  */
 public enum CachePolicy {
     /**
+     * Internal sentinel value for inherited configurations.
+     */
+    UNDEFINED,
+
+    /**
      * Preload all entities on initialization, never evict.
      * Best for small, static datasets.
      */
@@ -26,5 +31,11 @@ public enum CachePolicy {
      * Two-tier cache with hot entity promotion.
      * HOT tier for frequently accessed entities, NORMAL tier with aggressive eviction.
      */
-    HOT_AWARE
+    HOT_AWARE,
+
+    /**
+     * Custom cache implementation provided by a CacheResolver.
+     * Allows for domain-specific caching logic.
+     */
+    CUSTOM
 }

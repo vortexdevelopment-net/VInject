@@ -29,6 +29,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
     private final RepositoryInvocationContext<T, ID> context;
     private final Map<String, RepositoryMethodHandler> exactHandlers = new HashMap<>();
     private final List<RepositoryMethodHandler> patternHandlers = new ArrayList<>();
+    private CrudMethodHandler crudHandler;
 
     public RepositoryInvocationHandler(Class<?> repositoryClass,
                                        Class<T> entityClass,
@@ -43,7 +44,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
 
     private void initializeHandlers() {
         // CRUD Methods
-        CrudMethodHandler crudHandler = new CrudMethodHandler();
+        this.crudHandler = new CrudMethodHandler();
         for (String methodName : CrudMethodHandler.SUPPORTED_METHODS) {
             exactHandlers.put(methodName, crudHandler);
         }
@@ -63,6 +64,22 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
         patternHandlers.add(new DefaultMethodHandler());
     }
 
+    /**
+     * Injects an entity into the cache managed by this handler.
+     * @param entity the entity to cache
+     */
+    public void injectIntoCache(T entity) {
+        crudHandler.injectIntoCache(context, entity);
+    }
+
+    /**
+     * Removes an entity from the cache managed by this handler.
+     * @param entity the entity to remove
+     */
+    public void removeFromCache(T entity) {
+        crudHandler.removeFromCache(context, entity);
+    }
+
     @SuppressWarnings("unchecked")
     public CrudRepository<T, ID> create() {
         return (CrudRepository<T, ID>) Proxy.newProxyInstance(
@@ -70,6 +87,27 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
                 new Class[]{context.getRepositoryClass()},
                 this
         );
+    }
+
+    /**
+     * @return the invocation context for this handler
+     */
+    public RepositoryInvocationContext<T, ID> getContext() {
+        return context;
+    }
+
+    /**
+     * Loads entities by a namespace value.
+     */
+    public void loadByNamespace(String namespace, Object value) {
+        crudHandler.loadByNamespace(context, namespace, value);
+    }
+
+    /**
+     * Invalidates entities by a namespace value.
+     */
+    public void invalidateByNamespace(String namespace, Object value) {
+        crudHandler.invalidateByNamespace(context, namespace, value);
     }
 
     @Override

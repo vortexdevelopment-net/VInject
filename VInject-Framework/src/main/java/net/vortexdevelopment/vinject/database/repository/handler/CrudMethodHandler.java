@@ -32,6 +32,8 @@ import java.util.stream.Collectors;
  */
 public class CrudMethodHandler extends BaseMethodHandler {
 
+    private boolean isPreloaded = false;
+
     public static final Set<String> SUPPORTED_METHODS = Set.of(
             "save", "saveAll", "findById", "existsById", "findAll", "findAllById", "count",
             "deleteById", "delete", "deleteAllById", "deleteAll"
@@ -93,25 +95,200 @@ public class CrudMethodHandler extends BaseMethodHandler {
             return cache;
         }
 
-        // If not found, check if @EnableCaching is present on the repository interface
-        net.vortexdevelopment.vinject.annotation.database.EnableCaching annotation = 
-            context.getRepositoryClass().getAnnotation(net.vortexdevelopment.vinject.annotation.database.EnableCaching.class);
+        // Find all @EnableCaching annotations in hierarchy (leaf to root)
+        java.util.List<net.vortexdevelopment.vinject.annotation.database.EnableCaching> annotations = 
+            net.vortexdevelopment.vinject.di.utils.DependencyUtils.findAllAnnotations(
+                context.getRepositoryClass(), 
+                net.vortexdevelopment.vinject.annotation.database.EnableCaching.class);
         
-        if (annotation != null && annotation.enabled()) {
-            net.vortexdevelopment.vinject.database.cache.CacheConfig config = net.vortexdevelopment.vinject.database.cache.CacheConfig.builder()
-                .policy(annotation.policy())
-                .maxSize(annotation.maxSize())
-                .hotTierSize(annotation.hotTierSize())
-                .ttlSeconds(annotation.ttlSeconds())
-                .writeStrategy(annotation.writeStrategy())
-                .flushIntervalSeconds(annotation.flushIntervalSeconds())
-                .build();
+        if (annotations.isEmpty()) {
+            return null;
+        }
+
+        // Reverse to apply from root to leaf (overriding parent with child)
+        java.util.Collections.reverse(annotations);
+
+        // Start with framework defaults
+        net.vortexdevelopment.vinject.database.cache.CacheConfig.CacheConfigBuilder configBuilder = 
+            net.vortexdevelopment.vinject.database.cache.CacheConfig.builder()
+                .policy(net.vortexdevelopment.vinject.database.cache.CachePolicy.LRU)
+                .maxSize(1000)
+                .hotTierSize(100)
+                .ttlSeconds(300)
+                .writeStrategy(net.vortexdevelopment.vinject.database.cache.WriteStrategy.WRITE_THROUGH)
+                .flushIntervalSeconds(10)
+                .enabled(true)
+                .preload(false)
+                .resolverClass(net.vortexdevelopment.vinject.database.cache.CacheResolver.class);
+
+        // Apply values from annotations (root to leaf)
+        boolean hasExplicitConfig = false;
+
+        for (net.vortexdevelopment.vinject.annotation.database.EnableCaching ann : annotations) {
+            hasExplicitConfig = true;
+
+            if (ann.policy() != net.vortexdevelopment.vinject.database.cache.CachePolicy.UNDEFINED) {
+                configBuilder.policy(ann.policy());
+            }
+            if (ann.maxSize() != -1) {
+                configBuilder.maxSize(ann.maxSize());
+            }
+            if (ann.hotTierSize() != -1) {
+                configBuilder.hotTierSize(ann.hotTierSize());
+            }
+            if (ann.ttlSeconds() != -1) {
+                configBuilder.ttlSeconds(ann.ttlSeconds());
+            }
+            if (ann.writeStrategy() != net.vortexdevelopment.vinject.database.cache.WriteStrategy.UNDEFINED) {
+                configBuilder.writeStrategy(ann.writeStrategy());
+            }
+            if (ann.flushIntervalSeconds() != -1) {
+                configBuilder.flushIntervalSeconds(ann.flushIntervalSeconds());
+            }
+            if (ann.resolver() != net.vortexdevelopment.vinject.database.cache.CacheResolver.class) {
+                configBuilder.resolverClass(ann.resolver());
+            }
+            // Always take the leaf value for these
+            configBuilder.enabled(ann.enabled());
+            configBuilder.preload(ann.preload());
+        }
+
+        if (hasExplicitConfig) {
+            net.vortexdevelopment.vinject.database.cache.CacheConfig config = configBuilder.build();
             
-            cacheManager.createCache(cacheName, config);
-            return cacheManager.getCache(cacheName);
+            if (!config.isEnabled()) {
+                return null;
+            }
+
+            if (config.getPolicy() == net.vortexdevelopment.vinject.database.cache.CachePolicy.CUSTOM && 
+                config.getResolverClass() != net.vortexdevelopment.vinject.database.cache.CacheResolver.class) {
+                
+                net.vortexdevelopment.vinject.database.cache.CacheResolver resolver = 
+                    container.getDependency(config.getResolverClass());
+                
+                cache = resolver.resolve(context, config);
+                cacheManager.registerCache(cacheName, cache);
+            } else {
+                cacheManager.createCache(cacheName, config);
+                cache = cacheManager.getCache(cacheName);
+            }
+
+            // Handle preloading for STATIC policy
+            if (config.getPolicy() == net.vortexdevelopment.vinject.database.cache.CachePolicy.STATIC && 
+                config.isPreload() && !isPreloaded) {
+                isPreloaded = true;
+                try {
+                    DebugLogger.log(context.getRepositoryClass(), "Preloading static cache for %s", cacheName);
+                    findAll(context);
+                } catch (Exception e) {
+                    DebugLogger.log(context.getRepositoryClass(), "Failed to preload cache: %s", e.getMessage());
+                }
+            }
+            
+            return cache;
         }
 
         return null;
+    }
+
+    /**
+     * Injects an entity into the cache.
+     */
+    public void injectIntoCache(RepositoryInvocationContext<?, ?> context, Object entity) {
+        Cache<Object, Object> cache = getCache(context);
+        if (cache == null) return;
+
+        Object id = context.getEntityMetadata().getPrimaryKeyFieldContent(entity);
+        if (id != null) {
+            cache.put(id, entity);
+            DebugLogger.log(context.getRepositoryClass(), "Manually injected entity into cache: %s", id);
+        }
+    }
+
+    /**
+     * Removes an entity from the cache.
+     */
+    public void removeFromCache(RepositoryInvocationContext<?, ?> context, Object entity) {
+        Cache<Object, Object> cache = getCache(context);
+        if (cache == null) return;
+
+        Object id = context.getEntityMetadata().getPrimaryKeyFieldContent(entity);
+        if (id != null) {
+            cache.remove(id);
+            DebugLogger.log(context.getRepositoryClass(), "Manually removed entity from cache: %s", id);
+        }
+    }
+
+    /**
+     * Loads entities by a namespace value and injects them into the cache.
+     */
+    public void loadByNamespace(RepositoryInvocationContext<?, ?> context, String namespace, Object value) {
+        EntityMetadata metadata = context.getEntityMetadata();
+        Field field = metadata.getAutoLoadFields().get(namespace);
+        if (field == null) return;
+
+        String columnName = metadata.getSerializedColumnNames(field.getName()).get(0);
+        String sql = "SELECT * FROM " + context.getSchemaFormatter().formatTableName(metadata.getTableName()) +
+                " WHERE " + context.getSchemaFormatter().formatColumnName(columnName) + " = ?";
+
+        try {
+            context.getDatabase().connect(connection -> {
+                try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                    statement.setObject(1, value);
+                    try (ResultSet rs = statement.executeQuery()) {
+                        while (rs.next()) {
+                            Object entity = mapEntity(context, connection, context.getEntityClass(), rs);
+                            if (entity != null) {
+                                injectIntoCache(context, entity);
+                            }
+                        }
+                    }
+                }
+                return null;
+            });
+        } catch (Exception e) {
+            DebugLogger.log(context.getRepositoryClass(), "Failed to auto-load entities for namespace %s: %s", namespace, e.getMessage());
+        }
+    }
+
+    /**
+     * Invalidates entities by a namespace value in the cache.
+     * Note: This only works if we load them first or if the ID is known.
+     * Since we might not know the PK, we load and then remove.
+     */
+    public void invalidateByNamespace(RepositoryInvocationContext<?, ?> context, String namespace, Object value) {
+        EntityMetadata metadata = context.getEntityMetadata();
+        Field field = metadata.getAutoLoadFields().get(namespace);
+        if (field == null) return;
+
+        // For invalidation, we first need to find which entities to remove if we don't know their PKs
+        String columnName = metadata.getSerializedColumnNames(field.getName()).get(0);
+        String sql = "SELECT " + context.getSchemaFormatter().formatColumnName(metadata.getPrimaryKeyColumn()) + 
+                " FROM " + context.getSchemaFormatter().formatTableName(metadata.getTableName()) +
+                " WHERE " + context.getSchemaFormatter().formatColumnName(columnName) + " = ?";
+
+        try {
+            context.getDatabase().connect(connection -> {
+                try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                    statement.setObject(1, value);
+                    try (ResultSet rs = statement.executeQuery()) {
+                        Cache<Object, Object> cache = getCache(context);
+                        if (cache == null) return null;
+                        
+                        while (rs.next()) {
+                            Object id = rs.getObject(1);
+                            if (id != null) {
+                                cache.remove(id);
+                                DebugLogger.log(context.getRepositoryClass(), "Proactively invalidated entity from cache by namespace %s: %s", namespace, id);
+                            }
+                        }
+                    }
+                }
+                return null;
+            });
+        } catch (Exception e) {
+            DebugLogger.log(context.getRepositoryClass(), "Failed to auto-invalidate entities for namespace %s: %s", namespace, e.getMessage());
+        }
     }
 
     private Object save(RepositoryInvocationContext<?, ?> context, Object entity) throws Exception {

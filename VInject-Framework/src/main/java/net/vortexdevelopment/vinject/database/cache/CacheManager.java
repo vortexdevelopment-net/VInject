@@ -55,6 +55,14 @@ public interface CacheManager {
     <K, V> Cache<K, V> getCache(String name);
     
     /**
+     * Register a custom cache instance.
+     * 
+     * @param name cache name
+     * @param cache cache instance
+     */
+    void registerCache(String name, Cache<?, ?> cache);
+
+    /**
      * Shutdown the cache manager and flush all caches.
      */
     void shutdown();

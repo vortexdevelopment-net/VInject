@@ -20,7 +20,7 @@ import java.lang.annotation.Target;
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.METHOD)
-public @interface Cached {
+public @interface CachedField {
     /**
      * The name of the field that is being modified by this method.
      * 

@@ -110,4 +110,36 @@ public class DependencyUtils {
         }
         return false;
     }
+
+    /**
+     * Finds all annotations of the specified type in the class/interface hierarchy.
+     * Elements are returned from leaf (the class itself) to root (topmost interfaces).
+     *
+     * @param clazz          The class to inspect
+     * @param annotationType The annotation type to find
+     * @param <T>            The annotation type
+     * @return List of annotations found
+     */
+    public static <T extends Annotation> java.util.List<T> findAllAnnotations(Class<?> clazz, Class<T> annotationType) {
+        java.util.List<T> results = new java.util.ArrayList<>();
+        collectAnnotations(clazz, annotationType, results, new java.util.HashSet<>());
+        return results;
+    }
+
+    private static <T extends Annotation> void collectAnnotations(Class<?> clazz, Class<T> annotationType, java.util.List<T> results, java.util.Set<Class<?>> visited) {
+        if (clazz == null || !visited.add(clazz)) {
+            return;
+        }
+
+        T annotation = clazz.getAnnotation(annotationType);
+        if (annotation != null) {
+            results.add(annotation);
+        }
+
+        for (Class<?> iface : clazz.getInterfaces()) {
+            collectAnnotations(iface, annotationType, results, visited);
+        }
+
+        collectAnnotations(clazz.getSuperclass(), annotationType, results, visited);
+    }
 }
