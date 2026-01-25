@@ -51,6 +51,29 @@ class ElementCollectionTest {
         }
     }
 
+    @Test
+    void collectElementsRespectsPriority() {
+        try (TestApplicationContext context = TestApplicationContext.builder()
+                .withRootClass(ElementTestRoot.class)
+                .build()) {
+            
+            DependencyRepository container = context.getContainer();
+            
+            // Collect elements of type IOrderedElement
+            Collection<IOrderedElement> elements = container.collectElements(IOrderedElement.class);
+
+            assertThat(elements).hasSize(3);
+            
+            // Convert to list for index-based verification
+            var list = elements.stream().toList();
+            
+            // Should be ordered by priority: LowFirst (-100), Default (0), HighLast (100)
+            assertThat(list.get(0)).isInstanceOf(LowFirst.class);
+            assertThat(list.get(1)).isInstanceOf(DefaultOrder.class);
+            assertThat(list.get(2)).isInstanceOf(HighLast.class);
+        }
+    }
+
     private <T> T findElement(Collection<?> elements, Class<T> clazz) {
         return elements.stream()
                 .filter(clazz::isInstance)
@@ -82,4 +105,15 @@ class ElementCollectionTest {
     @Element
     public record TestElement3(ManagedService service, String extraString) implements ITestElement {
     }
+
+    public interface IOrderedElement {}
+
+    @Element(priority = 100)
+    public static class HighLast implements IOrderedElement {}
+
+    @Element(priority = -100)
+    public static class LowFirst implements IOrderedElement {}
+
+    @Element
+    public static class DefaultOrder implements IOrderedElement {}
 }

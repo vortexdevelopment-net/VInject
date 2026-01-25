@@ -152,7 +152,7 @@ public abstract class BaseMethodHandler implements RepositoryMethodHandler {
 
         String sql = "SELECT * FROM " + context.getSchemaFormatter().formatTableName(tableName) + " WHERE " + context.getSchemaFormatter().formatColumnName(pkColumn) + " = ?";
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setObject(1, foreignKeyValue);
+            RepositoryUtils.setStatementParameter(statement, 1, foreignKeyValue);
             try (ResultSet rs = statement.executeQuery()) {
                 if (rs.next()) {
                     return mapEntity(context, connection, foreignEntityCls, rs);

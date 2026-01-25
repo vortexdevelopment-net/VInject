@@ -42,7 +42,7 @@ public class MockDatabaseBuilder {
                 10,              // max pool size
                 new File("mem")  // h2 file (in-memory mode)
         );
-        database.init();
+        database.connect();
         return database;
     }
 
@@ -75,7 +75,7 @@ public class MockDatabaseBuilder {
                 10,              // max pool size
                 dbFile           // h2 file
         );
-        database.init();
+        database.connect();
         return database;
     }
 

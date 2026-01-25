@@ -19,6 +19,8 @@ import net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory;
 import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.database.cache.CacheContributor;
 import net.vortexdevelopment.vinject.database.cache.CacheCoordinator;
+import net.vortexdevelopment.vinject.database.cache.CacheManager;
+import net.vortexdevelopment.vinject.database.cache.CacheManagerImpl;
 import net.vortexdevelopment.vinject.database.repository.CrudRepository;
 import net.vortexdevelopment.vinject.database.repository.RepositoryContainer;
 import net.vortexdevelopment.vinject.database.repository.RepositoryInvocationHandler;
@@ -75,6 +77,7 @@ public class DependencyContainer implements DependencyRepository {
     private final ConditionEvaluator conditionEvaluator;
     private final DependencyGraphResolver dependencyGraphResolver;
     @Getter private final CacheCoordinator cacheCoordinator;
+    @Getter private final CacheManager cacheManager;
     
     // Circular dependency handling
     private final ThreadLocal<Set<Class<?>>> currentlyCreating = ThreadLocal.withInitial(HashSet::new);
@@ -96,7 +99,8 @@ public class DependencyContainer implements DependencyRepository {
         missingDependenciesByClass = new ConcurrentHashMap<>();
         annotationHandlerRegistry = new AnnotationHandlerRegistry();
         argumentResolverRegistry = new ArgumentResolverRegistry();
-        cacheCoordinator = new CacheCoordinator();
+        cacheCoordinator = new CacheCoordinator(repositoryContainer);
+        cacheManager = new CacheManagerImpl();
 
         if (rootInstance == null) {
             //Create the root instance if it is null
@@ -112,13 +116,20 @@ public class DependencyContainer implements DependencyRepository {
         //Add plugin as bean so components can inject it
         dependencies.put(rootClass, rootInstance);
         this.rootClass = rootClass;
-        
-        // Add core services as beans
-        dependencies.put(CacheCoordinator.class, cacheCoordinator);
-        if (eventManager != null) dependencies.put(EventManager.class, eventManager);
+
         if (repositoryContainer != null) {
             dependencies.put(RepositoryContainer.class, repositoryContainer);
         }
+        
+        // Add core services as beans
+        dependencies.put(CacheCoordinator.class, cacheCoordinator);
+        dependencies.put(CacheManager.class, cacheManager);
+        dependencies.put(CacheManagerImpl.class, cacheManager);
+        if (eventManager != null) dependencies.put(EventManager.class, eventManager);
+
+        // Manually inject into core services since they were created before injection engine was fully ready
+        injectionEngine.inject(cacheCoordinator);
+        injectionEngine.inject(cacheManager);
 
         if (onPreComponentLoad != null) {
             onPreComponentLoad.accept(null);
@@ -175,7 +186,7 @@ public class DependencyContainer implements DependencyRepository {
                 }
             });
         }
-        
+
         // Register Repositories (after serializers are registered)
         scanner.scanAndFilter(Repository.class, this::canLoadClass).forEach(repositoryClass -> {
             // Check if the class implements CrudRepository
@@ -195,7 +206,7 @@ public class DependencyContainer implements DependencyRepository {
             // Register the repository and its entity type
             RepositoryInvocationHandler<?, ?> proxy = repositoryContainer.registerRepository(repositoryClass, entityClass, this);
             this.dependencies.put(repositoryClass, proxy.create());
-            
+
             // Process debug and system property annotations for repositories
             lifecycleManager.processDebugAnnotations(repositoryClass);
             lifecycleManager.processSystemPropertyAnnotations(repositoryClass);
@@ -714,6 +725,20 @@ public class DependencyContainer implements DependencyRepository {
                 }
             }
         }
+        
+        // Sort by @Element priority (lower values first)
+        results.sort((a, b) -> {
+            int priorityA = getPriority(a.getClass());
+            int priorityB = getPriority(b.getClass());
+            return Integer.compare(priorityA, priorityB);
+        });
+        
         return results;
+    }
+    
+    private int getPriority(Class<?> clazz) {
+        net.vortexdevelopment.vinject.annotation.component.Element element = 
+            clazz.getAnnotation(net.vortexdevelopment.vinject.annotation.component.Element.class);
+        return element != null ? element.priority() : 0;
     }
 }

@@ -227,14 +227,16 @@ public class CrudMethodHandler extends BaseMethodHandler {
         Field field = metadata.getAutoLoadFields().get(namespace);
         if (field == null) return;
 
-        String columnName = metadata.getSerializedColumnNames(field.getName()).get(0);
+        List<String> columns = metadata.getSerializedColumnNames(field.getName());
+        String columnName = columns.isEmpty() ? metadata.getColumnName(field.getName()) : columns.get(0);
+        
         String sql = "SELECT * FROM " + context.getSchemaFormatter().formatTableName(metadata.getTableName()) +
                 " WHERE " + context.getSchemaFormatter().formatColumnName(columnName) + " = ?";
 
         try {
             context.getDatabase().connect(connection -> {
                 try (PreparedStatement statement = connection.prepareStatement(sql)) {
-                    statement.setObject(1, value);
+                    RepositoryUtils.setStatementParameter(statement, 1, value);
                     try (ResultSet rs = statement.executeQuery()) {
                         while (rs.next()) {
                             Object entity = mapEntity(context, connection, context.getEntityClass(), rs);
@@ -262,7 +264,9 @@ public class CrudMethodHandler extends BaseMethodHandler {
         if (field == null) return;
 
         // For invalidation, we first need to find which entities to remove if we don't know their PKs
-        String columnName = metadata.getSerializedColumnNames(field.getName()).get(0);
+        List<String> columns = metadata.getSerializedColumnNames(field.getName());
+        String columnName = columns.isEmpty() ? metadata.getColumnName(field.getName()) : columns.get(0);
+
         String sql = "SELECT " + context.getSchemaFormatter().formatColumnName(metadata.getPrimaryKeyColumn()) + 
                 " FROM " + context.getSchemaFormatter().formatTableName(metadata.getTableName()) +
                 " WHERE " + context.getSchemaFormatter().formatColumnName(columnName) + " = ?";
@@ -270,7 +274,7 @@ public class CrudMethodHandler extends BaseMethodHandler {
         try {
             context.getDatabase().connect(connection -> {
                 try (PreparedStatement statement = connection.prepareStatement(sql)) {
-                    statement.setObject(1, value);
+                    RepositoryUtils.setStatementParameter(statement, 1, value);
                     try (ResultSet rs = statement.executeQuery()) {
                         Cache<Object, Object> cache = getCache(context);
                         if (cache == null) return null;
@@ -364,7 +368,7 @@ public class CrudMethodHandler extends BaseMethodHandler {
         long dbStart = System.nanoTime();
         Object result = context.getDatabase().connect(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
-                statement.setObject(1, id);
+                RepositoryUtils.setStatementParameter(statement, 1, id);
                 try (ResultSet rs = statement.executeQuery()) {
                     if (rs.next()) {
                         return mapEntity(context, connection, context.getEntityClass(), rs);
@@ -414,7 +418,7 @@ public class CrudMethodHandler extends BaseMethodHandler {
         long dbStart = System.nanoTime();
         boolean exists = context.getDatabase().connect(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
-                statement.setObject(1, id);
+                RepositoryUtils.setStatementParameter(statement, 1, id);
                 try (ResultSet rs = statement.executeQuery()) {
                     return rs.next();
                 }
@@ -514,7 +518,7 @@ public class CrudMethodHandler extends BaseMethodHandler {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 int index = 1;
                 for (Object id : missingIds) {
-                    statement.setObject(index++, id);
+                    RepositoryUtils.setStatementParameter(statement, index++, id);
                 }
                 try (ResultSet rs = statement.executeQuery()) {
                     Field pkField = metadata.getPrimaryKeyField();
@@ -574,7 +578,7 @@ public class CrudMethodHandler extends BaseMethodHandler {
                 " WHERE " + context.getSchemaFormatter().formatColumnName(metadata.getPrimaryKeyColumn()) + " = ?";
         return context.getDatabase().connect(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
-                statement.setObject(1, id);
+                RepositoryUtils.setStatementParameter(statement, 1, id);
                 return statement.executeUpdate();
             }
         });
@@ -614,7 +618,7 @@ public class CrudMethodHandler extends BaseMethodHandler {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 int index = 1;
                 for (Object id : idList) {
-                    statement.setObject(index++, id);
+                    RepositoryUtils.setStatementParameter(statement, index++, id);
                 }
                 return statement.executeUpdate();
             }
@@ -715,7 +719,7 @@ public class CrudMethodHandler extends BaseMethodHandler {
                 continue;
             }
 
-            Object value = field.get(entity);
+            Object value = RepositoryUtils.unwrapEntityId(field.get(entity), context);
 
             if (field.isAnnotationPresent(Temporal.class)) {
                 value = (value == null) ? null : new Timestamp((long) value);
@@ -821,7 +825,7 @@ public class CrudMethodHandler extends BaseMethodHandler {
                 continue;
             }
 
-            Object value = field.get(entity);
+            Object value = RepositoryUtils.unwrapEntityId(field.get(entity), context);
 
             Temporal temporal = field.getAnnotation(Temporal.class);
             if (temporal != null) {

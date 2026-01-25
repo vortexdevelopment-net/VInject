@@ -27,6 +27,7 @@ import java.nio.file.Paths;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -339,14 +340,24 @@ public class ConfigurationContainer {
                 });
             }
         } else {
-            // Check if it's a batch item
-            saveItemObject(instance);
+            // Check if it's a batch directory holder
+            String batchId = directoryClassToBatchId.get(clazz);
+            if (batchId != null) {
+                syncBatchDirectory(clazz, batchId);
+            } else {
+                // Check if it's a batch item
+                saveItemObject(instance);
+            }
         }
     }
 
     public void saveConfig(Class<?> configClass, boolean force) {
         ConfigEntry e = configs.get(configClass);
         if (e == null) {
+            String batchId = directoryClassToBatchId.get(configClass);
+            if (batchId != null) {
+                syncBatchDirectory(configClass, batchId);
+            }
             return;
         }
 
@@ -772,4 +783,119 @@ public class ConfigurationContainer {
             e.printStackTrace();
         }
     }
+    private void syncBatchDirectory(Class<?> holderClass, String batchId) {
+        if (forceSyncSave) {
+            syncBatchDirectoryInternal(holderClass, batchId);
+        } else {
+            executor.submit(() -> syncBatchDirectoryInternal(holderClass, batchId));
+        }
+    }
+
+    private void syncBatchDirectoryInternal(Class<?> holderClass, String batchId) {
+        BatchInfo info = batches.get(batchId);
+        if (info == null || info.holderInstance == null) return;
+
+        Set<String> currentIds = getCurrentItemIds(info.holderInstance, holderClass);
+        Map<String, Object> storedItems = batchStores.get(batchId);
+        if (storedItems == null) return;
+
+        // Copy stored IDs to safely iterate and potentially remove
+        Set<String> storedIds = new HashSet<>(storedItems.keySet());
+
+        for (String id : storedIds) {
+            if (!currentIds.contains(id)) {
+                // Item was removed from holder collections
+                Object removedItem = storedItems.remove(id);
+                if (removedItem != null) {
+                    deleteItemFileEntry(removedItem, id, info);
+                }
+            } else {
+                // Item still exists, save it
+                Object item = storedItems.get(id);
+                saveItemObject(item);
+            }
+        }
+    }
+
+    private Set<String> getCurrentItemIds(Object holderInstance, Class<?> holderClass) {
+        Set<String> ids = new HashSet<>();
+        for (Field field : holderClass.getDeclaredFields()) {
+            boolean isMap = Map.class.isAssignableFrom(field.getType());
+            boolean isCollection = Collection.class.isAssignableFrom(field.getType());
+            boolean hasAnnotation = field.isAnnotationPresent(YamlCollection.class);
+
+            if (isMap || isCollection || hasAnnotation) {
+                field.setAccessible(true);
+                try {
+                    Object val = field.get(holderInstance);
+                    if (val == null) continue;
+
+                    if (val instanceof Map<?, ?> map) {
+                        for (Object k : map.keySet()) {
+                            if (k != null) ids.add(k.toString());
+                        }
+                    } else if (val instanceof Collection<?> col) {
+                        for (Object o : col) {
+                            if (o == null) continue;
+                            String id = getItemId(o);
+                            if (id != null) ids.add(id);
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+        return ids;
+    }
+
+    private String getItemId(Object item) {
+        try {
+            Field idField = mapper.findIdFieldForClass(item.getClass());
+            if (idField != null) {
+                idField.setAccessible(true);
+                Object id = idField.get(item);
+                return id != null ? id.toString() : null;
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private void deleteItemFileEntry(Object item, String itemId, BatchInfo info) {
+        String filePath = readSyntheticStringField(item, SYNTHETIC_FILE_FIELD);
+        if (filePath == null) return;
+
+        YamlConfig config = fileDataMaps.get(filePath);
+        if (config == null) {
+            Path path = resolvePath(filePath);
+            if (!Files.exists(path)) return;
+            config = YamlConfig.load(path.toFile());
+            fileDataMaps.put(filePath, config);
+        }
+
+        String fullPath = (info.rootKey == null || info.rootKey.isEmpty()) ? itemId : info.rootKey + "." + itemId;
+        config.set(fullPath, null); // This removes the node in YamlConfig
+
+        try {
+            boolean isEmpty;
+            if (info.rootKey == null || info.rootKey.isEmpty()) {
+                isEmpty = config.getKeys(false).isEmpty();
+            } else {
+                ConfigurationSection section = config.getConfigurationSection(info.rootKey);
+                isEmpty = (section == null || section.getKeys(false).isEmpty());
+                if (isEmpty && section != null) {
+                    config.set(info.rootKey, null);
+                    isEmpty = config.getKeys(false).isEmpty();
+                }
+            }
+
+            if (isEmpty) {
+                fileDataMaps.remove(filePath);
+                Files.deleteIfExists(resolvePath(filePath));
+            } else {
+                config.save();
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
 }
+

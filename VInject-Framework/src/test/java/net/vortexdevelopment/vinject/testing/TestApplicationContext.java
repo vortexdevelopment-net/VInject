@@ -71,9 +71,12 @@ public class TestApplicationContext implements AutoCloseable {
         }
 
         // Initialize database if needed
-        if (database != null) {
-            database.init();
-            repositoryContainer = new RepositoryContainer(database);
+        if (database == null) {
+            database = new Database();
+        }
+        repositoryContainer = new RepositoryContainer(database);
+        if (database.isInitialized()) {
+            database.connect();
         }
 
         // Create dependency container

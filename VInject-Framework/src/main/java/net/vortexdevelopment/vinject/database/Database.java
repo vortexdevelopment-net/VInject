@@ -33,10 +33,21 @@ public class Database implements DatabaseConnector {
     private static String TABLE_PREFIX = "example_";
     private final List<String> FOREIGN_KEY_QUERIES = new ArrayList<>();
     private static SQLTypeMapper sqlTypeMapper;
-    @Getter private final SchemaFormatter schemaFormatter;
-    @Getter private final SerializerRegistry serializerRegistry;
+    @Getter private SchemaFormatter schemaFormatter;
+    @Getter private final SerializerRegistry serializerRegistry = new SerializerRegistry();
+    @Getter private boolean initialized = false;
+
+    public Database() {
+    }
 
     public Database(String host, String port, String database, String type, String username, String password, int maxPoolSize, File h2File) {
+        init(host, port, database, type, username, password, maxPoolSize, h2File);
+    }
+
+    /**
+     * Initialize the database connection parameters.
+     */
+    public void init(String host, String port, String database, String type, String username, String password, int maxPoolSize, File h2File) {
         hikariConfig = new HikariConfig();
 
         if (type.equalsIgnoreCase("h2")) {
@@ -83,13 +94,17 @@ public class Database implements DatabaseConnector {
         hikariConfig.addDataSourceProperty("cacheServerConfiguration", "true");
         hikariConfig.addDataSourceProperty("elideSetAutoCommits", "true");
         hikariConfig.addDataSourceProperty("maintainTimeStats", "false");
-        this.serializerRegistry = new SerializerRegistry();
+
+        this.initialized = true;
     }
 
     /**
      * Initialize the database connection pool.
      */
-    public void init() {
+    public void connect() {
+        if (hikariConfig == null) {
+            throw new IllegalStateException("Database connection not initialized. Call init() first.");
+        }
         hikariDataSource = new HikariDataSource(hikariConfig);
     }
 
@@ -295,6 +310,10 @@ public class Database implements DatabaseConnector {
                 }
             }
         }
+    }
+
+    public boolean isConnected() {
+        return hikariDataSource != null;
     }
 
     @Override

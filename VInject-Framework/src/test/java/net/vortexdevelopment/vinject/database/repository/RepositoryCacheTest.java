@@ -7,7 +7,6 @@ import net.vortexdevelopment.vinject.annotation.database.Column;
 import net.vortexdevelopment.vinject.annotation.database.Entity;
 import net.vortexdevelopment.vinject.annotation.database.Id;
 import net.vortexdevelopment.vinject.annotation.util.EnableDebug;
-import net.vortexdevelopment.vinject.annotation.util.SetSystemProperty;
 import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.database.cache.CacheConfig;
 import net.vortexdevelopment.vinject.database.cache.CacheManager;

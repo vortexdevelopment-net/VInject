@@ -13,8 +13,8 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Handles dependency injection into fields and methods.
@@ -158,23 +158,23 @@ public class InjectionEngine {
      */
     private void injectSetters(@NotNull Object object) {
         Class<?> clazz = object.getClass();
-        Set<String> injectFieldNames = new HashSet<>();
+        Map<String, Field> injectFields = new HashMap<>();
         for (Field field : clazz.getDeclaredFields()) {
             if (field.isAnnotationPresent(Inject.class)) {
-                injectFieldNames.add(field.getName());
+                injectFields.put(field.getName(), field);
             }
         }
 
         for (Method method : clazz.getDeclaredMethods()) {
             checkJavaxInject(method);
             boolean hasInjectAnnotation = method.isAnnotationPresent(Inject.class);
-            boolean isSetterForInjectField = false;
+            Field targetField = null;
             if (method.getName().startsWith("set") && method.getParameterCount() == 1) {
                 String fieldName = Character.toLowerCase(method.getName().charAt(3)) + method.getName().substring(4);
-                isSetterForInjectField = injectFieldNames.contains(fieldName);
+                targetField = injectFields.get(fieldName);
             }
 
-            if (!hasInjectAnnotation && !isSetterForInjectField) {
+            if (!hasInjectAnnotation && targetField == null) {
                 continue;
             }
 
@@ -196,6 +196,7 @@ public class InjectionEngine {
                             .parameter(method.getParameters()[i])
                             .declaringClass(clazz)
                             .method(method)
+                            .field(targetField)
                             .container(container)
                             .instance(object)
                             .build();

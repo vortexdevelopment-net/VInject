@@ -97,14 +97,12 @@ public class VInjectApplication {
         if (dbHost != null && dbType != null) {
             database = new Database(dbHost, dbPort, dbName, dbType, dbUsername, dbPassword, maxPoolSize, 
                     h2File != null ? h2File : new File("./" + rootClass.getName()));
-            database.init();
-            repositoryContainer = new RepositoryContainer(database);
+            database.connect();
         } else {
             // Create a minimal database instance for compatibility
-            // This may not work for all cases, but allows apps without database
-            database = null;
-            repositoryContainer = null;
+            database = new Database();
         }
+        repositoryContainer = new RepositoryContainer(database);
 
         // Initialize dependency container
         Object rootInstance = null;
@@ -173,7 +171,7 @@ public class VInjectApplication {
             }
 
             if (database != null) {
-                database.init();
+                database.connect();
             }
 
             // Validate: If entities exist, Database must be configured BEFORE container creation
@@ -188,12 +186,8 @@ public class VInjectApplication {
             }
 
             // Use provided database or create repository container
-            VInjectApplication.database = database;
-            if (database != null) {
-                repositoryContainer = new RepositoryContainer(database);
-            } else {
-                repositoryContainer = null;
-            }
+            VInjectApplication.database = database != null ? database : new Database();
+            repositoryContainer = new RepositoryContainer(VInjectApplication.database);
 
             // Initialize dependency container
             Object rootInstance = null;
@@ -293,7 +287,7 @@ public class VInjectApplication {
 
             File h2File = new File(h2FilePath);
             Database database = new Database(dbHost, dbPort, dbName, dbType, dbUsername, dbPassword, maxPoolSize, h2File);
-            database.init();
+            database.connect();
             return database;
         } catch (Exception e) {
             throw new RuntimeException("Failed to load database configuration from application.properties", e);

@@ -1,5 +1,6 @@
 package net.vortexdevelopment.vinject.database.repository;
 
+import net.vortexdevelopment.vinject.annotation.util.Injectable;
 import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
 
@@ -11,6 +12,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * Container for managing repository proxies.
  */
+@Injectable
 public class RepositoryContainer {
 
     private final Map<Class<?>, RepositoryInvocationHandler<?, ?>> repositoryProxies;

@@ -72,7 +72,11 @@ public class CustomQueryMethodHandler extends BaseMethodHandler {
         long start = System.nanoTime();
         Object result = context.getDatabase().connect(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
-                RepositoryUtils.setStatementParameters(statement, Arrays.asList(params));
+                List<Object> unwrappedParams = new ArrayList<>();
+                for (Object p : params) {
+                    unwrappedParams.add(RepositoryUtils.unwrapEntityId(p, context));
+                }
+                RepositoryUtils.setStatementParameters(statement, unwrappedParams);
 
                 boolean isSelect = sql.trim().toLowerCase().startsWith("select");
 

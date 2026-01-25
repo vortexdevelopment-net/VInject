@@ -2,6 +2,7 @@ package net.vortexdevelopment.vinject.database.cache;
 
 import net.vortexdevelopment.vinject.annotation.Inject;
 import net.vortexdevelopment.vinject.annotation.component.Service;
+import net.vortexdevelopment.vinject.annotation.util.Injectable;
 import net.vortexdevelopment.vinject.database.repository.RepositoryContainer;
 import net.vortexdevelopment.vinject.debug.DebugLogger;
 
@@ -14,14 +15,16 @@ import java.util.Map;
  * Central coordinator for proactive cache management.
  * Manages cache contributors and triggers data loading/unloading.
  */
-@Service
+@Injectable
 public class CacheCoordinator {
 
-    @Inject
-    private RepositoryContainer repositoryContainer;
+    private final RepositoryContainer repositoryContainer;
 
     private final Map<String, List<CacheContributor<?>>> contributors = new HashMap<>();
 
+    public CacheCoordinator(RepositoryContainer repositoryContainer) {
+        this.repositoryContainer = repositoryContainer;
+    }
     /**
      * Register a contributor for a specific namespace.
      * @param contributor the contributor to register
@@ -39,6 +42,9 @@ public class CacheCoordinator {
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
     public void load(String namespace, Object value) {
+        if (repositoryContainer == null) {
+            return;
+        }
         DebugLogger.log("Triggering cache loading for %s = %s", namespace, value);
         
         // 1. Automatic loading via @AutoLoad in repositories
@@ -64,6 +70,9 @@ public class CacheCoordinator {
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
     public void unload(String namespace, Object value) {
+        if (repositoryContainer == null) {
+            return;
+        }
         DebugLogger.log("Triggering cache unloading for %s = %s", namespace, value);
 
         // 1. Automatic invalidation in repositories

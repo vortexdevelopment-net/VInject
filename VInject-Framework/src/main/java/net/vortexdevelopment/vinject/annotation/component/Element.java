@@ -12,4 +12,14 @@ import java.lang.annotation.Target;
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Element {
+    
+    /**
+     * Priority for ordering elements during collection.
+     * Lower values are processed first.
+     * Range: Integer.MIN_VALUE to Integer.MAX_VALUE
+     * Default: 0
+     * 
+     * @return the priority value
+     */
+    int priority() default 0;
 }
