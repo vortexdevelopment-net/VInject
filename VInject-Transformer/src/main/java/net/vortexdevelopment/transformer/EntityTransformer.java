@@ -478,6 +478,7 @@ public class EntityTransformer extends AbstractMojo {
         AnnotationEntry[] annotations = method.getAnnotationEntries();
         for (AnnotationEntry annotation : annotations) {
             String annotationType = annotation.getAnnotationType();
+            if (annotationType.equals("Lnet/vortexdevelopment/vinject/annotation/database/CachedField;")) {
                 ElementValuePair[] pairs = annotation.getElementValuePairs();
                 for (ElementValuePair pair : pairs) {
                     if (pair.getNameString().equals("value")) {
