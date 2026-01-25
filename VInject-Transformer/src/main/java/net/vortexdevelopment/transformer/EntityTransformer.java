@@ -154,7 +154,7 @@ public class EntityTransformer extends AbstractMojo {
 
             // Check for @Registry annotation
             for (AnnotationEntry annotation : javaClass.getAnnotationEntries()) {
-                if (annotation.getAnnotationType().equals("Lnet/vortexdevelopment/vinject/annotation/Registry;")) {
+                if (annotation.getAnnotationType().equals("Lnet/vortexdevelopment/vinject/annotation/component/Registry;")) {
                     for (ElementValuePair pair : annotation.getElementValuePairs()) {
                         if ("annotation".equals(pair.getNameString())) {
                             if (pair.getValue() instanceof ClassElementValue) {
@@ -377,7 +377,7 @@ public class EntityTransformer extends AbstractMojo {
             }
 
             // Skip methods with @PostConstruct
-            if (Arrays.stream(method.getAnnotationEntries()).anyMatch(a -> a.getAnnotationType().equals("Lnet/vortexdevelopment/vinject/annotation/PostConstruct;"))) {
+            if (Arrays.stream(method.getAnnotationEntries()).anyMatch(a -> a.getAnnotationType().equals("Lnet/vortexdevelopment/vinject/annotation/lifecycle/PostConstruct;"))) {
                 continue;
             }
 
@@ -478,7 +478,6 @@ public class EntityTransformer extends AbstractMojo {
         AnnotationEntry[] annotations = method.getAnnotationEntries();
         for (AnnotationEntry annotation : annotations) {
             String annotationType = annotation.getAnnotationType();
-            if (annotationType.equals("Lnet/vortexdevelopment/vinject/annotation/database/Cached;")) {
                 ElementValuePair[] pairs = annotation.getElementValuePairs();
                 for (ElementValuePair pair : pairs) {
                     if (pair.getNameString().equals("value")) {
