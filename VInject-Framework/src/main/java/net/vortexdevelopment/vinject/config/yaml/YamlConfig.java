@@ -354,29 +354,36 @@ public class YamlConfig implements ConfigurationSection {
         KeyedNode node = pathIndex.get(path);
         if (node == null) return null; // Handle null case explicitly
 
-        switch (node) {
-            case KeyValueNode kv -> {
-                return (T) kv.getValue();
-            }
-            case ListNode ln -> {
-                return (T) listToObjects(ln);
-            }
-            case SectionNode sectionNode -> {
-                return (T) nodeToMap(sectionNode);
-            }
-            case null, default -> { 
-                return null;
-            }
+        if (node instanceof KeyValueNode kv) {
+            return (T) kv.getValue();
         }
+
+        if (node instanceof ListNode ln) {
+            return (T) listToObjects(ln);
+        }
+
+        if (node instanceof SectionNode sectionNode) {
+            return (T) nodeToMap(sectionNode);
+        }
+
+        return null;
+
     }
 
     private Object getFromNode(YamlNode node) {
-        return switch (node) {
-            case KeyValueNode kv -> kv.getValue();
-            case ListNode ln -> listToObjects(ln);
-            case SectionNode sn -> nodeToMap(sn);
-            default -> null;
-        };
+        if (node instanceof KeyValueNode kv) {
+            return kv.getValue();
+        }
+
+        if (node instanceof ListNode ln) {
+            return listToObjects(ln);
+        }
+
+        if (node instanceof SectionNode sn) {
+            return nodeToMap(sn);
+        }
+
+        return null;
     }
 
     private List<Object> listToObjects(ListNode ln) {

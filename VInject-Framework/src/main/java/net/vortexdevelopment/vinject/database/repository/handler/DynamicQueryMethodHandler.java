@@ -36,12 +36,17 @@ public class DynamicQueryMethodHandler extends BaseMethodHandler {
         QueryInfo info = queryCache.computeIfAbsent(method, m -> buildQueryInfo(context, m));
 
         long[] internalTimings = new long[2]; // [0] = connTime, [1] = execTime
-        
-        Object result = switch (methodName) {
-            case String n when n.startsWith("findBy") || n.startsWith("findAllBy") -> handleFind(context, method, args, info, internalTimings);
-            case String n when n.startsWith("deleteBy") || n.startsWith("deleteAllBy") -> handleDelete(context, method, args, info, internalTimings);
-            default -> null;
-        };
+
+        Object result;
+
+        if (methodName.startsWith("findBy") || methodName.startsWith("findAllBy")) {
+            result = handleFind(context, method, args, info, internalTimings);
+        } else if (methodName.startsWith("deleteBy") || methodName.startsWith("deleteAllBy")) {
+            result = handleDelete(context, method, args, info, internalTimings);
+        } else {
+            result = null;
+        }
+
         long end = System.nanoTime();
         long totalNano = end - start;
 
