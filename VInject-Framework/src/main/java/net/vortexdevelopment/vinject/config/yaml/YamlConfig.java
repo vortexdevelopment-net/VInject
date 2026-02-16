@@ -2,6 +2,8 @@ package net.vortexdevelopment.vinject.config.yaml;
 
 import net.vortexdevelopment.vinject.annotation.yaml.Comment;
 import net.vortexdevelopment.vinject.annotation.yaml.Key;
+import net.vortexdevelopment.vinject.annotation.yaml.NewLineAfter;
+import net.vortexdevelopment.vinject.annotation.yaml.NewLineBefore;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlId;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlItem;
@@ -115,7 +117,7 @@ public class YamlConfig implements ConfigurationSection {
 
     private void updateSectionFromMap(YamlNode parent, Map<String, Object> map) {
         for (Map.Entry<String, Object> entry : map.entrySet()) {
-            setRelative(parent, entry.getKey(), entry.getValue(), null);
+            setRelative(parent, entry.getKey(), entry.getValue(), null, false, false);
         }
     }
 
@@ -229,7 +231,7 @@ public class YamlConfig implements ConfigurationSection {
         return false;
     }
 
-    private void setRelative(YamlNode parent, String relativePath, Object value, String comment) {
+    private void setRelative(YamlNode parent, String relativePath, Object value, String comment, boolean newLineBefore, boolean newLineAfter) {
         String[] parts = relativePath.split("\\.");
         YamlNode current = parent;
 
@@ -249,6 +251,14 @@ public class YamlConfig implements ConfigurationSection {
                         current.addChild(new CommentNode(nextIndent, comment));
                     }
                     current.addChild(newNode);
+                    if (newNode instanceof KeyedNode kn) {
+                        if (newLineBefore) {
+                            ensureBlankLineBefore(kn);
+                        }
+                        if (newLineAfter) {
+                            ensureBlankLineAfter(kn);
+                        }
+                    }
                 } else { // Not last part, create a section node
                     if (isAbsent(value)) return;
                     SectionNode newNode = new SectionNode(nextIndent, part);
@@ -262,7 +272,15 @@ public class YamlConfig implements ConfigurationSection {
                         return;
                     }
                     if (child instanceof KeyedNode keyed) {
-                        updateExistingNodeQuiet(keyed, value, comment);
+                        YamlNode updated = updateExistingNodeQuiet(keyed, value, comment);
+                        if (updated instanceof KeyedNode kn) {
+                            if (newLineBefore) {
+                                ensureBlankLineBefore(kn);
+                            }
+                            if (newLineAfter) {
+                                ensureBlankLineAfter(kn);
+                            }
+                        }
                     }
                 } else { // Not last part, navigate to existing section
                     if (!(child instanceof SectionNode)) {
@@ -346,6 +364,56 @@ public class YamlConfig implements ConfigurationSection {
             parent.getChildren().add(idx, cn);
             cn.setParent(parent);
         }
+    }
+
+    private void ensureBlankLineBefore(KeyedNode node) {
+        YamlNode parent = node.getParent();
+        if (parent == null) return;
+        int idx = parent.getChildren().indexOf(node);
+
+        // Find the topmost comment or blank line above this node
+        int firstRelevantIdx = idx;
+        for (int i = idx - 1; i >= 0; i--) {
+            YamlNode sibling = parent.getChildren().get(i);
+            if (sibling instanceof BlankLineNode) {
+                return; // Already has a blank line
+            }
+            if (sibling instanceof CommentNode) {
+                firstRelevantIdx = i;
+            } else {
+                break;
+            }
+        }
+
+        if (firstRelevantIdx == 0) return;
+
+        // Check if there's already a blank line before the comments
+        if (firstRelevantIdx > 0) {
+            YamlNode beforeFirst = parent.getChildren().get(firstRelevantIdx - 1);
+            if (beforeFirst instanceof BlankLineNode) return;
+        }
+
+        // Add blank line at firstRelevantIdx
+        BlankLineNode bln = new BlankLineNode(node.getIndentation());
+        parent.getChildren().add(firstRelevantIdx, bln);
+        bln.setParent(parent);
+    }
+
+    private void ensureBlankLineAfter(KeyedNode node) {
+        YamlNode parent = node.getParent();
+        if (parent == null) return;
+        int idx = parent.getChildren().indexOf(node);
+
+        // Check if there's already a blank line after this node
+        if (idx < parent.getChildren().size() - 1) {
+            YamlNode after = parent.getChildren().get(idx + 1);
+            if (after instanceof BlankLineNode) return;
+        }
+
+        // Add blank line after the node
+        BlankLineNode bln = new BlankLineNode(node.getIndentation());
+        parent.getChildren().add(idx + 1, bln);
+        bln.setParent(parent);
     }
 
     @Override
@@ -480,12 +548,33 @@ public class YamlConfig implements ConfigurationSection {
     private void updateNodeFromObject(YamlNode parent, Object value) {
         if (value instanceof Map<?, ?> map) {
             for (Map.Entry<?, ?> entry : map.entrySet()) {
-                setRelative(parent, entry.getKey().toString(), entry.getValue(), null);
+                setRelative(parent, entry.getKey().toString(), entry.getValue(), null, false, false);
             }
             return;
         }
 
-        Class<?> currentClass = value.getClass();
+        Class<?> clazz = value.getClass();
+        if (parent instanceof DocumentNode) {
+            if (clazz.isAnnotationPresent(Comment.class)) {
+                String[] lines = clazz.getAnnotation(Comment.class).value();
+                String commentText = String.join("\n", lines);
+                
+                // Check if the banner is already there to avoid duplication if root wasn't cleared
+                boolean alreadyHasBanner = false;
+                if (!parent.getChildren().isEmpty() && parent.getChildren().get(0) instanceof CommentNode cn) {
+                    if (cn.render(RenderOptions.defaultOptions()).contains(lines[0])) {
+                        alreadyHasBanner = true;
+                    }
+                }
+                
+                if (!alreadyHasBanner) {
+                    parent.getChildren().add(0, new CommentNode(0, commentText));
+                    parent.getChildren().add(1, new BlankLineNode(0));
+                }
+            }
+        }
+
+        Class<?> currentClass = clazz;
         while (currentClass != null && currentClass != Object.class) {
             for (Field field : currentClass.getDeclaredFields()) {
                 if (Modifier.isStatic(field.getModifiers())) continue;
@@ -499,7 +588,9 @@ public class YamlConfig implements ConfigurationSection {
                         String[] lines = field.getAnnotation(Comment.class).value();
                         commentText = String.join("\n", lines);
                     }
-                    setRelative(parent, key, val, commentText);
+                    boolean newLineBefore = field.isAnnotationPresent(NewLineBefore.class);
+                    boolean newLineAfter = field.isAnnotationPresent(NewLineAfter.class);
+                    setRelative(parent, key, val, commentText, newLineBefore, newLineAfter);
                 } catch (Exception ignored) {
                 }
             }
