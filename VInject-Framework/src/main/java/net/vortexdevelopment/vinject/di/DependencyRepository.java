@@ -7,6 +7,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Collection;
+import java.util.function.Consumer;
 
 public interface DependencyRepository {
 
@@ -63,6 +64,16 @@ public interface DependencyRepository {
      * @param <T> The type of the elements
      */
     <T> Collection<T> collectElements(Class<T> superType, Object... extraArgs);
+
+    /**
+     * Collect all element annotated types.
+     * @param superType The super type of the elements to collect
+     * @param postConstruct A consumer to call after each element is constructed, with the constructed instance as the argument
+     * @param extraArgs Extra arguments to pass to the constructor of the elements
+     * @return A collection of instances of the collected elements
+     * @param <T> The type of the elements
+     */
+    <T> Collection<T> collectElements(Class<T> superType, Consumer<T> postConstruct, Object... extraArgs);
 
     static @NotNull DependencyRepository getInstance() {
         return DependencyContainer.getInstance();

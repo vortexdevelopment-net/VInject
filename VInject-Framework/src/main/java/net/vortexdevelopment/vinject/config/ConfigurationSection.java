@@ -1,5 +1,10 @@
 package net.vortexdevelopment.vinject.config;
 
+import net.vortexdevelopment.vinject.config.yaml.DocumentNode;
+import net.vortexdevelopment.vinject.config.yaml.YamlConfig;
+import net.vortexdevelopment.vinject.di.ConfigurationContainer;
+
+import java.lang.reflect.Method;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -10,27 +15,17 @@ import java.util.Set;
  */
 public interface ConfigurationSection {
 
-    /**
-     * Get the internal data-backed section. Default implementation returns this.
-     * For DI-managed beans, this uses reflection to find the section registered
-     * in the ConfigurationContainer.
-     */
     default ConfigurationSection getConfigurationSection() {
-        try {
-            // Bridge to ConfigurationContainer for DI-managed beans
-            Class<?> containerClass = Class.forName("net.vortexdevelopment.vinject.di.ConfigurationContainer");
-            java.lang.reflect.Method getInstanceMethod = containerClass.getMethod("getInstance");
-            Object container = getInstanceMethod.invoke(null);
-            if (container != null) {
-                java.lang.reflect.Method getSectionMethod = containerClass.getMethod("getSectionForInstance", Object.class);
-                Object section = getSectionMethod.invoke(container, this);
-                if (section instanceof ConfigurationSection) {
-                    return (ConfigurationSection) section;
-                }
-            }
-        } catch (Exception ignored) {
+        ConfigurationContainer configurationContainer = ConfigurationContainer.getInstance();
+        Object container = configurationContainer.getSectionForInstance(this);
+        if (container instanceof ConfigurationSection section) {
+            return section;
         }
         return this;
+    }
+
+    public static ConfigurationSection empty() {
+        return new YamlConfig(new DocumentNode());
     }
 
     default <T> T get(String path) {

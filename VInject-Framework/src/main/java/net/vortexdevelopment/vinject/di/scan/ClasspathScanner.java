@@ -97,6 +97,13 @@ public class ClasspathScanner {
     }
 
     /**
+     * Find all subtypes of a specific class or interface.
+     */
+    public <T> Set<Class<? extends T>> getSubTypesOf(Class<T> type) {
+        return reflections.getSubTypesOf(type);
+    }
+
+    /**
      * Scans for classes annotated with @Registry.
      */
     public Set<Class<?>> scanRegistryHandlers() {

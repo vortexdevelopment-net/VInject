@@ -42,6 +42,7 @@ public @interface DependsOn {
      * @return An array of fully qualified names of the dependency classes.
      */
     String[] classNames() default {};
+
     /**
      * Whether the dependency is soft. If true (default) missing dependencies will cause the annotated class to be skipped.
      * If false, missing dependencies will cause an immediate runtime error.

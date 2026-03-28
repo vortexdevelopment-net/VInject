@@ -5,10 +5,12 @@ import net.vortexdevelopment.vinject.annotation.component.Component;
 import net.vortexdevelopment.vinject.annotation.Inject;
 import net.vortexdevelopment.vinject.annotation.component.Repository;
 import net.vortexdevelopment.vinject.annotation.component.Service;
+import net.vortexdevelopment.vinject.annotation.lifecycle.PostConstruct;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
 import net.vortexdevelopment.vinject.di.utils.DependencyUtils;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -36,37 +38,21 @@ public class DependencyGraphResolver {
         for (Class<?> component : components) {
             Set<Class<?>> dependencies = new HashSet<>();
 
+            // Skip interfaces, enums, etc. that cannot be instantiated
+            if (component.isInterface() || component.isEnum() || component.isAnnotation()) {
+                dependencyGraph.put(component, Collections.emptySet());
+                continue;
+            }
+
             // Check constructor parameters
             if (!DependencyUtils.hasDefaultConstructor(component)) {
                 // Only one constructor is supported in this check (usually the first one)
-                Class<?>[] parameterTypes = component.getDeclaredConstructors()[0].getParameterTypes();
-                for (Class<?> parameter : parameterTypes) {
-                    
-                    // Skip if it is already in the container (e.g. pre-registered beans)
-                    if (container.getDependencies().containsKey(parameter)) {
-                        continue;
-                    }
-
-                    // Check if parameter is a component, service, or root class
-                    if (parameter.isAnnotationPresent(Component.class)
-                            || parameter.isAnnotationPresent(Service.class)
-                            || parameter.equals(container.getRootClass())
-                            || parameter.isAnnotationPresent(Repository.class)) {
-                        
-                        if (components.contains(parameter)) {
-                            dependencies.add(parameter);
-                        } else {
-                            Class<?> providingClass = getProvidingClass(components, parameter);
-                            if (providingClass != null) {
-                                dependencies.add(providingClass);
-                            }
-                        }
-                    } else {
-                        // If it doesn't have annotations, maybe something else provides it
-                        Class<?> providingClass = getProvidingClass(components, parameter);
-                        if (providingClass != null) {
-                            dependencies.add(providingClass);
-                        }
+                var constructors = component.getDeclaredConstructors();
+                if (constructors.length > 0) {
+                    Class<?>[] parameterTypes = constructors[0].getParameterTypes();
+                    for (Class<?> parameter : parameterTypes) {
+                        // Same dependency logic as constructor parameters
+                        resolveParameters(components, dependencies, parameter);
                     }
                 }
             }
@@ -106,33 +92,11 @@ public class DependencyGraphResolver {
             }
 
             // Check @PostConstruct annotated methods with parameters
-            for (java.lang.reflect.Method method : component.getDeclaredMethods()) {
-                if (method.isAnnotationPresent(net.vortexdevelopment.vinject.annotation.lifecycle.PostConstruct.class)) {
+            for (Method method : component.getDeclaredMethods()) {
+                if (method.isAnnotationPresent(PostConstruct.class)) {
                     for (Class<?> parameter : method.getParameterTypes()) {
                         // Same dependency logic as constructor parameters
-                        if (container.getDependencies().containsKey(parameter)) {
-                            continue;
-                        }
-
-                        if (parameter.isAnnotationPresent(Component.class)
-                                || parameter.isAnnotationPresent(Service.class)
-                                || parameter.equals(container.getRootClass())
-                                || parameter.isAnnotationPresent(Repository.class)) {
-                            
-                            if (components.contains(parameter)) {
-                                dependencies.add(parameter);
-                            } else {
-                                Class<?> providingClass = getProvidingClass(components, parameter);
-                                if (providingClass != null) {
-                                    dependencies.add(providingClass);
-                                }
-                            }
-                        } else {
-                             Class<?> providingClass = getProvidingClass(components, parameter);
-                             if (providingClass != null) {
-                                 dependencies.add(providingClass);
-                             }
-                        }
+                        resolveParameters(components, dependencies, parameter);
                     }
                 }
             }
@@ -142,6 +106,32 @@ public class DependencyGraphResolver {
 
         // Perform topological sort
         return performTopologicalSort(dependencyGraph);
+    }
+
+    private void resolveParameters(Set<Class<?>> components, Set<Class<?>> dependencies, Class<?> parameter) {
+        if (container.getDependencies().containsKey(parameter)) {
+            return;
+        }
+
+        if (parameter.isAnnotationPresent(Component.class)
+                || parameter.isAnnotationPresent(Service.class)
+                || parameter.equals(container.getRootClass())
+                || parameter.isAnnotationPresent(Repository.class)) {
+
+            if (components.contains(parameter)) {
+                dependencies.add(parameter);
+            } else {
+                Class<?> providingClass = getProvidingClass(components, parameter);
+                if (providingClass != null) {
+                    dependencies.add(providingClass);
+                }
+            }
+        } else {
+             Class<?> providingClass = getProvidingClass(components, parameter);
+             if (providingClass != null) {
+                 dependencies.add(providingClass);
+             }
+        }
     }
 
     private Class<?> getProvidingClass(Set<Class<?>> components, Class<?> searchedClass) {
@@ -154,6 +144,7 @@ public class DependencyGraphResolver {
                     }
                 }
             }
+
             Bean bean = clazz.getAnnotation(Bean.class);
             if (bean != null) {
                 for (Class<?> providingClass : bean.registerSubclasses()) {

@@ -5,9 +5,11 @@ import net.vortexdevelopment.vinject.annotation.yaml.Key;
 import net.vortexdevelopment.vinject.annotation.yaml.NewLineAfter;
 import net.vortexdevelopment.vinject.annotation.yaml.NewLineBefore;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
+import net.vortexdevelopment.vinject.annotation.yaml.ItemRoot;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlId;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlItem;
 import net.vortexdevelopment.vinject.config.ConfigurationSection;
+import net.vortexdevelopment.vinject.config.ConfigurationValueConverter;
 import net.vortexdevelopment.vinject.config.serializer.YamlSerializerBase;
 import net.vortexdevelopment.vinject.config.serializer.YamlSerializerRegistry;
 
@@ -26,6 +28,16 @@ import java.util.Map;
 import java.util.Set;
 
 public class YamlConfig implements ConfigurationSection {
+
+    /**
+     * Uses a no-arg constructor for nested types; constructor injection is only available via DI-backed {@link net.vortexdevelopment.vinject.di.config.ConfigurationMapper}.
+     */
+    private static final ConfigurationValueConverter TYPE_CONVERTER = new ConfigurationValueConverter(clazz -> {
+        var ctor = clazz.getDeclaredConstructor();
+        ctor.setAccessible(true);
+        return ctor.newInstance();
+    });
+
     private DocumentNode root;
     protected final Map<String, KeyedNode> pathIndex = new HashMap<>();
     private int indentStep = 2;
@@ -307,7 +319,7 @@ public class YamlConfig implements ConfigurationSection {
         YamlNode newNode = null;
         // If the new value is a complex type (Map, List, YamlItem annotated object),
         // or if the existing node is not a KeyValueNode, we need to replace the node.
-        if (value instanceof Map || value instanceof List || (value != null && (value.getClass().isAnnotationPresent(YamlItem.class) || value.getClass().isAnnotationPresent(YamlConfiguration.class))) || !(existing instanceof KeyValueNode)) {
+        if (value instanceof ConfigurationSection || value instanceof Map || value instanceof List || (value != null && (value.getClass().isAnnotationPresent(YamlItem.class) || value.getClass().isAnnotationPresent(YamlConfiguration.class))) || !(existing instanceof KeyValueNode)) {
             YamlNode parent = existing.getParent();
             if (parent != null) {
                 int idx = parent.getChildren().indexOf(existing);
@@ -438,7 +450,7 @@ public class YamlConfig implements ConfigurationSection {
 
     }
 
-    private Object getFromNode(YamlNode node) {
+    Object getFromNode(YamlNode node) {
         if (node instanceof KeyValueNode kv) {
             return kv.getValue();
         }
@@ -487,12 +499,30 @@ public class YamlConfig implements ConfigurationSection {
     }
 
     @Override
+    public Map<String, Object> getValues(boolean deep) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (deep) {
+            for (Map.Entry<String, KeyedNode> entry : pathIndex.entrySet()) {
+                result.put(entry.getKey(), getFromNode(entry.getValue()));
+            }
+        } else {
+            result.putAll(nodeToMap(root));
+        }
+        return result;
+    }
+
+    /**
+     * Coerces the value at {@code path} to {@code type} using the same rules as {@link net.vortexdevelopment.vinject.di.config.ConfigurationMapper}.
+     * Invalid or unsupported conversions return {@code null} (exceptions are not propagated).
+     * Nested objects are instantiated with a no-arg constructor only, not via the dependency container.
+     */
+    @Override
     @SuppressWarnings("unchecked")
     public <T> T get(String path, Class<T> type) {
         Object val = get(path);
         if (val == null) return null;
         try {
-            return (T) convertValue(val, type);
+            return (T) TYPE_CONVERTER.convertValue(val, type, null);
         } catch (Exception e) {
             return null;
         }
@@ -525,6 +555,10 @@ public class YamlConfig implements ConfigurationSection {
                 }
             }
             return ln;
+        } else if (value instanceof ConfigurationSection cs) {
+            SectionNode sn = new SectionNode(indent, key);
+            updateSectionFromMap(sn, cs.getValues(false));
+            return sn;
         } else if (value instanceof Map) {
             SectionNode sn = new SectionNode(indent, key);
             @SuppressWarnings("unchecked")
@@ -574,15 +608,21 @@ public class YamlConfig implements ConfigurationSection {
             }
         }
 
+        if (clazz.isAnnotationPresent(YamlItem.class)) {
+            mergeYamlItemKeysFromItemRoot(parent, value, clazz);
+        }
+
         Class<?> currentClass = clazz;
         while (currentClass != null && currentClass != Object.class) {
             for (Field field : currentClass.getDeclaredFields()) {
                 if (Modifier.isStatic(field.getModifiers())) continue;
-                if (field.isAnnotationPresent(YamlId.class) || field.getName().startsWith("__vinject_yaml")) continue;
+                if (field.isAnnotationPresent(YamlId.class)
+                        || field.isAnnotationPresent(ItemRoot.class)
+                        || field.getName().startsWith("__vinject_yaml")) continue;
                 field.setAccessible(true);
                 try {
                     Object val = field.get(value);
-                    String key = field.isAnnotationPresent(Key.class) ? field.getAnnotation(Key.class).value() : field.getName();
+                    String key = yamlKeyForField(field);
                     String commentText = null;
                     if (field.isAnnotationPresent(Comment.class)) {
                         String[] lines = field.getAnnotation(Comment.class).value();
@@ -598,7 +638,58 @@ public class YamlConfig implements ConfigurationSection {
         }
     }
 
+    private static String yamlKeyForField(Field field) {
+        return field.isAnnotationPresent(Key.class) ? field.getAnnotation(Key.class).value() : field.getName();
+    }
 
+    /**
+     * Writes keys present only on the live {@link ItemRoot} section (e.g. added via API) before field serialization,
+     * so they are not dropped when the item node is rebuilt. Declared field keys overwrite on conflict.
+     */
+    private void mergeYamlItemKeysFromItemRoot(YamlNode parent, Object value, Class<?> clazz) {
+        int itemRootCount = 0;
+        Field itemRootField = null;
+        for (Class<?> c = clazz; c != null && c != Object.class; c = c.getSuperclass()) {
+            for (Field f : c.getDeclaredFields()) {
+                if (Modifier.isStatic(f.getModifiers())) continue;
+                if (f.isAnnotationPresent(ItemRoot.class)) {
+                    itemRootCount++;
+                    itemRootField = f;
+                }
+            }
+        }
+        if (itemRootCount > 1) {
+            throw new IllegalArgumentException("At most one @ItemRoot field is allowed on " + clazz.getName());
+        }
+        Set<String> claimed = new LinkedHashSet<>();
+        for (Class<?> c = clazz; c != null && c != Object.class; c = c.getSuperclass()) {
+            for (Field f : c.getDeclaredFields()) {
+                if (Modifier.isStatic(f.getModifiers())) continue;
+                if (f.isAnnotationPresent(YamlId.class)
+                        || f.isAnnotationPresent(ItemRoot.class)
+                        || f.getName().startsWith("__vinject_yaml")) continue;
+                claimed.add(yamlKeyForField(f));
+            }
+        }
+        if (itemRootField == null) {
+            return;
+        }
+        itemRootField.setAccessible(true);
+        try {
+            Object sectionObj = itemRootField.get(value);
+            if (!(sectionObj instanceof ConfigurationSection section)) {
+                return;
+            }
+            Map<String, Object> snapshot = section.getValues(false);
+            for (Map.Entry<String, Object> e : snapshot.entrySet()) {
+                if (!claimed.contains(e.getKey())) {
+                    setRelative(parent, e.getKey(), e.getValue(), null, false, false);
+                }
+            }
+        } catch (IllegalAccessException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
     @Override
     public boolean contains(String path) {
@@ -691,24 +782,6 @@ public class YamlConfig implements ConfigurationSection {
             sb.append(parts[i]);
         }
         return sb.toString();
-    }
-
-    @SuppressWarnings("unchecked")
-    private Object convertValue(Object value, Class<?> type) {
-        if (value == null) return null;
-        
-        YamlSerializerBase<?> ser = YamlSerializerRegistry.getSerializer(type);
-        if (ser != null && value instanceof Map) {
-            return ser.deserialize((Map<String, Object>) value);
-        }
-        
-        String str = value.toString();
-        if (type == String.class) return str;
-        if (type == int.class || type == Integer.class) return Integer.parseInt(str);
-        if (type == long.class || type == Long.class) return Long.parseLong(str);
-        if (type == boolean.class || type == Boolean.class) return Boolean.parseBoolean(str);
-        if (type == double.class || type == Double.class) return Double.parseDouble(str);
-        return value;
     }
 
     private static class YamlConfigSubSection implements ConfigurationSection {
@@ -816,6 +889,23 @@ public class YamlConfig implements ConfigurationSection {
                 root.set(fPath, new java.util.HashMap<>());
             }
             return getSection(path);
+        }
+
+        @Override
+        public Map<String, Object> getValues(boolean deep) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            String prefix = basePath + ".";
+            for (Map.Entry<String, KeyedNode> entry : root.pathIndex.entrySet()) {
+                String path = entry.getKey();
+                if (path.startsWith(prefix)) {
+                    String rel = path.substring(prefix.length());
+                    if (!deep && rel.contains(".")) continue;
+                    if (!rel.isEmpty()) {
+                        result.put(rel, root.getFromNode(entry.getValue()));
+                    }
+                }
+            }
+            return result;
         }
 
         @Override

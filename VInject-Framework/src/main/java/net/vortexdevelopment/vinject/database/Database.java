@@ -136,6 +136,9 @@ public class Database implements DatabaseConnector {
     }
 
     public void initializeEntityMetadata(DependencyContainer dependencyContainer) {
+        if (!initialized) {
+            return;
+        }
         for (Class<?> clazz : dependencyContainer.getAllEntities()) {
             if (clazz.isAnnotationPresent(Entity.class)) {
                 Entity entity = clazz.getAnnotation(Entity.class);

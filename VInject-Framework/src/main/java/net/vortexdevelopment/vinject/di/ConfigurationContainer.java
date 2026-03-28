@@ -300,6 +300,29 @@ public class ConfigurationContainer {
         mapper.registerSerializer(serializer);
     }
 
+    /**
+     * Maps a {@link ConfigurationSection} to a new instance of the given class.
+     * The class fields are populated from the section data using the same
+     * mapping logic as {@code @YamlConfiguration} and {@code @YamlItem} classes.
+     *
+     * @param clazz   the class to instantiate and populate
+     * @param section the configuration section containing the data
+     * @param <T>     the type of the class
+     * @return a new instance of the class with fields populated from the section
+     */
+    public <T> T mapSection(Class<T> clazz, ConfigurationSection section) {
+        if (clazz == null || section == null) {
+            return null;
+        }
+        try {
+            T instance = container.newInstance(clazz, false);
+            mapper.mapToInstance(section, instance, clazz, "");
+            return instance;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to map section to class: " + clazz.getName(), e);
+        }
+    }
+
     public Object getConfigValue(Class<?> configClass, String path) {
         ConfigEntry entry = configs.get(configClass);
         if (entry != null) {
@@ -588,7 +611,8 @@ public class ConfigurationContainer {
             pathStream.filter(p -> Files.isRegularFile(p) && (p.toString().endsWith(".yml") || p.toString().endsWith(".yaml")))
                   .forEach(p -> {
                       try {
-                          YamlConfig config = YamlConfig.load(p.toFile());
+                          String absPath = p.toAbsolutePath().toString();
+                          YamlConfig config = fileDataMaps.computeIfAbsent(absPath, k -> YamlConfig.load(p.toFile()));
                           ConfigurationSection source = (ann.rootKey() == null || ann.rootKey().isEmpty()) 
                                   ? config : config.getConfigurationSection(ann.rootKey());
                           

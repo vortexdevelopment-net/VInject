@@ -123,6 +123,7 @@ Add the following to your `pom.xml`:
   - CRUD operations support
 
 - **Flexible Configuration**
+  - YAML-backed configuration with annotations (see [YAML configuration](#yaml-configuration))
   - Package scanning with inclusion/exclusion support
   - Custom annotation handlers
   - Dependency order management
@@ -248,6 +249,162 @@ Add the transformer plugin to your `pom.xml`:
 - **For YAML configuration classes**: Adds synthetic fields (`__vinject_yaml_batch_id` and `__vinject_yaml_file`) required for batch loading and saving
 
 **Note**: Classes used in YAML batch loading (classes with fields annotated with `@YamlId`) must be processed by the transformer. Without it, YAML configuration features will not work correctly.
+
+## YAML configuration
+
+VInject maps YAML files into Java objects. Paths in `@YamlConfiguration.file` and `@YamlDirectory.dir` are resolved relative to the JVM working directory unless you call `ConfigurationContainer.setRootDirectory(Path)` or `setRootDirectory(String)` before building the `DependencyContainer`.
+
+For batch item types that use `@YamlId`, keep the VInject-Transformer enabled as described in [Maven Transformer Plugin (Required)](#maven-transformer-plugin-required).
+
+### Single-file configuration (`@YamlConfiguration`)
+
+Annotate one class with `@YamlConfiguration` to bind a single YAML file. Values are written into **fields** directly (setters are not required for loading).
+
+- **`file`**: path to the `.yml` file (relative to the configuration root unless absolute).
+- **`path`**: optional base prefix for every field on this class. Each field maps to `path` + `.` + key.
+- **`@Key("segment")`**: overrides the key segment for that field. When `path` is set, `@Key` is appended under that base (for example `path = "app"` and `@Key("display-name")` → `app.display-name`).
+
+```java
+import net.vortexdevelopment.vinject.annotation.yaml.Key;
+import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
+
+@YamlConfiguration(file = "config.yml", path = "app")
+public class AppConfig {
+    
+    @Key("port")
+    private int port;
+    
+    @Key("display-name")
+    private String name;
+}
+```
+
+```yaml
+app:
+  port: 8080
+  display-name: "My App"
+```
+
+Optional attributes: `autoSave`, `asyncSave`, and `encoding` (default UTF-8).
+
+### Nested sections, maps, and lists
+
+Nested POJO fields and parameterized `Map` / `List` types are filled from nested YAML. Use `ConfigurationSection` as a field type when you want the raw subsection.
+
+To map any `ConfigurationSection` to a new instance outside `@YamlConfiguration`, use `ConfigurationContainer.mapSection(Class<T>, ConfigurationSection)`.
+
+### Layout and comments (`@YamlItem`, `@Comment`, newlines)
+
+- **`@YamlItem`** on a class marks a compact YAML object (a single subtree when saving, with tighter field layout).
+- **`@Comment`** on a type or field adds comment lines above that entry when saving.
+- **`@NewLineBefore`** and **`@NewLineAfter`** on fields control blank lines when YAML is rendered.
+
+### Directory batch loading (`@YamlDirectory`, `@YamlId`, `@YamlCollection`)
+
+A **holder** class loads many YAML files from one directory into typed items.
+
+```java
+import net.vortexdevelopment.vinject.annotation.component.Component;
+import net.vortexdevelopment.vinject.annotation.yaml.Key;
+import net.vortexdevelopment.vinject.annotation.yaml.YamlCollection;
+import net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory;
+import net.vortexdevelopment.vinject.annotation.yaml.YamlId;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Component
+@YamlDirectory(dir = "rewards", target = Reward.class)
+public class RewardDirectory {
+    
+    @YamlCollection
+    private Map<String, Reward> rewards = new HashMap<>();
+
+    public Map<String, Reward> getRewards() {
+        return rewards;
+    }
+}
+
+@YamlItem
+public class Reward {
+    
+    @YamlId
+    private String id;
+    
+    @Key("amount")
+    private int amount;
+}
+```
+
+**On disk:** under `rewards/`, every `.yml` / `.yaml` file is read. **`recursive`** (default `true`) controls subfolders; **`copyDefaults`** copies matching resources from the JAR when the folder is missing or empty.
+
+**YAML shape when `rootKey` is empty (default):** top-level keys are **item IDs**; each key’s value is a section mapped onto `target`.
+
+```yaml
+gold:
+  amount: 100
+diamond:
+  amount: 5
+```
+
+When **`rootKey`** is set (for example `rootKey = "items"`), that section is taken first and each key *under* it is an item ID.
+
+**`@YamlId`:** the item’s map key is stored in the annotated `String` field. This is what enables batch save and file tracking together with the transformer.
+
+**Holder collections:** after load, every `Map` or `Collection` field on the holder is filled with the loaded items. **`@YamlCollection`** marks the batch field explicitly. The batch id is `holderClass.getName() + "::" + dir`.
+
+**Mapping:** each `target` class is filled from YAML by field mapping, like `@YamlConfiguration`. Register a **`YamlSerializerBase`** when the type cannot be represented as a simple set of fields (see below).
+
+### Custom serializers (`YamlSerializerBase`, `@YamlSerializer`)
+
+Implement `YamlSerializerBase<T>` with `getTargetType()`, `serialize(T)`, and `deserialize(Map<String, Object>)` to control how a type is read and written.
+
+- **Discovery:** classes annotated with `@YamlSerializer` under your `@Root` scan package are instantiated and registered when `ConfigurationContainer` starts (no-arg or injectable constructor).
+- **Manual:** `ConfigurationContainer.registerSerializer(...)` or `YamlSerializerRegistry.registerSerializer(...)`.
+
+```java
+import net.vortexdevelopment.vinject.annotation.yaml.YamlSerializer;
+import net.vortexdevelopment.vinject.config.serializer.YamlSerializerBase;
+
+import java.util.HashMap;
+import java.util.Map;
+
+public class Coords {
+    private final int x, y;
+    public Coords(int x, int y) { this.x = x; this.y = y; }
+    public int getX() { return x; }
+    public int getY() { return y; }
+}
+
+@YamlSerializer
+public class CoordsSerializer implements YamlSerializerBase<Coords> {
+    @Override
+    public Class<Coords> getTargetType() {
+        return Coords.class;
+    }
+
+    @Override
+    public Map<String, Object> serialize(Coords c) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("cx", c.getX());
+        m.put("cy", c.getY());
+        return m;
+    }
+
+    @Override
+    public Coords deserialize(Map<String, Object> map) {
+        int x = ((Number) map.get("cx")).intValue();
+        int y = ((Number) map.get("cy")).intValue();
+        return new Coords(x, y);
+    }
+}
+```
+
+Fields of type `Coords` in YAML configs then round-trip through this serializer on load and save.
+
+### Conditional components (`@YamlConditional`)
+
+`@YamlConditional` on a class skips registering that component unless a value in a `@YamlConfiguration` class matches. Example: `configuration = MyConfig.class`, `path = "features.vouchers"`, `value = "true"`. Use **`operator`** when you need a comparison other than equality.
 
 ## Performance Optimization
 

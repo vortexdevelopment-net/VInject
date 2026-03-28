@@ -25,6 +25,7 @@ import net.vortexdevelopment.vinject.database.repository.CrudRepository;
 import net.vortexdevelopment.vinject.database.repository.RepositoryContainer;
 import net.vortexdevelopment.vinject.database.repository.RepositoryInvocationHandler;
 import net.vortexdevelopment.vinject.database.serializer.DatabaseSerializer;
+import net.vortexdevelopment.vinject.di.context.InjectionContext;
 import net.vortexdevelopment.vinject.di.engine.ConditionEvaluator;
 import net.vortexdevelopment.vinject.di.engine.DependencyGraphResolver;
 import net.vortexdevelopment.vinject.di.engine.InjectionEngine;
@@ -47,6 +48,7 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -71,6 +73,7 @@ public class DependencyContainer implements DependencyRepository {
     private final Map<Class<?>, List<String>> missingDependenciesByClass;
     private AnnotationHandlerRegistry annotationHandlerRegistry;
     private final ArgumentResolverRegistry argumentResolverRegistry;
+    private final java.util.List<ComponentInterceptor> componentInterceptors;
     @Getter private final EventManager eventManager;
     @Getter private final LifecycleManager lifecycleManager;
     @Getter private final InjectionEngine injectionEngine;
@@ -99,11 +102,12 @@ public class DependencyContainer implements DependencyRepository {
         missingDependenciesByClass = new ConcurrentHashMap<>();
         annotationHandlerRegistry = new AnnotationHandlerRegistry();
         argumentResolverRegistry = new ArgumentResolverRegistry();
+        componentInterceptors = new java.util.concurrent.CopyOnWriteArrayList<>();
         cacheCoordinator = new CacheCoordinator(repositoryContainer);
         cacheManager = new CacheManagerImpl();
 
         if (rootInstance == null) {
-            //Create the root instance if it is null
+            // Create the root instance if it is null
             try {
                 Constructor<?> constructor = rootClass.getDeclaredConstructor();
                 constructor.setAccessible(true);
@@ -113,7 +117,7 @@ public class DependencyContainer implements DependencyRepository {
             }
         }
 
-        //Add plugin as bean so components can inject it
+        // Add root as a bean so components can inject it
         dependencies.put(rootClass, rootInstance);
         this.rootClass = rootClass;
 
@@ -140,7 +144,7 @@ public class DependencyContainer implements DependencyRepository {
         Reflections reflections = scanner.getReflections();
 
         // Get all entities first so we can initialize the database before components
-        if (database != null) {
+        if (database != null && database.isInitialized()) {
             entities.addAll(scanner.getTypesAnnotatedWith(Entity.class));
         }
 
@@ -169,7 +173,7 @@ public class DependencyContainer implements DependencyRepository {
         // Auto-register RegisterDatabaseSerializer implementations FIRST
         // This must happen before repository registration because RepositoryInvocationHandler
         // creates EntityMetadata in its constructor, which needs serializers to be registered
-        if (database != null) {
+        if (database != null && database.isInitialized()) {
             scanner.scanAndFilter(RegisterDatabaseSerializer.class, this::canLoadClass).forEach(serializerClass -> {
                 try {
                     RegisterDatabaseSerializer annotation = serializerClass.getAnnotation(RegisterDatabaseSerializer.class);
@@ -188,7 +192,7 @@ public class DependencyContainer implements DependencyRepository {
         }
 
         // Register Repositories (after serializers are registered)
-        scanner.scanAndFilter(Repository.class, this::canLoadClass).forEach(repositoryClass -> {
+        scanner.getTypesAnnotatedWith(Repository.class).forEach(repositoryClass -> {
             // Check if the class implements CrudRepository
             if (!ReflectionUtils.getAllSuperTypes(repositoryClass).contains(CrudRepository.class)) {
                 throw new RuntimeException("Class: " + repositoryClass.getName()
@@ -205,7 +209,7 @@ public class DependencyContainer implements DependencyRepository {
 
             // Register the repository and its entity type
             RepositoryInvocationHandler<?, ?> proxy = repositoryContainer.registerRepository(repositoryClass, entityClass, this);
-            this.dependencies.put(repositoryClass, proxy.create());
+            addBean(repositoryClass, proxy.create());
 
             // Process debug and system property annotations for repositories
             lifecycleManager.processDebugAnnotations(repositoryClass);
@@ -213,10 +217,13 @@ public class DependencyContainer implements DependencyRepository {
         });
         
         //Run database initialization (Create, Update tables)
-        if (database != null) {
+        if (database != null && database.isInitialized()) {
             database.initializeEntityMetadata(this);
             database.verifyTables();
         }
+
+        //Collect all ComponentInterceptors
+        registerComponentInterceptors(scanner);
 
         //Collect all Registry annotations
         registerHandlers(scanner);
@@ -259,6 +266,15 @@ public class DependencyContainer implements DependencyRepository {
                 .filter(this::canLoadClass)
                 .forEach(loadableClasses::add);
 
+        // 2.5 Collect RestControllers via reflection (VInject-HTTP module support)
+        try {
+            Class<? extends Annotation> restControllerClass = (Class<? extends Annotation>) Class.forName("net.vortexdevelopment.vinject.http.annotation.RestController");
+            Set<Class<?>> restClasses = scanner.getTypesAnnotatedWith(restControllerClass);
+            restClasses.stream()
+                    .filter(this::canLoadClass)
+                    .forEach(loadableClasses::add);
+        } catch (ClassNotFoundException ignored) {}
+
         // 3. Resolve Graph and Sort
         dependencyGraphResolver.createLoadingOrder(loadableClasses).stream()
             .sorted(Comparator.comparingInt(value -> {
@@ -274,9 +290,15 @@ public class DependencyContainer implements DependencyRepository {
                 }
                 
                 // Process Component Registration
-                if (clazz.isAnnotationPresent(Component.class)) {
+                boolean isRestController = false;
+                try {
+                    Class<? extends Annotation> restAnn = (Class<? extends Annotation>) Class.forName("net.vortexdevelopment.vinject.http.annotation.RestController");
+                    isRestController = clazz.isAnnotationPresent(restAnn);
+                } catch (ClassNotFoundException ignored) {}
+
+                if (clazz.isAnnotationPresent(Component.class) || isRestController) {
                     eventManager.registerEventListeners(clazz);
-                    registerComponent(clazz);
+                    registerComponent(clazz, isRestController);
                 }
             });
 
@@ -287,6 +309,18 @@ public class DependencyContainer implements DependencyRepository {
 
         // Scan for @OnDestroy methods (including root instance)
         lifecycleManager.scanDestroyMethods();
+
+        // Auto-start VInject-HTTP if present on classpath
+        try {
+            Class<?> httpServerClass = Class.forName("net.vortexdevelopment.vinject.http.server.VInjectHttpServer");
+            java.lang.reflect.Method startMethod = httpServerClass.getMethod("start", DependencyContainer.class);
+            startMethod.invoke(null, this);
+        } catch (ClassNotFoundException e) {
+            // HTTP module not present, ignore
+        } catch (Throwable e) {
+            System.err.println("Failed to start VInject HTTP Server: " + e.getMessage());
+            e.printStackTrace();
+        }
 
         // Register Cache Contributors
         scanner.scanAndFilter(RegisterCacheContributor.class, this::canLoadClass).forEach(contributorClass -> {
@@ -313,6 +347,18 @@ public class DependencyContainer implements DependencyRepository {
     public void release() {
         // Call any OnDestroy methods before clearing
         lifecycleManager.invokeDestroyMethods();
+        
+        // Stop HTTP Server if present
+        try {
+            Class<?> httpServerClass = Class.forName("net.vortexdevelopment.vinject.http.server.VInjectHttpServer");
+            java.lang.reflect.Method stopMethod = httpServerClass.getMethod("stop");
+            stopMethod.invoke(null);
+        } catch (ClassNotFoundException e) {
+            // ignore
+        } catch (Exception e) {
+            System.err.println("Failed to stop VInject HTTP Server: " + e.getMessage());
+        }
+
         dependencies.clear();
         entities.clear();
         annotationHandlerRegistry = null;
@@ -411,6 +457,13 @@ public class DependencyContainer implements DependencyRepository {
         for (Class<?> subclass : subclasses) {
             dependencies.put(subclass, instance);
         }
+
+        // Notify interceptors
+        if (componentInterceptors != null) {
+            for (ComponentInterceptor interceptor : componentInterceptors) {
+                interceptor.onComponentRegistered(clazz, instance, this);
+            }
+        }
     }
 
     private Object[] resolveParameters(Class<?> declaringClass, Executable executable, @Nullable Object instance, Object... extraArgs) {
@@ -484,6 +537,13 @@ public class DependencyContainer implements DependencyRepository {
 
     @Override
     public <T> @Nullable T getDependencyOrNull(Class<T> dependency) {
+        // 1. Check thread-local ScopedValue context first
+        T contextBean = InjectionContext.get(dependency);
+        if (contextBean != null) {
+            return contextBean;
+        }
+
+        // 2. Check main singleton cache
         Object result = dependencies.get(dependency);
         return result != null ? dependency.cast(result) : null;
     }
@@ -513,14 +573,25 @@ public class DependencyContainer implements DependencyRepository {
     @Override
     public void addBean(@NotNull Class<?> dependency, @NotNull Object instance) {
         dependencies.put(dependency, instance);
+
+        // Notify interceptors for manually added beans
+        if (componentInterceptors != null) {
+            for (ComponentInterceptor interceptor : componentInterceptors) {
+                interceptor.onComponentRegistered(dependency, instance, this);
+            }
+        }
     }
 
-    public void registerComponent(Class<?> clazz) {
-        if (!clazz.isAnnotationPresent(Component.class)) {
+    public void registerComponent(Class<?> clazz, boolean bypassComponentCheck) {
+        if (!bypassComponentCheck && !clazz.isAnnotationPresent(Component.class)) {
             //Do not register non component classes
             return;
         }
         newInstance(clazz); //This will auto register the component and subclasses if needed
+    }
+
+    public void registerComponent(Class<?> clazz) {
+        registerComponent(clazz, false);
     }
 
     /**
@@ -564,6 +635,9 @@ public class DependencyContainer implements DependencyRepository {
     }
 
     boolean canLoadClass(Class<?> clazz) {
+        if (clazz.isInterface() || clazz.isEnum() || clazz.isAnnotation()) {
+            return false;
+        }
         if (!checkDependsOnAnnotation(clazz)) {
             return false;
         }
@@ -621,6 +695,20 @@ public class DependencyContainer implements DependencyRepository {
             return false;
         }
         return true;
+    }
+
+    /**
+     * Resolves arguments for arbitrary methods using VInject's dependency injection engine.
+     * This allows dynamically resolving context-scoped beans and component singletons
+     * for methods like HTTP route handlers.
+     * 
+     * @param declaringClass The class declaring the method
+     * @param method The method to resolve parameters for
+     * @param instance The instance the method belongs to
+     * @return Array of resolved arguments
+     */
+    public Object[] resolveMethodArgumentValues(Class<?> declaringClass, Method method, Object instance) {
+        return resolveParameters(declaringClass, method, instance, (Object[]) null);
     }
 
     private Object resolveParameter(Class<?> declaringClass, Executable executable, int index, @Nullable Object instance) {
@@ -710,35 +798,58 @@ public class DependencyContainer implements DependencyRepository {
             }
         });
     }
+
+    private void registerComponentInterceptors(ClasspathScanner scanner) {
+        scanner.getSubTypesOf(ComponentInterceptor.class).forEach(clazz -> {
+            if (clazz.isInterface() || Modifier.isAbstract(clazz.getModifiers())) {
+                return;
+            }
+            try {
+                // If the class is also a Component, it will be automatically handled during regular component loading,
+                // but we need it early for intercepting other components.
+                ComponentInterceptor instance = (ComponentInterceptor) newInstance(clazz);
+                componentInterceptors.add(instance);
+            } catch (Exception e) {
+                throw new RuntimeException("Unable to register ComponentInterceptor: " + clazz.getName(), e);
+            }
+        });
+    }
+
     @Override
     public <T> Collection<T> collectElements(Class<T> superType, Object... extraArgs) {
+        return collectElements(superType, null, extraArgs);
+    }
+
+    @Override
+    public <T> Collection<T> collectElements(Class<T> superType, Consumer<T> postConstruct, Object... extraArgs) {
         List<T> results = new ArrayList<>();
         for (Class<?> clazz : elementClasses) {
             if (superType.isAssignableFrom(clazz)) {
-                // If it's already a managed dependency, use that
+                T instance;
                 if (dependencies.containsKey(clazz)) {
-                    results.add(superType.cast(dependencies.get(clazz)));
+                    instance = superType.cast(dependencies.get(clazz));
                 } else {
-                    // Otherwise create a new instance, but DON'T cache it in the main dependencies map
-                    // Elements that are not components are created fresh for each collection request
-                    results.add(superType.cast(newInstance(clazz, false, extraArgs)));
+                    instance = superType.cast(newInstance(clazz, false, extraArgs));
+                }
+                results.add(instance);
+                if (postConstruct != null) {
+                    postConstruct.accept(instance);
                 }
             }
         }
-        
+
         // Sort by @Element priority (lower values first)
         results.sort((a, b) -> {
             int priorityA = getPriority(a.getClass());
             int priorityB = getPriority(b.getClass());
             return Integer.compare(priorityA, priorityB);
         });
-        
+
         return results;
     }
-    
+
     private int getPriority(Class<?> clazz) {
-        net.vortexdevelopment.vinject.annotation.component.Element element = 
-            clazz.getAnnotation(net.vortexdevelopment.vinject.annotation.component.Element.class);
+        Element element = clazz.getAnnotation(Element.class);
         return element != null ? element.priority() : 0;
     }
 }
