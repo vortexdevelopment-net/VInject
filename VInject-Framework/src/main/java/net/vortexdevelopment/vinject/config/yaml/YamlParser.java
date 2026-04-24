@@ -74,7 +74,7 @@ public class YamlParser {
 
             Matcher kvMatcher = KEY_VALUE_PATTERN.matcher(line);
             if (kvMatcher.find()) {
-                String key = kvMatcher.group(1).trim();
+                String key = normalizeMappingKey(kvMatcher.group(1).trim());
                 String fullValue = kvMatcher.group(2);
                 Object value = parseValue(fullValue);
 
@@ -93,6 +93,50 @@ public class YamlParser {
         }
 
         return root;
+    }
+
+    /**
+     * Strip YAML single-/double-quoted mapping keys so {@code 'false':} yields {@code false}, not {@code 'false'}.
+     * Vinject's line-based parser captures quotes literally; real YAML treats them as syntax only.
+     */
+    static String normalizeMappingKey(String key) {
+        if (key == null || key.length() < 2) {
+            return key;
+        }
+        char first = key.charAt(0);
+        char last = key.charAt(key.length() - 1);
+        if (first == '\'' && last == '\'') {
+            return key.substring(1, key.length() - 1).replace("''", "'");
+        }
+        if (first == '"' && last == '"') {
+            return unescapeDoubleQuotedKeyInner(key.substring(1, key.length() - 1));
+        }
+        return key;
+    }
+
+    private static String unescapeDoubleQuotedKeyInner(String inner) {
+        StringBuilder sb = new StringBuilder();
+        boolean escaped = false;
+        for (int i = 0; i < inner.length(); i++) {
+            char c = inner.charAt(i);
+            if (escaped) {
+                if (c == 'n') {
+                    sb.append('\n');
+                } else if (c == 'r') {
+                    sb.append('\r');
+                } else if (c == 't') {
+                    sb.append('\t');
+                } else {
+                    sb.append(c);
+                }
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     private Object parseValue(String fullValue) {
