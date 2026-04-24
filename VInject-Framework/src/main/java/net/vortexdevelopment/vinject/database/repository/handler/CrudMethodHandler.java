@@ -65,16 +65,15 @@ public class CrudMethodHandler extends BaseMethodHandler {
                 yield delete(context, args[0]);
             }
             case "deleteAllById" -> {
-                deleteAllById(context, (Iterable<?>) args[0]);
-                yield null;
+                yield deleteAllById(context, (Iterable<?>) args[0]);
             }
             case "deleteAll" -> {
                 if (args == null || args.length == 0) {
-                    deleteAll(context);
+                    yield deleteAll(context);
                 } else if (args.length == 1 && args[0] instanceof Iterable) {
                     yield deleteAll(context, (Iterable<?>) args[0]);
                 }
-                yield null;
+                throw new IllegalArgumentException("Invalid arguments for deleteAll");
             }
             default -> null;
         };
@@ -637,7 +636,7 @@ public class CrudMethodHandler extends BaseMethodHandler {
         return deleteAllById(context, ids);
     }
 
-    private void deleteAll(RepositoryInvocationContext<?, ?> context) throws Exception {
+    private int deleteAll(RepositoryInvocationContext<?, ?> context) throws Exception {
         EntityMetadata metadata = context.getEntityMetadata();
         
         // Invalidate entire cache
@@ -647,9 +646,9 @@ public class CrudMethodHandler extends BaseMethodHandler {
         }
         
         String sql = "DELETE FROM " + context.getSchemaFormatter().formatTableName(metadata.getTableName());
-        context.getDatabase().connect(connection -> {
+        return context.getDatabase().connect(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
-                statement.executeUpdate();
+                return statement.executeUpdate();
             }
         });
     }
