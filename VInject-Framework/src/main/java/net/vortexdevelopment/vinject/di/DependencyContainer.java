@@ -145,7 +145,7 @@ public class DependencyContainer implements DependencyRepository {
 
         // Get all entities first so we can initialize the database before components
         if (database != null && database.isInitialized()) {
-            entities.addAll(scanner.getTypesAnnotatedWith(Entity.class));
+            entities.addAll(scanner.scanAndFilter(Entity.class, this::canLoadClass));
         }
 
         // Load YAML configuration classes so components/services can depend on them
@@ -192,7 +192,7 @@ public class DependencyContainer implements DependencyRepository {
         }
 
         // Register Repositories (after serializers are registered)
-        scanner.getTypesAnnotatedWith(Repository.class).forEach(repositoryClass -> {
+        scanner.scanAndFilter(Repository.class, this::canLoadRepositoryClass).forEach(repositoryClass -> {
             // Check if the class implements CrudRepository
             if (!ReflectionUtils.getAllSuperTypes(repositoryClass).contains(CrudRepository.class)) {
                 throw new RuntimeException("Class: " + repositoryClass.getName()
@@ -262,17 +262,12 @@ public class DependencyContainer implements DependencyRepository {
         });
 
         // 2. Collect Components
-        scanner.getTypesAnnotatedWith(Component.class).stream()
-                .filter(this::canLoadClass)
-                .forEach(loadableClasses::add);
+        loadableClasses.addAll(scanner.scanAndFilter(Component.class, this::canLoadClass));
 
         // 2.5 Collect RestControllers via reflection (VInject-HTTP module support)
         try {
             Class<? extends Annotation> restControllerClass = (Class<? extends Annotation>) Class.forName("net.vortexdevelopment.vinject.http.annotation.RestController");
-            Set<Class<?>> restClasses = scanner.getTypesAnnotatedWith(restControllerClass);
-            restClasses.stream()
-                    .filter(this::canLoadClass)
-                    .forEach(loadableClasses::add);
+            loadableClasses.addAll(scanner.scanAndFilter(restControllerClass, this::canLoadClass));
         } catch (ClassNotFoundException ignored) {}
 
         // 3. Resolve Graph and Sort
@@ -634,10 +629,22 @@ public class DependencyContainer implements DependencyRepository {
         }
     }
 
-    boolean canLoadClass(Class<?> clazz) {
+    public boolean canLoadClass(Class<?> clazz) {
         if (clazz.isInterface() || clazz.isEnum() || clazz.isAnnotation()) {
             return false;
         }
+        return meetsLoadConditions(clazz);
+    }
+
+    private boolean canLoadRepositoryClass(Class<?> clazz) {
+        if (clazz.isEnum() || clazz.isAnnotation()) {
+            return false;
+        }
+        // Repositories are interfaces by design, so do not reject them for being interfaces.
+        return meetsLoadConditions(clazz);
+    }
+
+    private boolean meetsLoadConditions(Class<?> clazz) {
         if (!checkDependsOnAnnotation(clazz)) {
             return false;
         }
@@ -747,16 +754,14 @@ public class DependencyContainer implements DependencyRepository {
         annotationHandlerRegistry.getHandlers(order).forEach(handler -> {
             Class<? extends Annotation> annotation = DependencyUtils.getAnnotationFromHandler(handler);
             if (annotation == null) return;
-            scanner.getTypesAnnotatedWith(annotation).forEach(clazz -> {
-                if (canLoadClass(clazz)) {
-                    handler.handle(clazz, dependencies.get(clazz), this);
-                }
+            scanner.scanAndFilter(annotation, this::canLoadClass).forEach(clazz -> {
+                handler.handle(clazz, dependencies.get(clazz), this);
             });
         });
     }
 
     private void registerHandlers(ClasspathScanner scanner) {
-        scanner.scanRegistryHandlers().forEach(clazz -> {
+        scanner.scanRegistryHandlers(this::canLoadClass).forEach(clazz -> {
             if (AnnotationHandler.class.isAssignableFrom(clazz)) {
                 AnnotationHandler instance = (AnnotationHandler) newInstance(clazz);
                 Class<? extends Annotation> annotation = DependencyUtils.getAnnotationFromHandler(instance);
@@ -772,7 +777,7 @@ public class DependencyContainer implements DependencyRepository {
     }
 
     private void registerArgumentResolvers(ClasspathScanner scanner) {
-        scanner.scanArgumentResolvers().forEach(clazz -> {
+        scanner.scanArgumentResolvers(this::canLoadClass).forEach(clazz -> {
             if (ArgumentResolverProcessor.class.isAssignableFrom(clazz)) {
                 try {
                     ArgumentResolverProcessor instance = (ArgumentResolverProcessor) newInstance(clazz);
@@ -804,6 +809,11 @@ public class DependencyContainer implements DependencyRepository {
             if (clazz.isInterface() || Modifier.isAbstract(clazz.getModifiers())) {
                 return;
             }
+
+            if (!canLoadClass(clazz)) {
+                return;
+            }
+
             try {
                 // If the class is also a Component, it will be automatically handled during regular component loading,
                 // but we need it early for intercepting other components.

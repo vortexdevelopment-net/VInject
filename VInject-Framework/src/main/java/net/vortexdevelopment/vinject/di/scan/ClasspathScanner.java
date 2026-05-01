@@ -11,6 +11,7 @@ import org.reflections.util.ConfigurationBuilder;
 import java.lang.annotation.Annotation;
 import java.util.Set;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -106,15 +107,15 @@ public class ClasspathScanner {
     /**
      * Scans for classes annotated with @Registry.
      */
-    public Set<Class<?>> scanRegistryHandlers() {
-        return getTypesAnnotatedWith(Registry.class);
+    public Set<Class<?>> scanRegistryHandlers(Predicate<Class<?>> filter) {
+        return scanAndFilter(Registry.class, filter);
     }
 
     /**
      * Scans for classes annotated with @ArgumentResolver.
      */
-    public Set<Class<?>> scanArgumentResolvers() {
-        return getTypesAnnotatedWith(ArgumentResolver.class);
+    public Set<Class<?>> scanArgumentResolvers(Predicate<Class<?>> filter) {
+        return scanAndFilter(ArgumentResolver.class, filter);
     }
 
     /**
@@ -125,10 +126,8 @@ public class ClasspathScanner {
      * @return Filtered set of classes
      */
     public Set<Class<?>> scanAndFilter(Class<? extends Annotation> annotation, Predicate<Class<?>> filter) {
-        Set<Class<?>> types = getTypesAnnotatedWith(annotation);
-        if (filter != null) {
-            return types.stream().filter(filter).collect(Collectors.toSet());
-        }
-        return types;
+        return reflections.getTypesAnnotatedWith(annotation).stream()
+                .filter(filter)
+                .collect(Collectors.toSet());
     }
 }
