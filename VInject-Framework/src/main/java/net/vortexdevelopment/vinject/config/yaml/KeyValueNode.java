@@ -18,6 +18,7 @@ public class KeyValueNode extends KeyedNode {
 
     @Override
     public String render(RenderOptions options) {
-        return " ".repeat(getIndentation()) + getKey() + ": " + YamlValueFormatter.serialize(value);
+        String path = getFullDotPath();
+        return " ".repeat(getIndentation()) + getKey() + ": " + YamlValueFormatter.serialize(value, path);
     }
 }

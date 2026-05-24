@@ -34,13 +34,16 @@ public @interface YamlDirectory {
     boolean recursive() default true;
 
     /**
-     * Whether to copy matching directory from jar resources if the disk directory is empty or doesn't exist.
+     * Whether to copy matching directory from jar resources if the disk directory doesn't exist.
+     * By default, if the directory already exists, no copying will occur unless {@link #alwaysCopy()} is true.
      */
     boolean copyDefaults() default true;
 
     /**
-     * Note: batch id is now generated automatically as <holder-class-fqcn>::<dir>
+     * If true, individual missing files will be copied from resources even if the directory already exists.
+     * If false, defaults are only copied if the entire directory is missing.
      */
+    boolean alwaysCopy() default false;
 }
 
 

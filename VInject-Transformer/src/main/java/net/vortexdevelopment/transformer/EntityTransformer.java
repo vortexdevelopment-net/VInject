@@ -33,8 +33,8 @@ import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
-import org.eclipse.sisu.space.asm.ClassReader;
-import org.eclipse.sisu.space.asm.ClassWriter;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassWriter;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;

@@ -6,6 +6,7 @@ import net.vortexdevelopment.vinject.annotation.yaml.YamlId;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlItem;
 import net.vortexdevelopment.vinject.config.ConfigurationSection;
 import net.vortexdevelopment.vinject.config.ConfigurationValueConverter;
+import net.vortexdevelopment.vinject.config.YamlReflectiveMapping;
 import net.vortexdevelopment.vinject.config.serializer.YamlSerializerBase;
 import net.vortexdevelopment.vinject.config.serializer.YamlSerializerRegistry;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
@@ -35,7 +36,8 @@ public class ConfigurationMapper {
 
     public void applyToConfig(ConfigurationSection root, Object instance, Class<?> clazz, String basePath) throws Exception {
         if (clazz.isAnnotationPresent(YamlItem.class)
-                || YamlSerializerRegistry.hasSerializer(clazz)) {
+                || YamlSerializerRegistry.hasSerializer(clazz)
+                || YamlReflectiveMapping.supportsFieldReflection(clazz)) {
             root.set(basePath, instance);
         } else {
             for (Field field : clazz.getDeclaredFields()) {

@@ -24,8 +24,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 public class Database implements DatabaseConnector {
+    private static final Pattern UNIQUE_TOKEN_PATTERN = Pattern.compile("\\s+UNIQUE\\b", Pattern.CASE_INSENSITIVE);
 
     HikariConfig hikariConfig;
     private HikariDataSource hikariDataSource;
@@ -243,6 +245,7 @@ public class Database implements DatabaseConnector {
     }
 
     private void synchronizeTable(Connection connection, EntityMetadata metadata) throws Exception {
+        boolean h2 = isH2();
         Map<String, String> existingColumns = DBUtils.getExistingColumns(connection, metadata.getTableName());
         Map<String, String> entityColumnTypes = new HashMap<>();
         Map<String, FieldMetadata> fieldMetadataMap = new HashMap<>();
@@ -263,8 +266,9 @@ public class Database implements DatabaseConnector {
             if (!existingColumns.containsKey(col)) {
                 addColumns.add(schemaFormatter.formatColumnDefinition(col, desired));
             } else {
-                String actual = existingColumns.get(col).toUpperCase(Locale.ENGLISH);
-                if (!actual.equals(desired.toUpperCase(Locale.ENGLISH))) {
+                String actual = normalizeColumnDefinitionForComparison(existingColumns.get(col), h2);
+                String normalizedDesired = normalizeColumnDefinitionForComparison(desired, h2);
+                if (!actual.equals(normalizedDesired)) {
                     modifyColumns.add(schemaFormatter.formatColumnDefinition(col, desired));
                     DebugLogger.log(Database.class, "Type mismatch for column: " + col + " Expected: " + desired + " Actual: " + actual);
                 }
@@ -303,7 +307,7 @@ public class Database implements DatabaseConnector {
                     stmt.executeUpdate(sql);
                 }
                 for (String clause : modifyColumns) {
-                    String sql = alterTablePrefix + " ALTER COLUMN " + clause;
+                    String sql = alterTablePrefix + " ALTER COLUMN " + normalizeColumnDefinitionForAlter(clause, h2);
                     sql = schemaFormatter.convertSqlSyntax(sql);
                     stmt.executeUpdate(sql);
                 }
@@ -313,6 +317,27 @@ public class Database implements DatabaseConnector {
                 }
             }
         }
+    }
+
+    private static String normalizeColumnDefinitionForComparison(String definition, boolean h2) {
+        if (definition == null) {
+            return "";
+        }
+        String normalized = definition.trim().replaceAll("\\s+", " ").toUpperCase(Locale.ENGLISH);
+        if (h2) {
+            normalized = UNIQUE_TOKEN_PATTERN.matcher(normalized).replaceAll("");
+        }
+        return normalized.trim();
+    }
+
+    private static String normalizeColumnDefinitionForAlter(String definition, boolean h2) {
+        if (definition == null) {
+            return "";
+        }
+        if (!h2) {
+            return definition;
+        }
+        return UNIQUE_TOKEN_PATTERN.matcher(definition).replaceAll("").trim();
     }
 
     public boolean isConnected() {

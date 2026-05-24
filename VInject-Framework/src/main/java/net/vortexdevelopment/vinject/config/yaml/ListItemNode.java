@@ -20,7 +20,7 @@ public class ListItemNode extends YamlNode {
     public String render(RenderOptions options) {
         StringBuilder sb = new StringBuilder();
         sb.append(" ".repeat(getIndentation())).append("-");
-        String serialized = YamlValueFormatter.serialize(value);
+        String serialized = YamlValueFormatter.serialize(value, "(list item)");
         if (!serialized.equals("~")) {
             sb.append(" ").append(serialized);
         }

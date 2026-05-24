@@ -154,9 +154,22 @@ public class DBUtils {
      * @throws Exception If a database access error occurs.
      */
     public static boolean tableExists(Connection connection, String tableName) throws Exception {
-        String sql = "SELECT COUNT(*) FROM information_schema.tables WHERE UPPER(table_name) = ?";
+        DatabaseMetaData metaData = connection.getMetaData();
+        String databaseProductName = metaData.getDatabaseProductName().toLowerCase(Locale.ENGLISH);
+        boolean isH2 = databaseProductName.contains("h2");
+
+        // Must scope to the current schema/database (same as getExistingColumns) so a table
+        // with the same name in another database on the host is not treated as present.
+        String sql;
+        if (isH2) {
+            sql = "SELECT COUNT(*) FROM information_schema.tables WHERE UPPER(table_name) = ?";
+        } else {
+            sql = "SELECT COUNT(*) FROM information_schema.tables "
+                    + "WHERE UPPER(table_name) = ? AND TABLE_SCHEMA = DATABASE()";
+        }
+
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
-            ps.setString(1, tableName.toUpperCase());
+            ps.setString(1, tableName.toUpperCase(Locale.ENGLISH));
             try (ResultSet rs = ps.executeQuery()) {
                 rs.next();
                 return rs.getInt(1) > 0;

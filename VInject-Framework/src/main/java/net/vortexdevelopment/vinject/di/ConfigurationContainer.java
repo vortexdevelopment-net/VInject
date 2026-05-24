@@ -599,7 +599,9 @@ public class ConfigurationContainer {
         
         Path start = resolvePath(dir);
         if (ann.copyDefaults()) {
-            copyResourceDirectory(holderClass, dir, start);
+            if (ann.alwaysCopy() || !Files.exists(start)) {
+                copyResourceDirectory(holderClass, dir, start);
+            }
         }
 
         if (!Files.exists(start)) {

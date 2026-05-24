@@ -10,6 +10,7 @@ import net.vortexdevelopment.vinject.annotation.yaml.YamlId;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlItem;
 import net.vortexdevelopment.vinject.config.ConfigurationSection;
 import net.vortexdevelopment.vinject.config.ConfigurationValueConverter;
+import net.vortexdevelopment.vinject.config.YamlReflectiveMapping;
 import net.vortexdevelopment.vinject.config.serializer.YamlSerializerBase;
 import net.vortexdevelopment.vinject.config.serializer.YamlSerializerRegistry;
 
@@ -159,7 +160,7 @@ public class YamlConfig implements ConfigurationSection {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> map = (Map<String, Object>) value;
                 updateSectionFromMap(root, map);
-            } else if (value != null && (value.getClass().isAnnotationPresent(YamlItem.class) || value.getClass().isAnnotationPresent(YamlConfiguration.class))) {
+            } else if (value != null && isFieldMappedObject(value.getClass())) {
                 root.getChildren().clear();
                 updateNodeFromObject(root, value);
             }
@@ -319,7 +320,7 @@ public class YamlConfig implements ConfigurationSection {
         YamlNode newNode = null;
         // If the new value is a complex type (Map, List, YamlItem annotated object),
         // or if the existing node is not a KeyValueNode, we need to replace the node.
-        if (value instanceof ConfigurationSection || value instanceof Map || value instanceof List || (value != null && (value.getClass().isAnnotationPresent(YamlItem.class) || value.getClass().isAnnotationPresent(YamlConfiguration.class))) || !(existing instanceof KeyValueNode)) {
+        if (value instanceof ConfigurationSection || value instanceof Map || value instanceof List || (value != null && isFieldMappedObject(value.getClass())) || !(existing instanceof KeyValueNode)) {
             YamlNode parent = existing.getParent();
             if (parent != null) {
                 int idx = parent.getChildren().indexOf(existing);
@@ -528,6 +529,25 @@ public class YamlConfig implements ConfigurationSection {
         }
     }
 
+    /**
+     * Gets a map of values at the specified path, coercing each value to the specified type. Non-convertible entries are skipped.
+     */
+    @Override
+    public <T> Map<String, T> getMapped(String path, Class<T> valueType) {
+        Map<String, Object> rawMap = get(path, Map.class);
+        if (rawMap == null) return null;
+        Map<String, T> result = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : rawMap.entrySet()) {
+            try {
+                T convertedValue = (T) TYPE_CONVERTER.convertValue(entry.getValue(), valueType, null);
+                result.put(entry.getKey(), convertedValue);
+            } catch (Exception e) {
+                // Skip entries that fail to convert
+            }
+        }
+        return result;
+    }
+
     @Override
     @SuppressWarnings("unchecked")
     public <T> T get(String path, T defaultValue) {
@@ -539,7 +559,7 @@ public class YamlConfig implements ConfigurationSection {
         if (value instanceof List<?> list) {
             ListNode ln = new ListNode(indent, key);
             for (Object item : list) {
-                if (item instanceof Map || (item != null && (item.getClass().isAnnotationPresent(YamlItem.class) || item.getClass().isAnnotationPresent(YamlConfiguration.class)))) {
+                if (item instanceof Map || (item != null && isFieldMappedObject(item.getClass()))) {
                     ListItemNode li = new ListItemNode(indent + indentStep, null);
                     updateNodeFromObject(li, item);
                     ln.addChild(li);
@@ -565,7 +585,7 @@ public class YamlConfig implements ConfigurationSection {
             Map<String, Object> stringMap = (Map<String, Object>) value;
             updateSectionFromMap(sn, stringMap);
             return sn;
-        } else if (value != null && (value.getClass().isAnnotationPresent(YamlItem.class) || value.getClass().isAnnotationPresent(YamlConfiguration.class))) {
+        } else if (value != null && isFieldMappedObject(value.getClass())) {
             SectionNode sn = new SectionNode(indent, key);
             updateNodeFromObject(sn, value);
             return sn;
@@ -575,6 +595,9 @@ public class YamlConfig implements ConfigurationSection {
             Map<String, Object> serialized = ser.serialize(value);
             return createNode(indent, key, serialized);
         } else {
+            if (value != null) {
+                net.vortexdevelopment.vinject.config.YamlSerializationWarnings.warnIfToStringScalar(value, key);
+            }
             return new KeyValueNode(indent, key, value);
         }
     }
@@ -615,7 +638,7 @@ public class YamlConfig implements ConfigurationSection {
         Class<?> currentClass = clazz;
         while (currentClass != null && currentClass != Object.class) {
             for (Field field : currentClass.getDeclaredFields()) {
-                if (Modifier.isStatic(field.getModifiers())) continue;
+                if (Modifier.isStatic(field.getModifiers()) || field.isSynthetic()) continue;
                 if (field.isAnnotationPresent(YamlId.class)
                         || field.isAnnotationPresent(ItemRoot.class)
                         || field.getName().startsWith("__vinject_yaml")) continue;
@@ -640,6 +663,12 @@ public class YamlConfig implements ConfigurationSection {
 
     private static String yamlKeyForField(Field field) {
         return field.isAnnotationPresent(Key.class) ? field.getAnnotation(Key.class).value() : field.getName();
+    }
+
+    private static boolean isFieldMappedObject(Class<?> clazz) {
+        return clazz.isAnnotationPresent(YamlItem.class)
+                || clazz.isAnnotationPresent(YamlConfiguration.class)
+                || YamlReflectiveMapping.supportsFieldReflection(clazz);
     }
 
     /**
