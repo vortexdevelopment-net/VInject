@@ -223,7 +223,7 @@ Add the transformer plugin to your `pom.xml`:
 <plugin>
     <groupId>net.vortexdevelopment</groupId>
     <artifactId>VInject-Transformer</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <version>1.0.2</version>
     <executions>
         <execution>
             <id>process-classes</id>
