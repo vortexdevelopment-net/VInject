@@ -6,7 +6,7 @@
     <parent>
         <groupId>net.vortexdevelopment</groupId>
         <artifactId>VInject-Parent</artifactId>
-        <version>1.0.0-SNAPSHOT</version>
+        <version>1.0.0</version>
     </parent>
 
     <artifactId>VInject</artifactId>
@@ -193,6 +193,7 @@
             <groupId>com.zaxxer</groupId>
             <artifactId>HikariCP</artifactId>
             <version>5.1.0</version>
+            <scope>provided</scope>
         </dependency>
 
         <dependency>
@@ -205,6 +206,7 @@
             <groupId>mysql</groupId>
             <artifactId>mysql-connector-java</artifactId>
             <version>8.0.33</version>
+            <scope>provided</scope>
         </dependency>
 
         <dependency>
@@ -218,6 +220,7 @@
             <groupId>org.mariadb.jdbc</groupId>
             <artifactId>mariadb-java-client</artifactId>
             <version>3.3.2</version>
+            <scope>provided</scope>
             <exclusions>
                 <exclusion>
                     <groupId>com.github.waffle</groupId>

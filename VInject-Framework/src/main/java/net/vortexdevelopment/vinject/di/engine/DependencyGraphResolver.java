@@ -127,10 +127,15 @@ public class DependencyGraphResolver {
                 }
             }
         } else {
-             Class<?> providingClass = getProvidingClass(components, parameter);
-             if (providingClass != null) {
-                 dependencies.add(providingClass);
-             }
+            if (components.contains(parameter)) {
+                dependencies.add(parameter);
+                return;
+            }
+
+            Class<?> providingClass = getProvidingClass(components, parameter);
+            if (providingClass != null) {
+                dependencies.add(providingClass);
+            }
         }
     }
 

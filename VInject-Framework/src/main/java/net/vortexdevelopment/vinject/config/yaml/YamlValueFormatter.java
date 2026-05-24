@@ -1,14 +1,21 @@
 package net.vortexdevelopment.vinject.config.yaml;
 
+import net.vortexdevelopment.vinject.config.YamlSerializationWarnings;
+
 public class YamlValueFormatter {
 
     public static String serialize(Object val) {
+        return serialize(val, null);
+    }
+
+    public static String serialize(Object val, String contextPath) {
         if (val == null) {
             return "~";
         }
         if (val instanceof String s) {
             return "\"" + s.replace("\"", "\\\"") + "\"";
         }
+        YamlSerializationWarnings.warnIfToStringScalar(val, contextPath);
         return val.toString();
     }
 

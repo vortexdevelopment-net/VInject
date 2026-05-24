@@ -43,6 +43,11 @@ public interface ConfigurationSection {
         return getConfigurationSection().get(path, defaultValue);
     }
 
+    default <T> Map<String, T> getMapped(String path, Class<T> valueType) {
+        if (getConfigurationSection() == this) return Collections.emptyMap();
+        return getConfigurationSection().getMapped(path, valueType);
+    }
+
     default void set(String path, Object value) {
         set(path, value, null);
     }

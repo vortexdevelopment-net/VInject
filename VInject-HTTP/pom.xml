@@ -6,11 +6,11 @@
     <parent>
         <groupId>net.vortexdevelopment</groupId>
         <artifactId>VInject-Parent</artifactId>
-        <version>1.0.0-SNAPSHOT</version>
+        <version>1.0.0</version>
     </parent>
 
     <artifactId>VInject-HTTP</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>1.0.0</version>
 
     <properties>
         <maven.compiler.source>21</maven.compiler.source>
@@ -43,7 +43,7 @@
         <dependency>
             <groupId>net.vortexdevelopment</groupId>
             <artifactId>VInject</artifactId>
-            <version>1.0.0-SNAPSHOT</version>
+            <version>1.0.0</version>
         </dependency>
 
         <!-- Jakarta Servlet API -->
