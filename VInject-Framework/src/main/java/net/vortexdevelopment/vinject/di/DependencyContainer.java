@@ -124,6 +124,12 @@ public class DependencyContainer implements DependencyRepository {
         if (repositoryContainer != null) {
             dependencies.put(RepositoryContainer.class, repositoryContainer);
         }
+
+        if (database != null) {
+            dependencies.put(Database.class, database);
+        }
+
+        dependencies.put(DependencyContainer.class, this);
         
         // Add core services as beans
         dependencies.put(CacheCoordinator.class, cacheCoordinator);

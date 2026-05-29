@@ -107,7 +107,11 @@ public final class ConfigurationValueConverter {
             try {
                 return Enum.valueOf(targetClass.asSubclass(Enum.class), enumName);
             } catch (IllegalArgumentException e) {
-                throw new RuntimeException("Invalid enum value '" + enumName + "' for enum type " + targetClass.getName() + (field != null ? " (field: " + field.getName() + ")" : ""), e);
+                try {
+                    return Enum.valueOf(targetClass.asSubclass(Enum.class), enumName.toUpperCase());
+                } catch (IllegalArgumentException ex) {
+                    throw new RuntimeException("Invalid enum value '" + enumName + "' for enum type " + targetClass.getName() + (field != null ? " (field: " + field.getName() + ")" : ""), e);
+                }
             }
         }
 
@@ -136,6 +140,8 @@ public final class ConfigurationValueConverter {
                 for (Object item : list) {
                     resultList.add(convertValue(item, elementType, null));
                 }
+            } else if (value instanceof String s && ("[]".equals(s.trim()) || s.trim().isEmpty())) {
+                // Return empty list
             } else {
                 resultList.add(convertValue(value, elementType, null));
             }

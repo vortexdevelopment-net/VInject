@@ -13,7 +13,10 @@ public class YamlValueFormatter {
             return "~";
         }
         if (val instanceof String s) {
-            return "\"" + s.replace("\"", "\\\"") + "\"";
+            return "\"" + s.replace("\"", "\\\"")
+                    .replace("\n", "\\n")
+                    .replace("\r", "\\r")
+                    .replace("\t", "\\t") + "\"";
         }
         YamlSerializationWarnings.warnIfToStringScalar(val, contextPath);
         return val.toString();
