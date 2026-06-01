@@ -112,3 +112,7 @@ buildNumber.properties
 
 # Common working directory
 run/
+
+# Testing files
+VInject-Framework/test-config.yml
+VInject-Framework/test.yml

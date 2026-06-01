@@ -2,17 +2,40 @@ package net.vortexdevelopment.vinject.config.yaml;
 
 import net.vortexdevelopment.vinject.config.YamlSerializationWarnings;
 
+import java.util.ArrayList;
+
 public class YamlValueFormatter {
+
+    /**
+     * Detects the mistaken quoted-string form {@code "[]"} (not a valid YAML list).
+     */
+    public static boolean isQuotedEmptyListString(Object value) {
+        return value instanceof String string && isEmptyListLiteral(string);
+    }
+
+    /**
+     * Unquoted {@code []} inline scalar (valid empty YAML list syntax).
+     */
+    public static boolean isEmptyListLiteral(String value) {
+        return value != null && "[]".equals(value.trim());
+    }
 
     public static String serialize(Object val) {
         return serialize(val, null);
     }
 
     public static String serialize(Object val, String contextPath) {
+        return serialize(val, contextPath, -1, 2);
+    }
+
+    public static String serialize(Object val, String contextPath, int keyIndent, int indentStep) {
         if (val == null) {
             return "~";
         }
         if (val instanceof String s) {
+            if (s.contains("\n") && keyIndent >= 0) {
+                return serializeLiteralBlock(s, keyIndent, indentStep);
+            }
             return "\"" + s.replace("\"", "\\\"") + "\"";
         }
         YamlSerializationWarnings.warnIfToStringScalar(val, contextPath);
@@ -70,6 +93,10 @@ public class YamlValueFormatter {
         if (trimmed.equalsIgnoreCase("true")) return true;
         if (trimmed.equalsIgnoreCase("false")) return false;
 
+        if (isEmptyListLiteral(trimmed)) {
+            return new ArrayList<>();
+        }
+
         // Try numbers
         try {
             if (trimmed.contains(".")) {
@@ -85,5 +112,27 @@ public class YamlValueFormatter {
         }
 
         return trimmed;
+    }
+
+    /**
+     * Renders a multiline string as a YAML literal block ({@code |}) with content indented by {@code indentStep}
+     * relative to the key line.
+     */
+    public static String serializeLiteralBlock(String value, int keyIndent, int indentStep) {
+        int step = indentStep > 0 ? indentStep : 2;
+        int contentIndent = keyIndent + step;
+        String contentPrefix = " ".repeat(contentIndent);
+        StringBuilder out = new StringBuilder("|\n");
+        if (value.isEmpty()) {
+            return "|";
+        }
+        String[] lines = value.split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            out.append(contentPrefix).append(lines[i]);
+            if (i < lines.length - 1) {
+                out.append('\n');
+            }
+        }
+        return out.toString();
     }
 }

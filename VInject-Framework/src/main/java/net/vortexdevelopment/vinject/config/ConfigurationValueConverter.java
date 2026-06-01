@@ -7,6 +7,7 @@ import net.vortexdevelopment.vinject.annotation.yaml.YamlItem;
 import net.vortexdevelopment.vinject.config.serializer.YamlSerializerBase;
 import net.vortexdevelopment.vinject.config.serializer.YamlSerializerRegistry;
 import net.vortexdevelopment.vinject.config.yaml.YamlConfig;
+import net.vortexdevelopment.vinject.config.yaml.YamlValueFormatter;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
@@ -103,12 +104,7 @@ public final class ConfigurationValueConverter {
 
         if (targetClass.isEnum()) {
             if (targetClass.isAssignableFrom(value.getClass())) return value;
-            String enumName = value.toString();
-            try {
-                return Enum.valueOf(targetClass.asSubclass(Enum.class), enumName);
-            } catch (IllegalArgumentException e) {
-                throw new RuntimeException("Invalid enum value '" + enumName + "' for enum type " + targetClass.getName() + (field != null ? " (field: " + field.getName() + ")" : ""), e);
-            }
+            return parseEnumValue(targetClass, value.toString().trim(), field);
         }
 
         if (targetClass == String.class) return value.toString();
@@ -122,6 +118,16 @@ public final class ConfigurationValueConverter {
         }
 
         if (List.class.isAssignableFrom(targetClass)) {
+            if (YamlValueFormatter.isQuotedEmptyListString(value)) {
+                String fieldName = field != null ? field.getName() : targetClass.getSimpleName();
+                throw new IllegalArgumentException(
+                        "Invalid value for list field '" + fieldName
+                                + "': \"[]\" is a quoted string, not a YAML list. Use an empty list: []");
+            }
+            if (value instanceof java.util.Collection<?> collection && collection.isEmpty()) {
+                return new ArrayList<>();
+            }
+
             List<Object> resultList = new ArrayList<>();
             Type elementType = Object.class;
 
@@ -229,6 +235,29 @@ public final class ConfigurationValueConverter {
             }
         }
         return null;
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private Object parseEnumValue(Class<?> enumClass, String raw, Field field) {
+        try {
+            return Enum.valueOf(enumClass.asSubclass(Enum.class), raw);
+        } catch (IllegalArgumentException ignored) {
+            // fall through to case-insensitive match (e.g. "ttl" -> TTL)
+        }
+
+        String normalized = raw.replace('-', '_').replace(' ', '_');
+        for (Object constant : enumClass.getEnumConstants()) {
+            Enum<?> candidate = (Enum<?>) constant;
+            if (candidate.name().equalsIgnoreCase(raw)
+                    || candidate.name().equalsIgnoreCase(normalized)) {
+                return candidate;
+            }
+        }
+
+        String fieldSuffix = field != null ? " (field: " + field.getName() + ")" : "";
+        throw new RuntimeException(
+                "Invalid enum value '" + raw + "' for enum type " + enumClass.getName() + fieldSuffix
+                        + ". Valid values: " + java.util.Arrays.toString(enumClass.getEnumConstants()));
     }
 
     private boolean isPrimitiveOrString(Class<?> clazz) {

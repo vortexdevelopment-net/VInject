@@ -24,6 +24,6 @@ public abstract class KeyedNode extends YamlNode {
             }
             current = current.getParent();
         }
-        return String.join(".", parts);
+        return YamlPaths.join(parts);
     }
 }

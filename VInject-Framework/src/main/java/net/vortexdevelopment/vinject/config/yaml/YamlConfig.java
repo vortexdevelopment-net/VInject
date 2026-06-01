@@ -130,7 +130,7 @@ public class YamlConfig implements ConfigurationSection {
 
     private void updateSectionFromMap(YamlNode parent, Map<String, Object> map) {
         for (Map.Entry<String, Object> entry : map.entrySet()) {
-            setRelative(parent, entry.getKey(), entry.getValue(), null, false, false);
+            setMapEntry(parent, entry.getKey(), entry.getValue(), null, false, false);
         }
     }
 
@@ -169,12 +169,12 @@ public class YamlConfig implements ConfigurationSection {
             return;
         }
 
-        String[] parts = path.split("\\.");
+        String[] parts = YamlPaths.splitToArray(path);
         YamlNode current = root;
 
         for (int i = 0; i < parts.length; i++) {
             String part = parts[i];
-            String currentPath = getPathPrefix(parts, i + 1);
+            String currentPath = YamlPaths.join(java.util.Arrays.asList(parts).subList(0, i + 1));
             KeyedNode existing = pathIndex.get(currentPath);
 
             if (existing == null) {
@@ -239,13 +239,25 @@ public class YamlConfig implements ConfigurationSection {
 
     private boolean isAbsent(Object value) {
         if (value == null) return true;
+        // Empty lists are written as "key: []", not omitted
+        if (value instanceof List) return false;
         if (value instanceof java.util.Collection && ((java.util.Collection<?>) value).isEmpty()) return true;
         if (value instanceof java.util.Map && ((java.util.Map<?, ?>) value).isEmpty()) return true;
         return false;
     }
 
+    /**
+     * Sets a single child key under {@code parent} without splitting on dots (for {@link Map} keys such as hostnames).
+     */
+    void setMapEntry(YamlNode parent, String key, Object value, String comment, boolean newLineBefore, boolean newLineAfter) {
+        setRelative(parent, new String[] { key }, value, comment, newLineBefore, newLineAfter);
+    }
+
     private void setRelative(YamlNode parent, String relativePath, Object value, String comment, boolean newLineBefore, boolean newLineAfter) {
-        String[] parts = relativePath.split("\\.");
+        setRelative(parent, YamlPaths.splitToArray(relativePath), value, comment, newLineBefore, newLineAfter);
+    }
+
+    private void setRelative(YamlNode parent, String[] parts, Object value, String comment, boolean newLineBefore, boolean newLineAfter) {
         YamlNode current = parent;
 
         for (int i = 0; i < parts.length; i++) {
@@ -432,7 +444,7 @@ public class YamlConfig implements ConfigurationSection {
     @Override
     @SuppressWarnings("unchecked")
     public <T> T get(String path) {
-        KeyedNode node = pathIndex.get(path);
+        KeyedNode node = resolveNode(path);
         if (node == null) return null; // Handle null case explicitly
 
         if (node instanceof KeyValueNode kv) {
@@ -605,7 +617,7 @@ public class YamlConfig implements ConfigurationSection {
     private void updateNodeFromObject(YamlNode parent, Object value) {
         if (value instanceof Map<?, ?> map) {
             for (Map.Entry<?, ?> entry : map.entrySet()) {
-                setRelative(parent, entry.getKey().toString(), entry.getValue(), null, false, false);
+                setMapEntry(parent, entry.getKey().toString(), entry.getValue(), null, false, false);
             }
             return;
         }
@@ -712,7 +724,7 @@ public class YamlConfig implements ConfigurationSection {
             Map<String, Object> snapshot = section.getValues(false);
             for (Map.Entry<String, Object> e : snapshot.entrySet()) {
                 if (!claimed.contains(e.getKey())) {
-                    setRelative(parent, e.getKey(), e.getValue(), null, false, false);
+                    setMapEntry(parent, e.getKey(), e.getValue(), null, false, false);
                 }
             }
         } catch (IllegalAccessException e) {
@@ -722,7 +734,42 @@ public class YamlConfig implements ConfigurationSection {
 
     @Override
     public boolean contains(String path) {
-        return pathIndex.containsKey(path);
+        return resolveNode(path) != null;
+    }
+
+    private KeyedNode resolveNode(String path) {
+        if (path == null || path.isEmpty()) {
+            return null;
+        }
+        KeyedNode indexed = pathIndex.get(path);
+        if (indexed != null) {
+            return indexed;
+        }
+        String escapedPath = YamlPaths.join(YamlPaths.split(path));
+        indexed = pathIndex.get(escapedPath);
+        if (indexed != null) {
+            return indexed;
+        }
+        return findNodeByPath(path);
+    }
+
+    private KeyedNode findNodeByPath(String path) {
+        List<String> parts = YamlPaths.split(path);
+        if (parts.isEmpty()) {
+            return null;
+        }
+        YamlNode current = root;
+        for (String part : parts) {
+            if (!(current instanceof SectionNode) && !(current instanceof DocumentNode) && !(current instanceof ListItemNode)) {
+                return null;
+            }
+            YamlNode child = findChildByKey(current, part);
+            if (child == null) {
+                return null;
+            }
+            current = child;
+        }
+        return current instanceof KeyedNode keyed ? keyed : null;
     }
 
     @Override
@@ -804,14 +851,6 @@ public class YamlConfig implements ConfigurationSection {
     }
 
 
-    private String getPathPrefix(String[] parts, int length) {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < length; i++) {
-            if (i > 0) sb.append(".");
-            sb.append(parts[i]);
-        }
-        return sb.toString();
-    }
 
     private static class YamlConfigSubSection implements ConfigurationSection {
         private final YamlConfig root;
@@ -824,7 +863,7 @@ public class YamlConfig implements ConfigurationSection {
 
         private String fullPath(String path) {
             if (path == null || path.isEmpty()) return basePath;
-            return basePath + "." + path;
+            return basePath + "." + YamlPaths.escapeSegment(path);
         }
 
         @Override

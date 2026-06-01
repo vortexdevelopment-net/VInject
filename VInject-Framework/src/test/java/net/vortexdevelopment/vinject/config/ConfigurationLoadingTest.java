@@ -6,8 +6,11 @@ import net.vortexdevelopment.vinject.annotation.lifecycle.OnLoad;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory;
 import net.vortexdevelopment.vinject.testing.TestApplicationContext;
+import net.vortexdevelopment.vinject.testing.TestConfigurationDirectories;
 import lombok.Getter;
 import lombok.Setter;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -26,6 +29,16 @@ class ConfigurationLoadingTest {
 
     @TempDir
     File tempDir;
+
+    @BeforeEach
+    void useIsolatedConfigDirectory() {
+        TestConfigurationDirectories.useTemporaryRoot(tempDir.toPath());
+    }
+
+    @AfterEach
+    void restoreConfigDirectory() {
+        TestConfigurationDirectories.resetRoot();
+    }
 
     @Test
     void configurationLoadsFromYamlFile() throws IOException {

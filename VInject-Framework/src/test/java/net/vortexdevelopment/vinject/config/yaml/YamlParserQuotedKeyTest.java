@@ -24,6 +24,12 @@ public class YamlParserQuotedKeyTest {
     }
 
     @Test
+    public void normalizeMappingKey_stripsQuotesFromDottedKey() {
+        assertEquals("segment.one.two", YamlParser.normalizeMappingKey("'segment.one.two'"));
+        assertEquals("segment.one.two", YamlParser.normalizeMappingKey("\"segment.one.two\""));
+    }
+
+    @Test
     public void quotedFalseKey_becomesBareFalseInSection() {
         String yaml = "root:\n  'false':\n    Material: PAPER\n";
         YamlConfig config = YamlConfig.load(yaml);

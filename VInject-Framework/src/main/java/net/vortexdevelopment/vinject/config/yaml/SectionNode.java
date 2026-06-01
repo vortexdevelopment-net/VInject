@@ -8,7 +8,7 @@ public class SectionNode extends KeyedNode {
     @Override
     public String render(RenderOptions options) {
         StringBuilder sb = new StringBuilder();
-        sb.append(" ".repeat(getIndentation())).append(getKey()).append(":");
+        sb.append(" ".repeat(getIndentation())).append(YamlPaths.formatMappingKey(getKey())).append(":");
         for (YamlNode child : getChildren()) {
             String rendered = child.render(options);
             if (!rendered.isEmpty() || child instanceof BlankLineNode) {

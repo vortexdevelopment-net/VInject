@@ -8,7 +8,11 @@ public class ListNode extends KeyedNode {
     @Override
     public String render(RenderOptions options) {
         StringBuilder sb = new StringBuilder();
-        sb.append(" ".repeat(getIndentation())).append(getKey()).append(":");
+        String key = YamlPaths.formatMappingKey(getKey());
+        if (getChildren().isEmpty()) {
+            return " ".repeat(getIndentation()) + key + ": []";
+        }
+        sb.append(" ".repeat(getIndentation())).append(key).append(":");
         for (YamlNode child : getChildren()) {
             String rendered = child.render(options);
             if (!rendered.isEmpty() || child instanceof BlankLineNode) {

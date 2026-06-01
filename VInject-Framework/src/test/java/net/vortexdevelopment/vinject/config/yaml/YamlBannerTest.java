@@ -1,13 +1,11 @@
 package net.vortexdevelopment.vinject.config.yaml;
 
 import net.vortexdevelopment.vinject.annotation.yaml.Comment;
-import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class YamlBannerTest {
 
-    @YamlConfiguration(file = "test.yml")
     @Comment({
         "+---------------------------------+",
         "|  Test File Banner               |",

@@ -11,8 +11,13 @@ import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory;
 import net.vortexdevelopment.vinject.di.ConfigurationContainer;
 import net.vortexdevelopment.vinject.testing.TestApplicationContext;
+import net.vortexdevelopment.vinject.testing.TestConfigurationDirectories;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -21,6 +26,19 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Tests for YAML configuration loading and injection.
  */
 class YamlConfigurationTest {
+
+    @TempDir
+    Path configDir;
+
+    @BeforeEach
+    void useIsolatedConfigDirectory() {
+        TestConfigurationDirectories.useTemporaryRoot(configDir);
+    }
+
+    @AfterEach
+    void restoreConfigDirectory() {
+        TestConfigurationDirectories.resetRoot();
+    }
 
     @Test
     void yamlConfigurationIsInjected() {
