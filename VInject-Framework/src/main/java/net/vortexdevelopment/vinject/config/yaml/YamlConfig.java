@@ -238,10 +238,7 @@ public class YamlConfig implements ConfigurationSection {
     }
 
     private boolean isAbsent(Object value) {
-        if (value == null) return true;
-        if (value instanceof java.util.Collection && ((java.util.Collection<?>) value).isEmpty()) return true;
-        if (value instanceof java.util.Map && ((java.util.Map<?, ?>) value).isEmpty()) return true;
-        return false;
+        return value == null;
     }
 
     private void setRelative(YamlNode parent, String relativePath, Object value, String comment, boolean newLineBefore, boolean newLineAfter) {

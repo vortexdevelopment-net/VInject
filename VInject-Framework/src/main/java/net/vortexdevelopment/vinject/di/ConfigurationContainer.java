@@ -194,7 +194,54 @@ public class ConfigurationContainer {
                 // Create raw instance and populate fields directly (avoid setters)
                 Object instance = container.newInstance(cfgClass);
                 File file = resolvedPath.toFile();
-                
+
+                boolean newlyCopied = false;
+                if (!file.exists()) {
+                    String resourcePath = filePath.replace('\\', '/');
+                    if (resourcePath.startsWith("/")) {
+                        resourcePath = resourcePath.substring(1);
+                    }
+                    try (InputStream is = cfgClass.getClassLoader().getResourceAsStream(resourcePath)) {
+                        if (is != null) {
+                            if (file.getParentFile() != null) {
+                                Files.createDirectories(file.getParentFile().toPath());
+                            }
+                            Files.copy(is, file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                            newlyCopied = true;
+                        } else {
+                            // Try context classloader
+                            InputStream is2 = Thread.currentThread().getContextClassLoader().getResourceAsStream(resourcePath);
+                            if (is2 != null) {
+                                try {
+                                    if (file.getParentFile() != null) {
+                                        Files.createDirectories(file.getParentFile().toPath());
+                                    }
+                                    Files.copy(is2, file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                                    newlyCopied = true;
+                                } finally {
+                                    is2.close();
+                                }
+                            } else {
+                                // Try class getResourceAsStream
+                                InputStream is3 = cfgClass.getResourceAsStream("/" + resourcePath);
+                                if (is3 != null) {
+                                    try {
+                                        if (file.getParentFile() != null) {
+                                            Files.createDirectories(file.getParentFile().toPath());
+                                        }
+                                        Files.copy(is3, file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                                        newlyCopied = true;
+                                    } finally {
+                                        is3.close();
+                                    }
+                                }
+                            }
+                        }
+                    } catch (IOException e) {
+                        System.err.println("Warning: Failed to copy default resource for " + filePath + ": " + e.getMessage());
+                    }
+                }
+
                 // Use YamlConfig to load the file
                 YamlConfig config = fileDataMaps.get(filePath);
                 if (config == null) {
@@ -211,9 +258,11 @@ public class ConfigurationContainer {
                 }
 
                 // Initial save if merging added keys (handled by saveToFile)
-                try {
-                    saveToFile(instance, cfgClass, filePath, charset, annotation);
-                } catch (Exception ignored) {
+                if (!newlyCopied) {
+                    try {
+                        saveToFile(instance, cfgClass, filePath, charset, annotation);
+                    } catch (Exception ignored) {
+                    }
                 }
 
                 // Store proxy as the delegate for saving/inspection (store original class too)
