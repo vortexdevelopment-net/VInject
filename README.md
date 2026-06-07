@@ -215,14 +215,14 @@ public interface UserRepository extends CrudRepository<User, Long> {
 
 ## Maven Transformer Plugin (Required)
 
-**The VInject-Transformer plugin is required for both database entities and YAML configurations.**
+**The vinject-maven-plugin plugin is required for database entities, YAML configurations, and compile-time VInject dependency verification.**
 
 Add the transformer plugin to your `pom.xml`:
 
 ```xml
 <plugin>
     <groupId>net.vortexdevelopment</groupId>
-    <artifactId>VInject-Transformer</artifactId>
+    <artifactId>vinject-maven-plugin</artifactId>
     <version>1.0-SNAPSHOT</version>
     <executions>
         <execution>
@@ -254,7 +254,7 @@ Add the transformer plugin to your `pom.xml`:
 
 VInject maps YAML files into Java objects. Paths in `@YamlConfiguration.file` and `@YamlDirectory.dir` are resolved relative to the JVM working directory unless you call `ConfigurationContainer.setRootDirectory(Path)` or `setRootDirectory(String)` before building the `DependencyContainer`.
 
-For batch item types that use `@YamlId`, keep the VInject-Transformer enabled as described in [Maven Transformer Plugin (Required)](#maven-transformer-plugin-required).
+For batch item types that use `@YamlId`, keep the vinject-maven-plugin enabled as described in [Maven Transformer Plugin (Required)](#maven-transformer-plugin-required).
 
 ### Single-file configuration (`@YamlConfiguration`)
 
@@ -408,7 +408,7 @@ Fields of type `Coords` in YAML configs then round-trip through this serializer 
 
 ## Performance Optimization
 
-For optimal performance with VInject-Transformer, ensure your entity classes have:
+For optimal performance with vinject-maven-plugin, ensure your entity classes have:
 - Getters and setters for all fields, or
 - Lombok's `@Data` annotation
 

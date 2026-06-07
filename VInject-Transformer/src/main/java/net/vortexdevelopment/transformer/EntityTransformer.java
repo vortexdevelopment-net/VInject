@@ -1,5 +1,11 @@
 package net.vortexdevelopment.transformer;
 
+import net.vortexdevelopment.vinject.analyzer.Diagnostic;
+import net.vortexdevelopment.vinject.analyzer.DiagnosticSeverity;
+import net.vortexdevelopment.vinject.analyzer.VinjectAnalysisRequest;
+import net.vortexdevelopment.vinject.analyzer.VinjectAnalysisResult;
+import net.vortexdevelopment.vinject.analyzer.VinjectAnalyzer;
+import org.apache.maven.artifact.DependencyResolutionRequiredException;
 import org.apache.bcel.Const;
 import org.apache.bcel.Constants;
 import org.apache.bcel.classfile.AnnotationEntry;
@@ -30,9 +36,11 @@ import org.apache.bcel.generic.Type;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecution;
 import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.project.MavenProject;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
+import org.apache.maven.plugins.annotations.ResolutionScope;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 
@@ -45,11 +53,16 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.stream.Collectors;
 
-@Mojo(name = "transform-classes", defaultPhase = LifecyclePhase.PROCESS_CLASSES)
+@Mojo(name = "transform-classes", defaultPhase = LifecyclePhase.PROCESS_CLASSES, requiresDependencyResolution = ResolutionScope.TEST)
 public class EntityTransformer extends AbstractMojo {
 
     @Parameter(defaultValue = "${project.build.outputDirectory}", readonly = true)
@@ -68,6 +81,9 @@ public class EntityTransformer extends AbstractMojo {
     @Parameter(defaultValue = "${mojoExecution}", readonly = true)
     private MojoExecution session;
 
+    @Parameter(defaultValue = "${project}", readonly = true)
+    private MavenProject project;
+
     private final Set<String> customRegistryAnnotations = new HashSet<>();
 
     @Override
@@ -77,6 +93,7 @@ public class EntityTransformer extends AbstractMojo {
         // If classesDirectory is explicitly configured, use it
         if (classesDirectory != null) {
             if (classesDirectory.exists()) {
+                runAnalyzer(classesDirectory);
                 Set<File> classFiles = getClassFiles(classesDirectory);
                 for (File classFile : classFiles) {
                     try {
@@ -96,6 +113,7 @@ public class EntityTransformer extends AbstractMojo {
         // Process main classes if in process-classes phase
         if (phase != null && phase.equals("process-classes")) {
             if (outputDirectory != null && outputDirectory.exists()) {
+                runAnalyzer(outputDirectory);
                 Set<File> classFiles = getClassFiles(outputDirectory);
                 for (File classFile : classFiles) {
                     try {
@@ -110,6 +128,7 @@ public class EntityTransformer extends AbstractMojo {
         // Process test classes if in process-test-classes phase
         if (phase != null && phase.equals("process-test-classes")) {
             if (testOutputDirectory != null && testOutputDirectory.exists()) {
+                runAnalyzer(testOutputDirectory);
                 Set<File> testClassFiles = getClassFiles(testOutputDirectory);
                 for (File classFile : testClassFiles) {
                     try {
@@ -124,6 +143,101 @@ public class EntityTransformer extends AbstractMojo {
         }
         
         generateCustomRegistryMetadata();
+    }
+
+    private void runAnalyzer(File classesRoot) throws MojoExecutionException {
+        Set<Class<?>> classes = loadClasses(classesRoot);
+        VinjectAnalysisRequest.Builder requestBuilder = VinjectAnalysisRequest.builder()
+                .candidateClasses(classes);
+
+        // Auto-detect the class annotated with @Root
+        Class<?> rootClass = null;
+        net.vortexdevelopment.vinject.annotation.component.Root rootAnnotation = null;
+        for (Class<?> clazz : classes) {
+            if (clazz.isAnnotationPresent(net.vortexdevelopment.vinject.annotation.component.Root.class)) {
+                rootClass = clazz;
+                rootAnnotation = clazz.getAnnotation(net.vortexdevelopment.vinject.annotation.component.Root.class);
+                break;
+            }
+        }
+        if (rootClass != null) {
+            requestBuilder.root(rootAnnotation, rootClass);
+        }
+
+        VinjectAnalysisResult result = new VinjectAnalyzer().analyze(requestBuilder.build());
+
+        for (Diagnostic diagnostic : result.diagnostics()) {
+            if (diagnostic.getSeverity() == DiagnosticSeverity.ERROR) {
+                getLog().error(diagnostic.toString());
+            } else if (diagnostic.getSeverity() == DiagnosticSeverity.WARNING) {
+                getLog().warn(diagnostic.toString());
+            } else {
+                getLog().info(diagnostic.toString());
+            }
+        }
+
+        if (result.hasErrors()) {
+            String errors = result.diagnostics().stream()
+                    .filter(diagnostic -> diagnostic.getSeverity() == DiagnosticSeverity.ERROR)
+                    .map(Diagnostic::toString)
+                    .collect(Collectors.joining(System.lineSeparator()));
+            throw new MojoExecutionException("VInject analyzer found errors:" + System.lineSeparator() + errors);
+        }
+    }
+
+    private Set<Class<?>> loadClasses(File classesRoot) throws MojoExecutionException {
+        Set<Class<?>> loadedClasses = new LinkedHashSet<>();
+        List<URL> urls = new java.util.ArrayList<>();
+        try {
+            addUrl(urls, classesRoot);
+            addUrl(urls, outputDirectory);
+            addUrl(urls, testOutputDirectory);
+            if (project != null) {
+                if (project.getBuild() != null) {
+                    addUrl(urls, new File(project.getBuild().getOutputDirectory()));
+                    addUrl(urls, new File(project.getBuild().getTestOutputDirectory()));
+                }
+                String phase = session != null ? session.getLifecyclePhase() : "";
+                List<String> classpathElements = "process-test-classes".equals(phase)
+                        ? project.getTestClasspathElements()
+                        : project.getCompileClasspathElements();
+                for (String element : classpathElements) {
+                    urls.add(new File(element).toURI().toURL());
+                }
+            }
+        } catch (DependencyResolutionRequiredException | IOException e) {
+            throw new MojoExecutionException("Unable to build VInject analyzer classpath", e);
+        }
+
+        try (URLClassLoader classLoader = new URLClassLoader(urls.toArray(URL[]::new), Thread.currentThread().getContextClassLoader())) {
+            for (File classFile : getClassFiles(classesRoot)) {
+                String className = toClassName(classesRoot.toPath(), classFile.toPath());
+                try {
+                    loadedClasses.add(Class.forName(className, false, classLoader));
+                } catch (Throwable e) {
+                    getLog().warn("Unable to load class for VInject analysis: " + className + " (" + e.getMessage() + ")");
+                }
+            }
+        } catch (IOException e) {
+            throw new MojoExecutionException("Unable to close VInject analyzer classloader", e);
+        }
+        return loadedClasses;
+    }
+
+    private void addUrl(List<URL> urls, File file) throws IOException {
+        if (file == null || !file.exists()) {
+            return;
+        }
+        URL url = file.toURI().toURL();
+        if (!urls.contains(url)) {
+            urls.add(url);
+        }
+    }
+
+    private String toClassName(Path classesRoot, Path classFile) {
+        Path relative = classesRoot.relativize(classFile);
+        String className = relative.toString().replace(File.separatorChar, '.');
+        return className.substring(0, className.length() - ".class".length());
     }
 
     private String capitalize(String s) {

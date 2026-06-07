@@ -6,11 +6,13 @@
 
     <groupId>net.vortexdevelopment</groupId>
     <artifactId>VInject-Parent</artifactId>
-    <version>1.0.0</version>
+    <version>2.0.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>VInject</name>
     <modules>
+        <module>VInject-API</module>
+        <module>VInject-Analyzer</module>
         <module>VInject-Transformer</module>
         <module>VInject-Framework</module>
         <module>VInject-HTTP</module>

@@ -19,6 +19,10 @@ public class AnnotationHandlerRegistry {
         handlers.put(annotation, handler);
     }
 
+    public AnnotationHandler getHandler(Class<? extends Annotation> annotation) {
+        return handlers.get(annotation);
+    }
+
     public List<AnnotationHandler> getHandlers(RegistryOrder order) {
         return handlers.values().stream().filter(handler -> handler.getClass().getAnnotation(Registry.class).order() == order).toList();
     }

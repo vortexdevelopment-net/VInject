@@ -40,36 +40,58 @@ public class ClasspathScanner {
         String[] ignoredPackages = rootAnnotation.ignoredPackages();
         String[] includedPackages = rootAnnotation.includedPackages();
 
-        return new ConfigurationBuilder()
-                .forPackage(rootPackage)
-                .filterInputsBy(s -> {
-                    if (s == null) return false;
-                    if (s.startsWith("META-INF")) return false;
-                    if (!s.endsWith(".class")) return false;
+        ConfigurationBuilder builder = new ConfigurationBuilder();
+        if (!rootPackage.isEmpty()) {
+            builder.forPackage(rootPackage);
+        }
+        for (String includedPackage : includedPackages) {
+            builder.forPackage(includedPackage);
+        }
 
-                    // Only include classes under the root package path
-                    if (!s.startsWith(rootPackagePath + "/") && !s.equals(rootPackagePath + ".class")) {
-                        return false;
-                    }
+        builder.filterInputsBy(s -> {
+            if (s == null) {
+                return false;
+            }
+            if (s.startsWith("META-INF")) {
+                return false;
+            }
+            if (!s.endsWith(".class")) {
+                return false;
+            }
 
-                    // Check ignored packages
-                    for (String ignoredPackage : ignoredPackages) {
-                        String ignoredPath = ignoredPackage.replace('.', '/');
-                        if (s.startsWith(ignoredPath)) {
-                            return false;
-                        }
-                    }
+            boolean isUnderRoot = rootPackage.isEmpty() || isClassInPackagePath(s, rootPackagePath);
+            boolean isUnderIncluded = false;
+            for (String includedPackage : includedPackages) {
+                String includedPath = includedPackage.replace('.', '/');
+                if (isClassInPackagePath(s, includedPath)) {
+                    isUnderIncluded = true;
+                    break;
+                }
+            }
 
-                    // Check included packages (override ignored)
-                    for (String includedPackage : includedPackages) {
-                        String includedPath = includedPackage.replace('.', '/');
-                        if (s.startsWith(includedPath)) {
-                            return true;
-                        }
-                    }
+            if (!isUnderRoot && !isUnderIncluded) {
+                return false;
+            }
 
-                    return true;
-                });
+            // Check ignored packages
+            for (String ignoredPackage : ignoredPackages) {
+                String ignoredPath = ignoredPackage.replace('.', '/');
+                if (!isUnderIncluded && isClassInPackagePath(s, ignoredPath)) {
+                    return false;
+                }
+            }
+
+            return true;
+        });
+
+        return builder;
+    }
+
+    private static boolean isClassInPackagePath(String classFilePath, String packagePath) {
+        if (packagePath == null || packagePath.isEmpty()) {
+            return true;
+        }
+        return classFilePath.startsWith(packagePath + "/") || classFilePath.equals(packagePath + ".class");
     }
 
     /**

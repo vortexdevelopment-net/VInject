@@ -1,6 +1,12 @@
 package net.vortexdevelopment.vinject.di;
 
 import lombok.Getter;
+import net.vortexdevelopment.vinject.analyzer.Diagnostic;
+import net.vortexdevelopment.vinject.analyzer.DiagnosticSeverity;
+import net.vortexdevelopment.vinject.analyzer.RegistryTargetModel;
+import net.vortexdevelopment.vinject.analyzer.VinjectAnalysisRequest;
+import net.vortexdevelopment.vinject.analyzer.VinjectAnalysisResult;
+import net.vortexdevelopment.vinject.analyzer.VinjectAnalyzer;
 import net.vortexdevelopment.vinject.annotation.ArgumentResolver;
 import net.vortexdevelopment.vinject.annotation.Bean;
 import net.vortexdevelopment.vinject.annotation.component.Component;
@@ -9,7 +15,6 @@ import net.vortexdevelopment.vinject.annotation.OptionalDependency;
 import net.vortexdevelopment.vinject.annotation.component.Element;
 import net.vortexdevelopment.vinject.annotation.component.Repository;
 import net.vortexdevelopment.vinject.annotation.component.Root;
-import net.vortexdevelopment.vinject.annotation.component.Service;
 import net.vortexdevelopment.vinject.annotation.Value;
 import net.vortexdevelopment.vinject.annotation.database.Entity;
 import net.vortexdevelopment.vinject.annotation.database.RegisterCacheContributor;
@@ -27,7 +32,6 @@ import net.vortexdevelopment.vinject.database.repository.RepositoryInvocationHan
 import net.vortexdevelopment.vinject.database.serializer.DatabaseSerializer;
 import net.vortexdevelopment.vinject.di.context.InjectionContext;
 import net.vortexdevelopment.vinject.di.engine.ConditionEvaluator;
-import net.vortexdevelopment.vinject.di.engine.DependencyGraphResolver;
 import net.vortexdevelopment.vinject.di.engine.InjectionEngine;
 import net.vortexdevelopment.vinject.di.lifecycle.LifecycleManager;
 import net.vortexdevelopment.vinject.di.registry.AnnotationHandler;
@@ -54,7 +58,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -78,7 +81,6 @@ public class DependencyContainer implements DependencyRepository {
     @Getter private final LifecycleManager lifecycleManager;
     @Getter private final InjectionEngine injectionEngine;
     private final ConditionEvaluator conditionEvaluator;
-    private final DependencyGraphResolver dependencyGraphResolver;
     @Getter private final CacheCoordinator cacheCoordinator;
     @Getter private final CacheManager cacheManager;
     
@@ -94,7 +96,6 @@ public class DependencyContainer implements DependencyRepository {
         lifecycleManager = new LifecycleManager(this);
         injectionEngine = new InjectionEngine(this);
         conditionEvaluator = new ConditionEvaluator();
-        dependencyGraphResolver = new DependencyGraphResolver(this);
         dependencies = new ConcurrentHashMap<>();
         entities = ConcurrentHashMap.newKeySet();
         elementClasses = ConcurrentHashMap.newKeySet();
@@ -237,10 +238,17 @@ public class DependencyContainer implements DependencyRepository {
         //Collect all ArgumentResolver annotations
         registerArgumentResolvers(scanner);
 
+        VinjectAnalysisResult analysisResult = new VinjectAnalyzer().analyze(VinjectAnalysisRequest.builder()
+                .root(rootAnnotation, rootClass)
+                .preRegisteredTypes(dependencies.keySet())
+                .loadPredicate(this::canLoadClass)
+                .build());
+        handleAnalyzerDiagnostics(analysisResult);
+
         processAnnotationHandlers(RegistryOrder.FIRST, scanner);
 
         //Register Beans and Services
-        scanner.scanAndFilter(Service.class, this::canLoadClass).forEach(serviceClass -> {
+        analysisResult.loadPlan().serviceLoadOrder().forEach(serviceClass -> {
             eventManager.registerEventListeners(serviceClass);
             registerBeans(serviceClass);
         });
@@ -249,40 +257,15 @@ public class DependencyContainer implements DependencyRepository {
 
         processAnnotationHandlers(RegistryOrder.REPOSITORIES, scanner);
 
-        // Unified loading for Components and Registry-handled classes
-        // This takes into account dependencies between registry-handled classes and components
         Map<Class<?>, List<AnnotationHandler>> classHandlers = new java.util.HashMap<>();
-        Set<Class<?>> loadableClasses = new HashSet<>();
-
-        // 1. Collect Registry items
-        annotationHandlerRegistry.getHandlers(RegistryOrder.COMPONENTS).forEach(handler -> {
-            Class<? extends Annotation> annotation = DependencyUtils.getAnnotationFromHandler(handler);
-            if (annotation != null) {
-                scanner.getTypesAnnotatedWith(annotation).forEach(clazz -> {
-                    if (canLoadClass(clazz)) {
-                        loadableClasses.add(clazz);
-                        classHandlers.computeIfAbsent(clazz, k -> new ArrayList<>()).add(handler);
-                    }
-                });
+        for (RegistryTargetModel target : analysisResult.applicationModel().getRegistryTargets(RegistryOrder.COMPONENTS)) {
+            AnnotationHandler handler = annotationHandlerRegistry.getHandler(target.annotationClass());
+            if (handler != null) {
+                classHandlers.computeIfAbsent(target.targetClass(), k -> new ArrayList<>()).add(handler);
             }
-        });
+        }
 
-        // 2. Collect Components
-        loadableClasses.addAll(scanner.scanAndFilter(Component.class, this::canLoadClass));
-
-        // 2.5 Collect RestControllers via reflection (VInject-HTTP module support)
-        try {
-            Class<? extends Annotation> restControllerClass = (Class<? extends Annotation>) Class.forName("net.vortexdevelopment.vinject.http.annotation.RestController");
-            loadableClasses.addAll(scanner.scanAndFilter(restControllerClass, this::canLoadClass));
-        } catch (ClassNotFoundException ignored) {}
-
-        // 3. Resolve Graph and Sort
-        dependencyGraphResolver.createLoadingOrder(loadableClasses).stream()
-            .sorted(Comparator.comparingInt(value -> {
-                Component component = value.getAnnotation(Component.class);
-                return component != null ? component.priority() : 10;
-            }))
-            .forEach(clazz -> {
+        analysisResult.loadPlan().componentLoadOrder().forEach(clazz -> {
                 // Process Handlers first
                 if (classHandlers.containsKey(clazz)) {
                     classHandlers.get(clazz).forEach(handler -> {
@@ -330,6 +313,24 @@ public class DependencyContainer implements DependencyRepository {
                 cacheCoordinator.registerContributor(contributor);
             }
         });
+    }
+
+    private void handleAnalyzerDiagnostics(VinjectAnalysisResult analysisResult) {
+        for (Diagnostic diagnostic : analysisResult.diagnostics()) {
+            String line = diagnostic.toString();
+            if (diagnostic.getSeverity() == DiagnosticSeverity.ERROR) {
+                System.err.println(line);
+            } else {
+                System.out.println(line);
+            }
+        }
+        if (analysisResult.hasErrors()) {
+            String errors = analysisResult.diagnostics().stream()
+                    .filter(diagnostic -> diagnostic.getSeverity() == DiagnosticSeverity.ERROR)
+                    .map(Diagnostic::toString)
+                    .collect(Collectors.joining(System.lineSeparator()));
+            throw new RuntimeException("VInject analyzer found errors:" + System.lineSeparator() + errors);
+        }
     }
 
     /**

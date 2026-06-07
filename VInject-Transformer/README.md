@@ -44,7 +44,7 @@ Add the Entity Transformer to your Maven project:
 ```xml
 <plugin>
     <groupId>net.vortexdevelopment</groupId>
-    <artifactId>VInject-Transformer</artifactId>
+    <artifactId>vinject-maven-plugin</artifactId>
     <version>1.0-SNAPSHOT</version>
     <executions>
         <execution>
