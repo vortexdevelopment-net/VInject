@@ -89,6 +89,7 @@
                 </executions>
                 <configuration>
                     <minimizeJar>true</minimizeJar>
+                    <createDependencyReducedPom>false</createDependencyReducedPom>
                     <filters>
                         <filter>
                             <artifact>*:*</artifact>
@@ -182,7 +183,7 @@
         </plugins>
         <resources>
             <resource>
-                <directory>VInject-Core/src/main/resources</directory>
+                <directory>src/main/resources</directory>
                 <filtering>true</filtering>
             </resource>
         </resources>
