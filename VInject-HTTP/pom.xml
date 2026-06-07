@@ -42,7 +42,7 @@
         <!-- Framework dependency -->
         <dependency>
             <groupId>net.vortexdevelopment</groupId>
-            <artifactId>VInject</artifactId>
+            <artifactId>VInject-Core</artifactId>
             <version>2.0.0-SNAPSHOT</version>
         </dependency>
 

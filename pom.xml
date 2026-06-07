@@ -13,8 +13,8 @@
     <modules>
         <module>VInject-API</module>
         <module>VInject-Analyzer</module>
-        <module>VInject-Transformer</module>
-        <module>VInject-Framework</module>
+        <module>VInject-Maven-Plugin</module>
+        <module>VInject-Core</module>
         <module>VInject-HTTP</module>
     </modules>
 

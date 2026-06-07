@@ -1,0 +1,10 @@
+
+Enabled: true
+Default Policy: LRU
+Default Max Size: 1000
+Default Hot Tier Size: 100
+Default TTL Seconds: 300
+Default Write Strategy: WRITE_THROUGH
+Default Flush Interval: 10
+Repository Overrides:
+  -

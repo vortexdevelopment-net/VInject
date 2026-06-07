@@ -1,4 +1,4 @@
-# VInject Framework
+# VInject Core
 
 A lightweight and powerful dependency injection framework for Java applications, designed to simplify dependency management and improve code organization. Originally created for Minecraft plugin development, it provides seamless integration with the Bukkit/Spigot ecosystem while also supporting standalone Java applications.
 
@@ -16,7 +16,7 @@ Add the following to your `pom.xml`:
 
 <dependency>
     <groupId>net.vortexdevelopment</groupId>
-    <artifactId>VInject-Framework</artifactId>
+    <artifactId>VInject-Core</artifactId>
     <version>1.0-SNAPSHOT</version>
     <scope>compile</scope>
 </dependency>

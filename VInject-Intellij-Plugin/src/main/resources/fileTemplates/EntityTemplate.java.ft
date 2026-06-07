@@ -1,0 +1,7 @@
+package ${PACKAGE_NAME};
+
+import net.vortexdevelopment.vinject.annotation.database.Entity;
+
+@Entity
+public class ${NAME} {
+}

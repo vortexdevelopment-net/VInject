@@ -1,5 +1,5 @@
 VInject Framework  
-Copyright 2025 VortexDevelopment  
+Copyright 2026 VortexDevelopment  
 
 This project uses software from the following third parties:  
 
@@ -9,28 +9,94 @@ This project uses software from the following third parties:
    - https://github.com/ronmamo/reflections  
 
 2. Lombok  
-   - Copyright 2009-2025 The Project Lombok Authors  
+   - Copyright 2009-2026 The Project Lombok Authors  
    - Licensed under the MIT License  
    - https://github.com/projectlombok/lombok  
 
 3. HikariCP  
-   - Copyright 2013-2025 Brett Wooldridge  
+   - Copyright 2013-2026 Brett Wooldridge  
    - Licensed under the Apache License, Version 2.0  
    - https://github.com/brettwooldridge/HikariCP  
 
-4. MySQL Connector/J *(Potential GPL Issue, see below)*  
-   - Copyright 2000-2025 Oracle and/or its affiliates  
+4. MySQL Connector/J *(Potential GPL Issue, see licensing note below)*  
+   - Copyright 2000-2026 Oracle and/or its affiliates  
    - Licensed under the GNU General Public License, version 2  
    - https://github.com/mysql/mysql-connector-j  
 
 5. MariaDB Connector/J *(Alternative to MySQL Connector/J for LGPL compatibility)*  
-   - Copyright 2015-2025 MariaDB Corporation Ab  
+   - Copyright 2015-2026 MariaDB Corporation Ab  
    - Licensed under the GNU Lesser General Public License, version 2.1  
    - https://github.com/mariadb-corporation/mariadb-connector-j  
 
-6. JitPack  
-   - Copyright 2015-2025 JitPack  
-   - Licensed under the MIT License  
-   - https://github.com/jitpack/jitpack.io  
+6. JetBrains Annotations  
+   - Copyright 2000-2026 JetBrains s.r.o.  
+   - Licensed under the Apache License, Version 2.0  
+   - https://github.com/JetBrains/java-annotations  
+
+7. Google Gson  
+   - Copyright 2008-2026 Google Inc.  
+   - Licensed under the Apache License, Version 2.0  
+   - https://github.com/google/gson  
+
+8. DiscordIPC  
+   - Copyright 2021-2023 CDAGaming  
+   - Licensed under the Apache License, Version 2.0  
+   - https://github.com/CDAGaming/DiscordIPC  
+
+9. org.json (JSON-Java)  
+   - Public Domain / CC0-1.0  
+   - https://github.com/stleary/JSON-java  
+
+10. SLF4J API  
+    - Copyright 2004-2026 QOS.ch  
+    - Licensed under the MIT License  
+    - http://www.slf4j.org  
+
+11. Jakarta Servlet API  
+    - Copyright Contributors to the Eclipse Foundation  
+    - Licensed under the Eclipse Public License, Version 2.0 (EPL-2.0) and GNU General Public License, version 2 with Classpath Exception  
+    - https://github.com/jakartaee/servlet  
+
+12. Eclipse Jetty  
+    - Copyright Eclipse Foundation and Mort Bay Consulting  
+    - Licensed under the Apache License, Version 2.0 / Eclipse Public License, Version 2.0 (EPL-2.0)  
+    - https://github.com/jetty/jetty.project  
+
+13. Apache Commons BCEL  
+    - Copyright 2004-2026 The Apache Software Foundation  
+    - Licensed under the Apache License, Version 2.0  
+    - https://github.com/apache/commons-bcel  
+
+14. JUnit Jupiter  
+    - Copyright Contributors to the Eclipse Foundation  
+    - Licensed under the Eclipse Public License, Version 2.0 (EPL-2.0)  
+    - https://github.com/junit-team/junit5  
+
+15. Mockito  
+    - Copyright Mockito Contributors  
+    - Licensed under the MIT License  
+    - https://github.com/mockito/mockito  
+
+16. AssertJ Core  
+    - Copyright AssertJ Contributors  
+    - Licensed under the Apache License, Version 2.0  
+    - https://github.com/assertj/assertj  
+
+17. H2 Database Engine  
+    - Copyright H2 Group  
+    - Licensed under the Mozilla Public License, Version 2.0 (MPL-2.0) or Eclipse Public License, Version 1.0  
+    - https://github.com/h2database/h2database  
+
+18. JitPack *(Repository service used during build)*  
+    - Copyright 2015-2026 JitPack  
+    - Licensed under the MIT License  
+    - https://github.com/jitpack/jitpack.io  
 
 For full license texts, please refer to the respective project repositories.  
+
+***
+
+Licensing Notes:
+
+- MySQL Connector/J GPL Notice:
+  MySQL Connector/J is licensed under the GNU General Public License (GPL) version 2. VInject relies on MySQL Connector/J as a "provided" (compile-only) dependency, which is not bundled or distributed as part of VInject itself. Consequently, using VInject does not copyleft your project under the GPL, but users who choose to package or redistribute MySQL Connector/J with their final application should be aware of GPL compliance requirements.
