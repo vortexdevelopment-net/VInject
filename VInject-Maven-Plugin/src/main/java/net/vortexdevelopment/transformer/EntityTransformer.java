@@ -146,46 +146,48 @@ public class EntityTransformer extends AbstractMojo {
     }
 
     private void runAnalyzer(File classesRoot) throws MojoExecutionException {
-        Set<Class<?>> classes = loadClasses(classesRoot);
-        VinjectAnalysisRequest.Builder requestBuilder = VinjectAnalysisRequest.builder()
-                .candidateClasses(classes);
+        try (LoadedClasses loadedClasses = loadClasses(classesRoot)) {
+            Set<Class<?>> classes = loadedClasses.classes();
+            VinjectAnalysisRequest.Builder requestBuilder = VinjectAnalysisRequest.builder()
+                    .candidateClasses(classes);
 
-        // Auto-detect the class annotated with @Root
-        Class<?> rootClass = null;
-        net.vortexdevelopment.vinject.annotation.component.Root rootAnnotation = null;
-        for (Class<?> clazz : classes) {
-            if (clazz.isAnnotationPresent(net.vortexdevelopment.vinject.annotation.component.Root.class)) {
-                rootClass = clazz;
-                rootAnnotation = clazz.getAnnotation(net.vortexdevelopment.vinject.annotation.component.Root.class);
-                break;
+            // Auto-detect the class annotated with @Root
+            Class<?> rootClass = null;
+            net.vortexdevelopment.vinject.annotation.component.Root rootAnnotation = null;
+            for (Class<?> clazz : classes) {
+                if (clazz.isAnnotationPresent(net.vortexdevelopment.vinject.annotation.component.Root.class)) {
+                    rootClass = clazz;
+                    rootAnnotation = clazz.getAnnotation(net.vortexdevelopment.vinject.annotation.component.Root.class);
+                    break;
+                }
             }
-        }
-        if (rootClass != null) {
-            requestBuilder.root(rootAnnotation, rootClass);
-        }
-
-        VinjectAnalysisResult result = new VinjectAnalyzer().analyze(requestBuilder.build());
-
-        for (Diagnostic diagnostic : result.diagnostics()) {
-            if (diagnostic.getSeverity() == DiagnosticSeverity.ERROR) {
-                getLog().error(diagnostic.toString());
-            } else if (diagnostic.getSeverity() == DiagnosticSeverity.WARNING) {
-                getLog().warn(diagnostic.toString());
-            } else {
-                getLog().info(diagnostic.toString());
+            if (rootClass != null) {
+                requestBuilder.root(rootAnnotation, rootClass);
             }
-        }
 
-        if (result.hasErrors()) {
-            String errors = result.diagnostics().stream()
-                    .filter(diagnostic -> diagnostic.getSeverity() == DiagnosticSeverity.ERROR)
-                    .map(Diagnostic::toString)
-                    .collect(Collectors.joining(System.lineSeparator()));
-            throw new MojoExecutionException("VInject analyzer found errors:" + System.lineSeparator() + errors);
+            VinjectAnalysisResult result = new VinjectAnalyzer().analyze(requestBuilder.build());
+
+            for (Diagnostic diagnostic : result.diagnostics()) {
+                if (diagnostic.getSeverity() == DiagnosticSeverity.ERROR) {
+                    getLog().error(diagnostic.toString());
+                } else if (diagnostic.getSeverity() == DiagnosticSeverity.WARNING) {
+                    getLog().warn(diagnostic.toString());
+                } else {
+                    getLog().info(diagnostic.toString());
+                }
+            }
+
+            if (result.hasErrors()) {
+                String errors = result.diagnostics().stream()
+                        .filter(diagnostic -> diagnostic.getSeverity() == DiagnosticSeverity.ERROR)
+                        .map(Diagnostic::toString)
+                        .collect(Collectors.joining(System.lineSeparator()));
+                throw new MojoExecutionException("VInject analyzer found errors:" + System.lineSeparator() + errors);
+            }
         }
     }
 
-    private Set<Class<?>> loadClasses(File classesRoot) throws MojoExecutionException {
+    private LoadedClasses loadClasses(File classesRoot) throws MojoExecutionException {
         Set<Class<?>> loadedClasses = new LinkedHashSet<>();
         List<URL> urls = new java.util.ArrayList<>();
         try {
@@ -204,12 +206,19 @@ public class EntityTransformer extends AbstractMojo {
                 for (String element : classpathElements) {
                     urls.add(new File(element).toURI().toURL());
                 }
+                for (org.apache.maven.artifact.Artifact artifact : project.getArtifacts()) {
+                    File file = artifact.getFile();
+                    if (file != null && file.exists()) {
+                        addUrl(urls, file);
+                    }
+                }
             }
         } catch (DependencyResolutionRequiredException | IOException e) {
             throw new MojoExecutionException("Unable to build VInject analyzer classpath", e);
         }
 
-        try (URLClassLoader classLoader = new URLClassLoader(urls.toArray(URL[]::new), Thread.currentThread().getContextClassLoader())) {
+        URLClassLoader classLoader = new URLClassLoader(urls.toArray(URL[]::new), Thread.currentThread().getContextClassLoader());
+        try {
             for (File classFile : getClassFiles(classesRoot)) {
                 String className = toClassName(classesRoot.toPath(), classFile.toPath());
                 try {
@@ -218,10 +227,24 @@ public class EntityTransformer extends AbstractMojo {
                     getLog().warn("Unable to load class for VInject analysis: " + className + " (" + e.getMessage() + ")");
                 }
             }
-        } catch (IOException e) {
-            throw new MojoExecutionException("Unable to close VInject analyzer classloader", e);
+            return new LoadedClasses(loadedClasses, classLoader);
+        } catch (RuntimeException e) {
+            try {
+                classLoader.close();
+            } catch (IOException ignored) {
+            }
+            throw e;
         }
-        return loadedClasses;
+    }
+
+    private record LoadedClasses(Set<Class<?>> classes, URLClassLoader classLoader) implements AutoCloseable {
+        @Override
+        public void close() {
+            try {
+                classLoader.close();
+            } catch (IOException ignored) {
+            }
+        }
     }
 
     private void addUrl(List<URL> urls, File file) throws IOException {

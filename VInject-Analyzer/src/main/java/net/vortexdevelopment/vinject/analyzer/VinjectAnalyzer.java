@@ -525,6 +525,24 @@ public class VinjectAnalyzer {
             return;
         }
 
+        if (isYamlConfigurationClass(source)) {
+            List<BeanModel> lateProviders = providers.stream()
+                    .filter(provider -> isLateYamlProvider(provider.getKind()))
+                    .toList();
+            if (!lateProviders.isEmpty()) {
+                diagnostics.add(Diagnostic.error(
+                        "VINJECT-DEP-004",
+                        "Dependency " + requestedType.getName() + " required by YAML configuration " + source.getName()
+                                + " is not available during YAML configuration loading. Providers are loaded later: "
+                                + lateProviders.stream()
+                                .map(provider -> provider.getImplementationClass().getName() + " (" + provider.getKind() + ")")
+                                .collect(Collectors.joining(", ")),
+                        DiagnosticLocation.memberLocation(source, memberName)
+                ));
+                return;
+            }
+        }
+
         Set<Class<?>> distinctProviders = providers.stream()
                 .map(BeanModel::getImplementationClass)
                 .collect(Collectors.toSet());
@@ -543,6 +561,18 @@ public class VinjectAnalyzer {
         if (!source.equals(target)) {
             edges.add(new DependencyEdge(source, target, kind, memberName, required, hard));
         }
+    }
+
+    private boolean isYamlConfigurationClass(Class<?> source) {
+        return source.isAnnotationPresent(YamlConfiguration.class) || source.isAnnotationPresent(YamlDirectory.class);
+    }
+
+    private boolean isLateYamlProvider(BeanKind kind) {
+        return kind == BeanKind.COMPONENT
+                || kind == BeanKind.SERVICE
+                || kind == BeanKind.BEAN_METHOD
+                || kind == BeanKind.REGISTRY_TARGET
+                || kind == BeanKind.REPOSITORY;
     }
 
     private boolean hasAnnotation(Annotation[] annotations, Class<? extends Annotation> annotationClass) {
