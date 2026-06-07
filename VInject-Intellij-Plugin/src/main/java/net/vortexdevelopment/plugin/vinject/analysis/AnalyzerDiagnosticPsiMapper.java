@@ -7,8 +7,8 @@ import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.search.GlobalSearchScope;
-import net.vortexdevelopment.vinject.analyzer.Diagnostic;
-import net.vortexdevelopment.vinject.analyzer.DiagnosticLocation;
+import net.vortexdevelopment.vinject.analyzer.diagnostic.Diagnostic;
+import net.vortexdevelopment.vinject.analyzer.diagnostic.DiagnosticLocation;
 import org.jetbrains.annotations.Nullable;
 
 public final class AnalyzerDiagnosticPsiMapper {

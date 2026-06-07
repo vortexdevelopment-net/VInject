@@ -1,4 +1,4 @@
-package net.vortexdevelopment.vinject.analyzer;
+package net.vortexdevelopment.vinject.analyzer.diagnostic;
 
 public enum DiagnosticSeverity {
     ERROR,

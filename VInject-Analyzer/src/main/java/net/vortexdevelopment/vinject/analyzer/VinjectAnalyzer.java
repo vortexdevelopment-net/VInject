@@ -1,5 +1,16 @@
 package net.vortexdevelopment.vinject.analyzer;
 
+import net.vortexdevelopment.vinject.analyzer.diagnostic.Diagnostic;
+import net.vortexdevelopment.vinject.analyzer.diagnostic.DiagnosticLocation;
+import net.vortexdevelopment.vinject.analyzer.model.ApplicationModel;
+import net.vortexdevelopment.vinject.analyzer.model.BeanKind;
+import net.vortexdevelopment.vinject.analyzer.model.BeanModel;
+import net.vortexdevelopment.vinject.analyzer.model.DependencyEdge;
+import net.vortexdevelopment.vinject.analyzer.model.DependencyEdgeKind;
+import net.vortexdevelopment.vinject.analyzer.model.DependencyGraph;
+import net.vortexdevelopment.vinject.analyzer.model.DependencyLoadPlan;
+import net.vortexdevelopment.vinject.analyzer.model.RegistryHandlerModel;
+import net.vortexdevelopment.vinject.analyzer.model.RegistryTargetModel;
 import net.vortexdevelopment.vinject.annotation.Bean;
 import net.vortexdevelopment.vinject.annotation.Inject;
 import net.vortexdevelopment.vinject.annotation.OptionalDependency;
@@ -21,7 +32,6 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
 import java.util.ArrayDeque;
 import java.util.ArrayList;

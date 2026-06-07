@@ -1,7 +1,11 @@
 package net.vortexdevelopment.vinject.analyzer;
 
-import java.util.ArrayList;
-import java.util.Collections;
+import net.vortexdevelopment.vinject.analyzer.diagnostic.Diagnostic;
+import net.vortexdevelopment.vinject.analyzer.diagnostic.DiagnosticSeverity;
+import net.vortexdevelopment.vinject.analyzer.model.ApplicationModel;
+import net.vortexdevelopment.vinject.analyzer.model.DependencyGraph;
+import net.vortexdevelopment.vinject.analyzer.model.DependencyLoadPlan;
+
 import java.util.List;
 
 public record VinjectAnalysisResult(ApplicationModel applicationModel,

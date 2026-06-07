@@ -1,9 +1,9 @@
 package net.vortexdevelopment.vinject.di;
 
 import lombok.Getter;
-import net.vortexdevelopment.vinject.analyzer.Diagnostic;
-import net.vortexdevelopment.vinject.analyzer.DiagnosticSeverity;
-import net.vortexdevelopment.vinject.analyzer.RegistryTargetModel;
+import net.vortexdevelopment.vinject.analyzer.diagnostic.Diagnostic;
+import net.vortexdevelopment.vinject.analyzer.diagnostic.DiagnosticSeverity;
+import net.vortexdevelopment.vinject.analyzer.model.RegistryTargetModel;
 import net.vortexdevelopment.vinject.analyzer.VinjectAnalysisRequest;
 import net.vortexdevelopment.vinject.analyzer.VinjectAnalysisResult;
 import net.vortexdevelopment.vinject.analyzer.VinjectAnalyzer;

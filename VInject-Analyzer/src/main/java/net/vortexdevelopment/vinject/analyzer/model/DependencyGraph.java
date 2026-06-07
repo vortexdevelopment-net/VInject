@@ -1,4 +1,4 @@
-package net.vortexdevelopment.vinject.analyzer;
+package net.vortexdevelopment.vinject.analyzer.model;
 
 import java.util.List;
 

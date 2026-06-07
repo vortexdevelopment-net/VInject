@@ -1,5 +1,7 @@
 package net.vortexdevelopment.vinject.analyzer;
 
+import net.vortexdevelopment.vinject.analyzer.diagnostic.DiagnosticSeverity;
+import net.vortexdevelopment.vinject.analyzer.model.BeanKind;
 import net.vortexdevelopment.vinject.annotation.Bean;
 import net.vortexdevelopment.vinject.annotation.Inject;
 import net.vortexdevelopment.vinject.annotation.component.Component;
