@@ -8,6 +8,8 @@ import net.vortexdevelopment.vinject.database.cache.CacheConfig;
 import net.vortexdevelopment.vinject.database.cache.CachePolicy;
 import net.vortexdevelopment.vinject.database.cache.WriteStrategy;
 import net.vortexdevelopment.vinject.database.cache.config.GlobalCacheConfig;
+import net.vortexdevelopment.vinject.database.cache.CacheManager;
+import net.vortexdevelopment.vinject.database.cache.TwoTierCache;
 import net.vortexdevelopment.vinject.database.repository.CrudRepository;
 import net.vortexdevelopment.vinject.debug.DebugLogger;
 
@@ -18,16 +20,12 @@ import net.vortexdevelopment.vinject.debug.DebugLogger;
 public class CacheDebuggingExample {
 
     // Example 1: Enable debug for cache infrastructure
-    @EnableDebugFor(
-        {
-            CacheConfig.class, GlobalCacheConfig.class,
-            // Add cache implementation classes here when created:
-            // CacheManager.class,
-            // CachingRepository.class,
-            // TwoTierCache.class,
-            // etc.
-        }
-    )
+    @EnableDebugFor({
+        CacheConfig.class,
+        GlobalCacheConfig.class,
+        CacheManager.class,
+        TwoTierCache.class
+    })
     @Component
     public static class TestApplication {
 

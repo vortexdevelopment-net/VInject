@@ -30,8 +30,8 @@ public class ConfigurationMapper {
         YamlSerializerRegistry.registerSerializer(serializer);
     }
 
-    public void mapToInstance(ConfigurationSection root, Object instance, Class<?> clazz, String basePath) throws Exception {
-        converter.mapToInstance(root, instance, clazz, basePath);
+    public boolean mapToInstance(ConfigurationSection root, Object instance, Class<?> clazz, String basePath) throws Exception {
+        return converter.mapToInstance(root, instance, clazz, basePath);
     }
 
     public void applyToConfig(ConfigurationSection root, Object instance, Class<?> clazz, String basePath) throws Exception {
@@ -63,5 +63,9 @@ public class ConfigurationMapper {
 
     public Field findIdFieldForClass(Class<?> clazz) {
         return converter.findIdFieldForClass(clazz);
+    }
+
+    public Object convertValue(Object value, java.lang.reflect.Type targetType, Field field) throws Exception {
+        return converter.convertValue(value, targetType, field);
     }
 }

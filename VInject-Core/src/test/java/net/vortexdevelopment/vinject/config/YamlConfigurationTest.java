@@ -68,6 +68,65 @@ class YamlConfigurationTest {
         }
     }
 
+    @Test
+    void yamlConfigurationDoesNotOverwriteCustomValuesOnStartup(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) throws Exception {
+        // Create custom config file
+        java.io.File configFile = tempDir.resolve("test-config.yml").toFile();
+        try (java.io.FileWriter writer = new java.io.FileWriter(configFile)) {
+            writer.write("app-name: \"Custom App\"\n");
+            writer.write("port: 9090\n");
+        }
+
+        // Set ConfigurationContainer root directory
+        ConfigurationContainer.setRootDirectory(tempDir);
+
+        try (TestApplicationContext context = TestApplicationContext.builder()
+                .withRootClass(TestRoot.class)
+                .withComponents(TestConfig.class)
+                .build()) {
+
+            TestConfig config = context.getComponent(TestConfig.class);
+
+            // Verify the custom values are loaded correctly
+            assertThat(config.getAppName()).isEqualTo("Custom App");
+            assertThat(config.getPort()).isEqualTo(9090);
+
+            // Read the file content and check if it remains correct (meaning it wasn't overwritten with default values)
+            String fileContent = java.nio.file.Files.readString(configFile.toPath());
+            assertThat(fileContent).contains("app-name: \"Custom App\"");
+            assertThat(fileContent).contains("port: 9090");
+        }
+    }
+
+    @Test
+    void yamlConfigurationMergesMissingKeysOnStartup(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tempDir) throws Exception {
+        // Create custom config file but with missing 'port' key
+        java.io.File configFile = tempDir.resolve("test-config.yml").toFile();
+        try (java.io.FileWriter writer = new java.io.FileWriter(configFile)) {
+            writer.write("app-name: \"Custom App\"\n");
+        }
+
+        // Set ConfigurationContainer root directory
+        ConfigurationContainer.setRootDirectory(tempDir);
+
+        try (TestApplicationContext context = TestApplicationContext.builder()
+                .withRootClass(TestRoot.class)
+                .withComponents(TestConfig.class)
+                .build()) {
+
+            TestConfig config = context.getComponent(TestConfig.class);
+
+            // Verify the custom value is loaded and the missing key gets default value
+            assertThat(config.getAppName()).isEqualTo("Custom App");
+            assertThat(config.getPort()).isEqualTo(8080); // Default value in class definition
+
+            // Read the file content and verify the missing key was merged (saved to file)
+            String fileContent = java.nio.file.Files.readString(configFile.toPath());
+            assertThat(fileContent).contains("app-name: \"Custom App\"");
+            assertThat(fileContent).contains("port: 8080");
+        }
+    }
+
     // Test components
 
     @Root(packageName = "net.vortexdevelopment.vinject.config", createInstance = false)

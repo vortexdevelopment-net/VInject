@@ -10,28 +10,14 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-public final class ApplicationModel {
-
-    private final Set<BeanModel> beans;
-    private final List<RegistryHandlerModel> registryHandlers;
-    private final List<RegistryTargetModel> registryTargets;
+public record ApplicationModel(Set<BeanModel> beans,
+                               List<RegistryHandlerModel> registryHandlers,
+                               List<RegistryTargetModel> registryTargets) {
 
     public ApplicationModel(Set<BeanModel> beans, List<RegistryHandlerModel> registryHandlers, List<RegistryTargetModel> registryTargets) {
         this.beans = Collections.unmodifiableSet(new LinkedHashSet<>(beans));
         this.registryHandlers = Collections.unmodifiableList(new ArrayList<>(registryHandlers));
         this.registryTargets = Collections.unmodifiableList(new ArrayList<>(registryTargets));
-    }
-
-    public Set<BeanModel> getBeans() {
-        return beans;
-    }
-
-    public List<RegistryHandlerModel> getRegistryHandlers() {
-        return registryHandlers;
-    }
-
-    public List<RegistryTargetModel> getRegistryTargets() {
-        return registryTargets;
     }
 
     public List<RegistryTargetModel> getRegistryTargets(RegistryOrder order) {

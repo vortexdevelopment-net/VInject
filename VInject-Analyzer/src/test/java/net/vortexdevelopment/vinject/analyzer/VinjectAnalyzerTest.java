@@ -38,8 +38,8 @@ class VinjectAnalyzerTest {
         VinjectAnalysisResult result = analyze(MissingDependencyConsumer.class);
 
         assertThat(result.diagnostics())
-                .anyMatch(diagnostic -> diagnostic.getCode().equals("VINJECT-DEP-001")
-                        && diagnostic.getSeverity() == DiagnosticSeverity.ERROR);
+                .anyMatch(diagnostic -> diagnostic.code().equals("VINJECT-DEP-001")
+                        && diagnostic.severity() == DiagnosticSeverity.ERROR);
     }
 
     @Test
@@ -47,8 +47,8 @@ class VinjectAnalyzerTest {
         VinjectAnalysisResult result = analyze(AmbiguousConsumer.class, AmbiguousProviderA.class, AmbiguousProviderB.class);
 
         assertThat(result.diagnostics())
-                .anyMatch(diagnostic -> diagnostic.getCode().equals("VINJECT-DEP-002")
-                        && diagnostic.getSeverity() == DiagnosticSeverity.ERROR);
+                .anyMatch(diagnostic -> diagnostic.code().equals("VINJECT-DEP-002")
+                        && diagnostic.severity() == DiagnosticSeverity.ERROR);
     }
 
     @Test
@@ -56,8 +56,8 @@ class VinjectAnalyzerTest {
         VinjectAnalysisResult result = analyze(ConstructorCycleA.class, ConstructorCycleB.class);
 
         assertThat(result.diagnostics())
-                .anyMatch(diagnostic -> diagnostic.getCode().equals("VINJECT-CYCLE-001")
-                        && diagnostic.getSeverity() == DiagnosticSeverity.ERROR);
+                .anyMatch(diagnostic -> diagnostic.code().equals("VINJECT-CYCLE-001")
+                        && diagnostic.severity() == DiagnosticSeverity.ERROR);
     }
 
     @Test
@@ -65,20 +65,20 @@ class VinjectAnalyzerTest {
         VinjectAnalysisResult result = analyze(FieldCycleA.class, FieldCycleB.class);
 
         assertThat(result.diagnostics())
-                .anyMatch(diagnostic -> diagnostic.getCode().equals("VINJECT-CYCLE-002")
-                        && diagnostic.getSeverity() == DiagnosticSeverity.WARNING);
+                .anyMatch(diagnostic -> diagnostic.code().equals("VINJECT-CYCLE-002")
+                        && diagnostic.severity() == DiagnosticSeverity.WARNING);
     }
 
     @Test
     void discoversBeanMethodProvidersAndValidatesVoidReturn() {
         VinjectAnalysisResult result = analyze(BeanService.class, ComponentC.class);
 
-        assertThat(result.applicationModel().getBeans())
-                .anyMatch(bean -> bean.getBeanType().equals(ProducedBean.class)
-                        && bean.getKind() == BeanKind.BEAN_METHOD);
+        assertThat(result.applicationModel().beans())
+                .anyMatch(bean -> bean.beanType().equals(ProducedBean.class)
+                        && bean.kind() == BeanKind.BEAN_METHOD);
         assertThat(result.diagnostics())
-                .anyMatch(diagnostic -> diagnostic.getCode().equals("VINJECT-BEAN-001")
-                        && diagnostic.getSeverity() == DiagnosticSeverity.ERROR);
+                .anyMatch(diagnostic -> diagnostic.code().equals("VINJECT-BEAN-001")
+                        && diagnostic.severity() == DiagnosticSeverity.ERROR);
     }
 
     @Test
@@ -86,7 +86,7 @@ class VinjectAnalyzerTest {
         VinjectAnalysisResult result = analyze(RegistryHandler.class, RegistryTarget.class);
 
         assertThat(result.hasErrors()).isFalse();
-        assertThat(result.applicationModel().getRegistryTargets())
+        assertThat(result.applicationModel().registryTargets())
                 .anyMatch(target -> target.targetClass().equals(RegistryTarget.class)
                         && target.handlerClass().equals(RegistryHandler.class));
         assertThat(result.loadPlan().componentLoadOrder()).contains(RegistryTarget.class);
@@ -97,8 +97,8 @@ class VinjectAnalyzerTest {
         VinjectAnalysisResult result = analyze(InvalidAliasComponent.class);
 
         assertThat(result.diagnostics())
-                .anyMatch(diagnostic -> diagnostic.getCode().equals("VINJECT-COMP-001")
-                        && diagnostic.getSeverity() == DiagnosticSeverity.ERROR);
+                .anyMatch(diagnostic -> diagnostic.code().equals("VINJECT-COMP-001")
+                        && diagnostic.severity() == DiagnosticSeverity.ERROR);
     }
 
     @Test

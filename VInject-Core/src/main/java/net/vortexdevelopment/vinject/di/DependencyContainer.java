@@ -318,7 +318,7 @@ public class DependencyContainer implements DependencyRepository {
     private void handleAnalyzerDiagnostics(VinjectAnalysisResult analysisResult) {
         for (Diagnostic diagnostic : analysisResult.diagnostics()) {
             String line = diagnostic.toString();
-            if (diagnostic.getSeverity() == DiagnosticSeverity.ERROR) {
+            if (diagnostic.severity() == DiagnosticSeverity.ERROR) {
                 System.err.println(line);
             } else {
                 System.out.println(line);
@@ -326,7 +326,7 @@ public class DependencyContainer implements DependencyRepository {
         }
         if (analysisResult.hasErrors()) {
             String errors = analysisResult.diagnostics().stream()
-                    .filter(diagnostic -> diagnostic.getSeverity() == DiagnosticSeverity.ERROR)
+                    .filter(diagnostic -> diagnostic.severity() == DiagnosticSeverity.ERROR)
                     .map(Diagnostic::toString)
                     .collect(Collectors.joining(System.lineSeparator()));
             throw new RuntimeException("VInject analyzer found errors:" + System.lineSeparator() + errors);

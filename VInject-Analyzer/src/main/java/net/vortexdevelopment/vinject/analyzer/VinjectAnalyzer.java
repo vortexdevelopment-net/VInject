@@ -1,6 +1,7 @@
 package net.vortexdevelopment.vinject.analyzer;
 
 import net.vortexdevelopment.vinject.analyzer.diagnostic.Diagnostic;
+import net.vortexdevelopment.vinject.analyzer.diagnostic.DiagnosticCode;
 import net.vortexdevelopment.vinject.analyzer.diagnostic.DiagnosticLocation;
 import net.vortexdevelopment.vinject.analyzer.model.ApplicationModel;
 import net.vortexdevelopment.vinject.analyzer.model.BeanKind;
@@ -92,11 +93,7 @@ public class VinjectAnalyzer {
         Root root = request.getRootAnnotation();
         Class<?> rootClass = request.getRootClass();
         if (root == null || rootClass == null) {
-            diagnostics.add(Diagnostic.error(
-                    "VINJECT-ANALYZER-001",
-                    "No root annotation/root class or candidate classes were provided for analysis",
-                    new DiagnosticLocation(null, null)
-            ));
+            diagnostics.add(Diagnostic.error(DiagnosticCode.ANALYZER_MISSING_INPUT));
             return Collections.emptySet();
         }
 
@@ -203,16 +200,17 @@ public class VinjectAnalyzer {
             return loadPredicate.test(clazz);
         } catch (RuntimeException e) {
             diagnostics.add(Diagnostic.error(
-                    "VINJECT-COND-001",
-                    e.getMessage(),
-                    DiagnosticLocation.classLocation(clazz)
+                    DiagnosticCode.CONDITION_EVALUATION_FAILED,
+                    DiagnosticLocation.classLocation(clazz),
+                    e.getMessage()
             ));
             return false;
         } catch (Throwable e) {
             diagnostics.add(Diagnostic.error(
-                    "VINJECT-COND-002",
-                    "Unable to evaluate load conditions for " + clazz.getName() + ": " + e.getMessage(),
-                    DiagnosticLocation.classLocation(clazz)
+                    DiagnosticCode.CONDITION_INSPECTION_FAILED,
+                    DiagnosticLocation.classLocation(clazz),
+                    clazz.getName(),
+                    e.getMessage()
             ));
             return false;
         }
@@ -229,15 +227,15 @@ public class VinjectAnalyzer {
 
         for (RegistryHandlerModel handler : discovery.registryHandlers) {
             for (Class<?> candidate : candidates) {
-                if (candidate.isAnnotationPresent(handler.getAnnotationClass())) {
+                if (candidate.isAnnotationPresent(handler.annotationClass())) {
                     RegistryTargetModel target = new RegistryTargetModel(
                             candidate,
-                            handler.getAnnotationClass(),
-                            handler.getHandlerClass(),
-                            handler.getOrder()
+                            handler.annotationClass(),
+                            handler.handlerClass(),
+                            handler.order()
                     );
                     discovery.registryTargets.add(target);
-                    if (handler.getOrder() == RegistryOrder.COMPONENTS) {
+                    if (handler.order() == RegistryOrder.COMPONENTS) {
                         discovery.componentLoadClasses.add(candidate);
                         discovery.beans.add(new BeanModel(candidate, candidate, BeanKind.REGISTRY_TARGET, priorityOf(candidate), null, Collections.emptySet()));
                     }
@@ -282,9 +280,9 @@ public class VinjectAnalyzer {
         Registry registry = clazz.getAnnotation(Registry.class);
         if (!extendsByName(clazz, "net.vortexdevelopment.vinject.di.registry.AnnotationHandler")) {
             diagnostics.add(Diagnostic.error(
-                    "VINJECT-REG-001",
-                    "@Registry class must extend AnnotationHandler: " + clazz.getName(),
-                    DiagnosticLocation.classLocation(clazz)
+                    DiagnosticCode.INVALID_REGISTRY_HANDLER,
+                    DiagnosticLocation.classLocation(clazz),
+                    clazz.getName()
             ));
             return;
         }
@@ -348,9 +346,10 @@ public class VinjectAnalyzer {
         for (Class<?> alias : component.registerSubclasses()) {
             if (!alias.isAssignableFrom(clazz)) {
                 diagnostics.add(Diagnostic.error(
-                        "VINJECT-COMP-001",
-                        "registerSubclasses target " + alias.getName() + " is not assignable from " + clazz.getName(),
-                        DiagnosticLocation.classLocation(clazz)
+                        DiagnosticCode.INVALID_COMPONENT_ALIAS,
+                        DiagnosticLocation.classLocation(clazz),
+                        alias.getName(),
+                        clazz.getName()
                 ));
             }
             aliases.add(alias);
@@ -367,17 +366,17 @@ public class VinjectAnalyzer {
         }
         if (!beanMethods.isEmpty() && !hasDefaultConstructor(serviceClass, diagnostics)) {
             diagnostics.add(Diagnostic.error(
-                    "VINJECT-BEAN-003",
-                    "@Service classes with @Bean methods must have a default constructor: " + serviceClass.getName(),
-                    DiagnosticLocation.classLocation(serviceClass)
+                    DiagnosticCode.INVALID_BEAN_SERVICE_CONSTRUCTOR,
+                    DiagnosticLocation.classLocation(serviceClass),
+                    serviceClass.getName()
             ));
         }
         for (Method method : beanMethods) {
             if (method.getReturnType().equals(Void.TYPE)) {
                 diagnostics.add(Diagnostic.error(
-                        "VINJECT-BEAN-001",
-                        "@Bean method must not return void: " + method.getName(),
-                        DiagnosticLocation.memberLocation(serviceClass, method.getName())
+                        DiagnosticCode.INVALID_BEAN_VOID_RETURN,
+                        DiagnosticLocation.memberLocation(serviceClass, method.getName()),
+                        method.getName()
                 ));
                 continue;
             }
@@ -386,9 +385,10 @@ public class VinjectAnalyzer {
             for (Class<?> alias : bean.registerSubclasses()) {
                 if (!alias.isAssignableFrom(method.getReturnType())) {
                     diagnostics.add(Diagnostic.error(
-                            "VINJECT-BEAN-004",
-                            "@Bean registerSubclasses target " + alias.getName() + " is not assignable from " + method.getReturnType().getName(),
-                            DiagnosticLocation.memberLocation(serviceClass, method.getName())
+                            DiagnosticCode.INVALID_BEAN_ALIAS,
+                            DiagnosticLocation.memberLocation(serviceClass, method.getName()),
+                            alias.getName(),
+                            method.getReturnType().getName()
                     ));
                 }
                 aliases.add(alias);
@@ -411,12 +411,12 @@ public class VinjectAnalyzer {
         }
 
         for (BeanModel bean : discovery.beans) {
-            if (bean.getKind() == BeanKind.BEAN_METHOD && bean.getBeanMethod() != null) {
+            if (bean.kind() == BeanKind.BEAN_METHOD && bean.beanMethod() != null) {
                 inspectExecutable(
-                        bean.getImplementationClass(),
-                        bean.getBeanMethod(),
+                        bean.implementationClass(),
+                        bean.beanMethod(),
                         DependencyEdgeKind.BEAN_METHOD,
-                        bean.getBeanMethod().getName(),
+                        bean.beanMethod().getName(),
                         true,
                         discovery,
                         request,
@@ -521,15 +521,17 @@ public class VinjectAnalyzer {
             DiagnosticLocation location = DiagnosticLocation.memberLocation(source, memberName);
             if (required) {
                 diagnostics.add(Diagnostic.error(
-                        "VINJECT-DEP-001",
-                        "Missing dependency " + requestedType.getName() + " required by " + source.getName(),
-                        location
+                        DiagnosticCode.MISSING_DEPENDENCY,
+                        location,
+                        requestedType.getName(),
+                        source.getName()
                 ));
             } else {
                 diagnostics.add(Diagnostic.warning(
-                        "VINJECT-DEP-003",
-                        "Optional dependency " + requestedType.getName() + " is not available for " + source.getName(),
-                        location
+                        DiagnosticCode.OPTIONAL_DEPENDENCY_UNRESOLVED,
+                        location,
+                        requestedType.getName(),
+                        source.getName()
                 ));
             }
             return;
@@ -537,37 +539,38 @@ public class VinjectAnalyzer {
 
         if (isYamlConfigurationClass(source)) {
             List<BeanModel> lateProviders = providers.stream()
-                    .filter(provider -> isLateYamlProvider(provider.getKind()))
+                    .filter(provider -> isLateYamlProvider(provider.kind()))
                     .toList();
             if (!lateProviders.isEmpty()) {
                 diagnostics.add(Diagnostic.error(
-                        "VINJECT-DEP-004",
-                        "Dependency " + requestedType.getName() + " required by YAML configuration " + source.getName()
-                                + " is not available during YAML configuration loading. Providers are loaded later: "
-                                + lateProviders.stream()
-                                .map(provider -> provider.getImplementationClass().getName() + " (" + provider.getKind() + ")")
-                                .collect(Collectors.joining(", ")),
-                        DiagnosticLocation.memberLocation(source, memberName)
+                        DiagnosticCode.YAML_EARLY_LOAD_DEPENDENCY,
+                        DiagnosticLocation.memberLocation(source, memberName),
+                        requestedType.getName(),
+                        source.getName(),
+                        lateProviders.stream()
+                                .map(provider -> provider.implementationClass().getName() + " (" + provider.kind() + ")")
+                                .collect(Collectors.joining(", "))
                 ));
                 return;
             }
         }
 
         Set<Class<?>> distinctProviders = providers.stream()
-                .map(BeanModel::getImplementationClass)
+                .map(BeanModel::implementationClass)
                 .collect(Collectors.toSet());
         if (distinctProviders.size() > 1) {
             diagnostics.add(Diagnostic.error(
-                    "VINJECT-DEP-002",
-                    "Ambiguous dependency " + requestedType.getName() + " required by " + source.getName() + ". Providers: "
-                            + distinctProviders.stream().map(Class::getName).collect(Collectors.joining(", ")),
-                    DiagnosticLocation.memberLocation(source, memberName)
+                    DiagnosticCode.AMBIGUOUS_DEPENDENCY,
+                    DiagnosticLocation.memberLocation(source, memberName),
+                    requestedType.getName(),
+                    source.getName(),
+                    distinctProviders.stream().map(Class::getName).collect(Collectors.joining(", "))
             ));
             return;
         }
 
         BeanModel provider = providers.get(0);
-        Class<?> target = provider.getImplementationClass();
+        Class<?> target = provider.implementationClass();
         if (!source.equals(target)) {
             edges.add(new DependencyEdge(source, target, kind, memberName, required, hard));
         }
@@ -608,9 +611,10 @@ public class VinjectAnalyzer {
             return false;
         } catch (NoClassDefFoundError | TypeNotPresentException e) {
             diagnostics.add(Diagnostic.warning(
-                    "VINJECT-ANALYZER-005",
-                    "Unable to inspect default constructor for " + clazz.getName() + ": " + e.getMessage(),
-                    DiagnosticLocation.classLocation(clazz)
+                    DiagnosticCode.ANALYZER_DEFAULT_CONSTRUCTOR_INSPECTION_FAILED,
+                    DiagnosticLocation.classLocation(clazz),
+                    clazz.getName(),
+                    e.getMessage()
             ));
             return true;
         }
@@ -621,9 +625,10 @@ public class VinjectAnalyzer {
             return clazz.getDeclaredMethods();
         } catch (NoClassDefFoundError | TypeNotPresentException e) {
             diagnostics.add(Diagnostic.warning(
-                    "VINJECT-ANALYZER-002",
-                    "Unable to inspect methods for " + clazz.getName() + ": " + e.getMessage(),
-                    DiagnosticLocation.classLocation(clazz)
+                    DiagnosticCode.ANALYZER_METHOD_INSPECTION_FAILED,
+                    DiagnosticLocation.classLocation(clazz),
+                    clazz.getName(),
+                    e.getMessage()
             ));
             return new Method[0];
         }
@@ -634,9 +639,10 @@ public class VinjectAnalyzer {
             return clazz.getDeclaredFields();
         } catch (NoClassDefFoundError | TypeNotPresentException e) {
             diagnostics.add(Diagnostic.warning(
-                    "VINJECT-ANALYZER-003",
-                    "Unable to inspect fields for " + clazz.getName() + ": " + e.getMessage(),
-                    DiagnosticLocation.classLocation(clazz)
+                    DiagnosticCode.ANALYZER_FIELD_INSPECTION_FAILED,
+                    DiagnosticLocation.classLocation(clazz),
+                    clazz.getName(),
+                    e.getMessage()
             ));
             return new Field[0];
         }
@@ -647,9 +653,10 @@ public class VinjectAnalyzer {
             return clazz.getDeclaredConstructors();
         } catch (NoClassDefFoundError | TypeNotPresentException e) {
             diagnostics.add(Diagnostic.warning(
-                    "VINJECT-ANALYZER-004",
-                    "Unable to inspect constructors for " + clazz.getName() + ": " + e.getMessage(),
-                    DiagnosticLocation.classLocation(clazz)
+                    DiagnosticCode.ANALYZER_CONSTRUCTOR_INSPECTION_FAILED,
+                    DiagnosticLocation.classLocation(clazz),
+                    clazz.getName(),
+                    e.getMessage()
             ));
             return new Constructor<?>[0];
         }
@@ -659,8 +666,8 @@ public class VinjectAnalyzer {
         Set<Class<?>> nodes = new LinkedHashSet<>(rawNodes);
         Map<Class<?>, List<DependencyEdge>> bySource = new LinkedHashMap<>();
         for (DependencyEdge edge : edges) {
-            if (nodes.contains(edge.getSource()) && nodes.contains(edge.getTarget())) {
-                bySource.computeIfAbsent(edge.getSource(), ignored -> new ArrayList<>()).add(edge);
+            if (nodes.contains(edge.source()) && nodes.contains(edge.target())) {
+                bySource.computeIfAbsent(edge.source(), ignored -> new ArrayList<>()).add(edge);
             }
         }
 
@@ -694,13 +701,13 @@ public class VinjectAnalyzer {
 
         visiting.addLast(node);
         List<DependencyEdge> dependencies = new ArrayList<>(bySource.getOrDefault(node, Collections.emptyList()));
-        dependencies.sort(Comparator.comparing(edge -> edge.getTarget().getName()));
+        dependencies.sort(Comparator.comparing(edge -> edge.target().getName()));
         for (DependencyEdge edge : dependencies) {
-            if (visiting.contains(edge.getTarget())) {
+            if (visiting.contains(edge.target())) {
                 reportCycle(edge, visiting, diagnostics);
                 continue;
             }
-            visit(edge.getTarget(), bySource, visited, visiting, sorted, diagnostics);
+            visit(edge.target(), bySource, visited, visiting, sorted, diagnostics);
         }
         visiting.removeLast();
         visited.add(node);
@@ -709,22 +716,22 @@ public class VinjectAnalyzer {
 
     private void reportCycle(DependencyEdge closingEdge, ArrayDeque<Class<?>> visiting, List<Diagnostic> diagnostics) {
         List<Class<?>> stack = new ArrayList<>(visiting);
-        int start = stack.indexOf(closingEdge.getTarget());
+        int start = stack.indexOf(closingEdge.target());
         List<Class<?>> cycle = start >= 0 ? stack.subList(start, stack.size()) : stack;
         String path = cycle.stream().map(Class::getSimpleName).collect(Collectors.joining(" -> "))
-                + " -> " + closingEdge.getTarget().getSimpleName();
+                + " -> " + closingEdge.target().getSimpleName();
 
-        if (closingEdge.isHard()) {
+        if (closingEdge.hard()) {
             diagnostics.add(Diagnostic.error(
-                    "VINJECT-CYCLE-001",
-                    "Constructor or lifecycle dependency cycle detected: " + path,
-                    DiagnosticLocation.classLocation(closingEdge.getSource())
+                    DiagnosticCode.HARD_DEPENDENCY_CYCLE,
+                    DiagnosticLocation.classLocation(closingEdge.source()),
+                    path
             ));
         } else {
             diagnostics.add(Diagnostic.warning(
-                    "VINJECT-CYCLE-002",
-                    "Field/setter dependency cycle will be deferred at runtime: " + path,
-                    DiagnosticLocation.classLocation(closingEdge.getSource())
+                    DiagnosticCode.DEFERRED_DEPENDENCY_CYCLE,
+                    DiagnosticLocation.classLocation(closingEdge.source()),
+                    path
             ));
         }
     }

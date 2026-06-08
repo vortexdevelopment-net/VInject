@@ -30,40 +30,82 @@ public final class ConfigurationValueConverter {
         this.factory = factory;
     }
 
-    public void mapToInstance(ConfigurationSection root, Object instance, Class<?> clazz, String basePath) throws Exception {
-        int itemRootCount = 0;
-        for (Field f : clazz.getDeclaredFields()) {
-            if (Modifier.isStatic(f.getModifiers())) continue;
-            if (f.isAnnotationPresent(ItemRoot.class)) itemRootCount++;
-        }
-        if (itemRootCount > 1) {
-            throw new IllegalArgumentException("At most one @ItemRoot field is allowed on " + clazz.getName());
+    private static final ThreadLocal<Boolean> MISSING_KEYS_TRACKER = new ThreadLocal<>();
+
+    public boolean mapToInstance(ConfigurationSection root, Object instance, Class<?> clazz, String basePath) throws Exception {
+        boolean isTopLevel = (MISSING_KEYS_TRACKER.get() == null);
+        if (isTopLevel) {
+            MISSING_KEYS_TRACKER.set(false);
         }
 
-        ConfigurationSection effectiveRoot = (basePath == null || basePath.isEmpty())
-                ? root
-                : root.getSection(basePath);
-
-        for (Field field : clazz.getDeclaredFields()) {
-            if (Modifier.isStatic(field.getModifiers())) continue;
-            field.setAccessible(true);
-
-            if (field.isAnnotationPresent(ItemRoot.class)) {
-                Class<?> ft = field.getType();
-                if (!ConfigurationSection.class.isAssignableFrom(ft)) {
-                    throw new IllegalArgumentException(
-                            "@ItemRoot field " + clazz.getName() + "." + field.getName() + " must be assignable to ConfigurationSection");
+        try {
+            int itemRootCount = 0;
+            for (Field f : clazz.getDeclaredFields()) {
+                if (Modifier.isStatic(f.getModifiers()) || f.isSynthetic()) {
+                    continue;
                 }
-                field.set(instance, effectiveRoot);
-                continue;
+                if (f.isAnnotationPresent(ItemRoot.class)) {
+                    itemRootCount++;
+                }
+            }
+            if (itemRootCount > 1) {
+                throw new IllegalArgumentException("At most one @ItemRoot field is allowed on " + clazz.getName());
             }
 
-            String keyPath = getKeyPath(field, basePath);
-            Object value = root.get(keyPath);
-            if (value == null) continue;
+            ConfigurationSection effectiveRoot = (basePath == null || basePath.isEmpty())
+                    ? root
+                    : root.getSection(basePath);
 
-            Object converted = convertValue(value, field.getGenericType(), field);
-            field.set(instance, converted);
+            for (Field field : clazz.getDeclaredFields()) {
+                if (Modifier.isStatic(field.getModifiers()) || field.isSynthetic()) {
+                    continue;
+                }
+                field.setAccessible(true);
+
+                if (field.isAnnotationPresent(ItemRoot.class)) {
+                    Class<?> ft = field.getType();
+                    if (!ConfigurationSection.class.isAssignableFrom(ft)) {
+                        throw new IllegalArgumentException(
+                                "@ItemRoot field " + clazz.getName() + "." + field.getName() + " must be assignable to ConfigurationSection");
+                    }
+                    field.set(instance, effectiveRoot);
+                    continue;
+                }
+
+                if (field.isAnnotationPresent(YamlId.class)
+                        || field.getName().startsWith("__vinject_yaml")) {
+                    String keyPath = getKeyPath(field, basePath);
+                    Object value = root.get(keyPath);
+                    if (value != null) {
+                        Object converted = convertValue(value, field.getGenericType(), field);
+                        field.set(instance, converted);
+                    }
+                    continue;
+                }
+
+                String keyPath = getKeyPath(field, basePath);
+                if (root == null || !root.contains(keyPath)) {
+                    MISSING_KEYS_TRACKER.set(true);
+                    continue;
+                }
+
+                Object value = root.get(keyPath);
+                if (value == null) {
+                    continue;
+                }
+
+                Object converted = convertValue(value, field.getGenericType(), field);
+                field.set(instance, converted);
+            }
+
+            if (isTopLevel) {
+                return MISSING_KEYS_TRACKER.get();
+            }
+            return false;
+        } finally {
+            if (isTopLevel) {
+                MISSING_KEYS_TRACKER.remove();
+            }
         }
     }
 
@@ -198,7 +240,8 @@ public final class ConfigurationValueConverter {
                     if (idField != null) {
                         try {
                             idField.setAccessible(true);
-                            idField.set(convertedValue, key.toString());
+                            Object convertedKey = convertValue(key, idField.getGenericType(), idField);
+                            idField.set(convertedValue, convertedKey);
                         } catch (Exception ignored) {}
                     }
                 }

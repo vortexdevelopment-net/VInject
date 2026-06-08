@@ -6,14 +6,10 @@ import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Set;
 
-public final class BeanModel {
-
-    private final Class<?> beanType;
-    private final Class<?> implementationClass;
-    private final BeanKind kind;
-    private final int priority;
-    private final Method beanMethod;
-    private final Set<Class<?>> aliases;
+public record BeanModel(Class<?> beanType, Class<?> implementationClass,
+                        BeanKind kind, int priority,
+                        Method beanMethod,
+                        Set<Class<?>> aliases) {
 
     public BeanModel(Class<?> beanType, Class<?> implementationClass, BeanKind kind, int priority, Method beanMethod, Set<Class<?>> aliases) {
         this.beanType = beanType;
@@ -22,30 +18,6 @@ public final class BeanModel {
         this.priority = priority;
         this.beanMethod = beanMethod;
         this.aliases = Collections.unmodifiableSet(new LinkedHashSet<>(aliases));
-    }
-
-    public Class<?> getBeanType() {
-        return beanType;
-    }
-
-    public Class<?> getImplementationClass() {
-        return implementationClass;
-    }
-
-    public BeanKind getKind() {
-        return kind;
-    }
-
-    public int getPriority() {
-        return priority;
-    }
-
-    public Method getBeanMethod() {
-        return beanMethod;
-    }
-
-    public Set<Class<?>> getAliases() {
-        return aliases;
     }
 
     public Set<Class<?>> getProvidedTypes() {

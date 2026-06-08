@@ -21,6 +21,6 @@ public record VinjectAnalysisResult(ApplicationModel applicationModel,
     }
 
     public boolean hasErrors() {
-        return diagnostics.stream().anyMatch(diagnostic -> diagnostic.getSeverity() == DiagnosticSeverity.ERROR);
+        return diagnostics.stream().anyMatch(diagnostic -> diagnostic.severity() == DiagnosticSeverity.ERROR);
     }
 }

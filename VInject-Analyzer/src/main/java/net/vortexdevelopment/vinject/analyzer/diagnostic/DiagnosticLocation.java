@@ -2,14 +2,10 @@ package net.vortexdevelopment.vinject.analyzer.diagnostic;
 
 import java.util.Objects;
 
-public final class DiagnosticLocation {
+public record DiagnosticLocation(String className, String memberName) {
 
-    private final String className;
-    private final String memberName;
-
-    public DiagnosticLocation(String className, String memberName) {
-        this.className = className;
-        this.memberName = memberName;
+    public static DiagnosticLocation unknown() {
+        return new DiagnosticLocation(null, null);
     }
 
     public static DiagnosticLocation classLocation(Class<?> clazz) {
@@ -18,14 +14,6 @@ public final class DiagnosticLocation {
 
     public static DiagnosticLocation memberLocation(Class<?> clazz, String memberName) {
         return new DiagnosticLocation(clazz != null ? clazz.getName() : null, memberName);
-    }
-
-    public String getClassName() {
-        return className;
-    }
-
-    public String getMemberName() {
-        return memberName;
     }
 
     @Override
@@ -43,8 +31,4 @@ public final class DiagnosticLocation {
         return Objects.equals(className, that.className) && Objects.equals(memberName, that.memberName);
     }
 
-    @Override
-    public int hashCode() {
-        return Objects.hash(className, memberName);
-    }
 }

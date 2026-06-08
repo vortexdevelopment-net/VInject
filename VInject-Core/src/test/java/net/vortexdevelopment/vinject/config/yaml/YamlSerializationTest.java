@@ -238,4 +238,62 @@ public class YamlSerializationTest {
         List<Integer> weights = config.getIntegerList("Settings.Weights");
         assertEquals(Arrays.asList(1, 2, 3), weights);
     }
+
+    @YamlItem
+    public static class ItemWithIntId {
+        @YamlId
+        private int id;
+
+        private String name;
+
+        public ItemWithIntId() {}
+        public ItemWithIntId(String name) {
+            this.name = name;
+        }
+
+        public int getId() {
+            return id;
+        }
+    }
+
+    @Test
+    public void testMapWithIntKeysAndYamlId() throws Exception {
+        net.vortexdevelopment.vinject.config.ConfigurationValueConverter converter =
+            new net.vortexdevelopment.vinject.config.ConfigurationValueConverter(clazz -> {
+                try {
+                    return clazz.getDeclaredConstructor().newInstance();
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+
+        YamlConfig config = YamlConfig.load(
+            "tiers:\n" +
+            "  1:\n" +
+            "    name: \"Tier One\"\n" +
+            "  2:\n" +
+            "    name: \"Tier Two\"\n"
+        );
+
+        class TargetHolder {
+            @Key("tiers")
+            private Map<Integer, ItemWithIntId> tiers;
+        }
+
+        TargetHolder holder = new TargetHolder();
+        converter.mapToInstance(config, holder, TargetHolder.class, "");
+
+        assertNotNull(holder.tiers);
+        assertEquals(2, holder.tiers.size());
+
+        ItemWithIntId t1 = holder.tiers.get(1);
+        assertNotNull(t1);
+        assertEquals(1, t1.getId());
+        assertEquals("Tier One", t1.name);
+
+        ItemWithIntId t2 = holder.tiers.get(2);
+        assertNotNull(t2);
+        assertEquals(2, t2.getId());
+        assertEquals("Tier Two", t2.name);
+    }
 }

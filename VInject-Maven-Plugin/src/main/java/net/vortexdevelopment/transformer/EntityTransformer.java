@@ -168,9 +168,9 @@ public class EntityTransformer extends AbstractMojo {
             VinjectAnalysisResult result = new VinjectAnalyzer().analyze(requestBuilder.build());
 
             for (Diagnostic diagnostic : result.diagnostics()) {
-                if (diagnostic.getSeverity() == DiagnosticSeverity.ERROR) {
+                if (diagnostic.severity() == DiagnosticSeverity.ERROR) {
                     getLog().error(diagnostic.toString());
-                } else if (diagnostic.getSeverity() == DiagnosticSeverity.WARNING) {
+                } else if (diagnostic.severity() == DiagnosticSeverity.WARNING) {
                     getLog().warn(diagnostic.toString());
                 } else {
                     getLog().info(diagnostic.toString());
@@ -179,7 +179,7 @@ public class EntityTransformer extends AbstractMojo {
 
             if (result.hasErrors()) {
                 String errors = result.diagnostics().stream()
-                        .filter(diagnostic -> diagnostic.getSeverity() == DiagnosticSeverity.ERROR)
+                        .filter(diagnostic -> diagnostic.severity() == DiagnosticSeverity.ERROR)
                         .map(Diagnostic::toString)
                         .collect(Collectors.joining(System.lineSeparator()));
                 throw new MojoExecutionException("VInject analyzer found errors:" + System.lineSeparator() + errors);

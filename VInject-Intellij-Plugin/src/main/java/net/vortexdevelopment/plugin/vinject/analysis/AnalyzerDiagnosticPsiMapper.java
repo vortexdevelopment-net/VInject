@@ -17,25 +17,25 @@ public final class AnalyzerDiagnosticPsiMapper {
     }
 
     public static @Nullable PsiElement findElement(Project project, Diagnostic diagnostic) {
-        DiagnosticLocation location = diagnostic.getLocation();
-        if (location == null || location.getClassName() == null) {
+        DiagnosticLocation location = diagnostic.location();
+        if (location == null || location.className() == null) {
             return null;
         }
 
         PsiClass psiClass = JavaPsiFacade.getInstance(project)
-                .findClass(location.getClassName(), GlobalSearchScope.projectScope(project));
-        if (psiClass == null || location.getMemberName() == null) {
+                .findClass(location.className(), GlobalSearchScope.projectScope(project));
+        if (psiClass == null || location.memberName() == null) {
             return psiClass;
         }
 
         for (PsiField field : psiClass.getFields()) {
-            if (location.getMemberName().equals(field.getName())) {
+            if (location.memberName().equals(field.getName())) {
                 return field;
             }
         }
 
         for (PsiMethod method : psiClass.getMethods()) {
-            if (location.getMemberName().equals(method.getName())) {
+            if (location.memberName().equals(method.getName())) {
                 return method;
             }
         }

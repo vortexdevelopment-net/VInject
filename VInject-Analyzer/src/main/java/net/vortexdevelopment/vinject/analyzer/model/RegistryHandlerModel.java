@@ -5,29 +5,9 @@ import net.vortexdevelopment.vinject.di.registry.RegistryOrder;
 import java.lang.annotation.Annotation;
 import java.util.Objects;
 
-public final class RegistryHandlerModel {
-
-    private final Class<?> handlerClass;
-    private final Class<? extends Annotation> annotationClass;
-    private final RegistryOrder order;
-
-    public RegistryHandlerModel(Class<?> handlerClass, Class<? extends Annotation> annotationClass, RegistryOrder order) {
-        this.handlerClass = handlerClass;
-        this.annotationClass = annotationClass;
-        this.order = order;
-    }
-
-    public Class<?> getHandlerClass() {
-        return handlerClass;
-    }
-
-    public Class<? extends Annotation> getAnnotationClass() {
-        return annotationClass;
-    }
-
-    public RegistryOrder getOrder() {
-        return order;
-    }
+public record RegistryHandlerModel(Class<?> handlerClass,
+                                   Class<? extends Annotation> annotationClass,
+                                   RegistryOrder order) {
 
     @Override
     public boolean equals(Object o) {
@@ -38,8 +18,4 @@ public final class RegistryHandlerModel {
                 && order == that.order;
     }
 
-    @Override
-    public int hashCode() {
-        return Objects.hash(handlerClass, annotationClass, order);
-    }
 }

@@ -250,21 +250,15 @@ public class ConfigurationContainer {
                 }
 
                 // Map data to instance
-                mapper.mapToInstance(config, instance, cfgClass, annotation.path());
+                boolean missingKeys = mapper.mapToInstance(config, instance, cfgClass, annotation.path());
 
                 // Invoke @OnLoad methods after all data is loaded
                 if (container != null) {
                     container.getLifecycleManager().invokeOnLoad(instance);
                 }
-
-                // Initial save if merging added keys (handled by saveToFile)
-                if (!newlyCopied) {
-                    try {
-                        saveToFile(instance, cfgClass, filePath, charset, annotation);
-                    } catch (Exception ignored) {
-                    }
+                if (missingKeys) {
+                    saveToFile(instance, cfgClass, filePath, charset, annotation);
                 }
-
                 // Store proxy as the delegate for saving/inspection (store original class too)
                 configs.put(cfgClass, new ConfigEntry(cfgClass, filePath, charset, annotation));
                 
