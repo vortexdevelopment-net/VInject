@@ -9,15 +9,23 @@ import java.util.Set;
 public record BeanModel(Class<?> beanType, Class<?> implementationClass,
                         BeanKind kind, int priority,
                         Method beanMethod,
-                        Set<Class<?>> aliases) {
+                        Set<Class<?>> aliases,
+                        String qualifierName) {
 
-    public BeanModel(Class<?> beanType, Class<?> implementationClass, BeanKind kind, int priority, Method beanMethod, Set<Class<?>> aliases) {
+    public BeanModel(Class<?> beanType, Class<?> implementationClass, BeanKind kind, int priority,
+                     Method beanMethod, Set<Class<?>> aliases, String qualifierName) {
         this.beanType = beanType;
         this.implementationClass = implementationClass;
         this.kind = kind;
         this.priority = priority;
         this.beanMethod = beanMethod;
         this.aliases = Collections.unmodifiableSet(new LinkedHashSet<>(aliases));
+        this.qualifierName = qualifierName == null ? "" : qualifierName;
+    }
+
+    public BeanModel(Class<?> beanType, Class<?> implementationClass, BeanKind kind, int priority,
+                     Method beanMethod, Set<Class<?>> aliases) {
+        this(beanType, implementationClass, kind, priority, beanMethod, aliases, "");
     }
 
     public Set<Class<?>> getProvidedTypes() {

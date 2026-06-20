@@ -15,7 +15,9 @@ import net.vortexdevelopment.vinject.analyzer.model.RegistryTargetModel;
 import net.vortexdevelopment.vinject.annotation.Bean;
 import net.vortexdevelopment.vinject.annotation.Inject;
 import net.vortexdevelopment.vinject.annotation.OptionalDependency;
+import net.vortexdevelopment.vinject.annotation.Qualifier;
 import net.vortexdevelopment.vinject.annotation.Value;
+import net.vortexdevelopment.vinject.util.TypeHierarchyUtils;
 import net.vortexdevelopment.vinject.annotation.component.Component;
 import net.vortexdevelopment.vinject.annotation.component.Registry;
 import net.vortexdevelopment.vinject.annotation.component.Repository;
@@ -86,19 +88,18 @@ public class VinjectAnalyzer {
     }
 
     private Set<Class<?>> collectCandidates(VinjectAnalysisRequest request, List<Diagnostic> diagnostics) {
-        if (!request.getCandidateClasses().isEmpty()) {
-            return new LinkedHashSet<>(request.getCandidateClasses());
-        }
+        Set<Class<?>> candidates = new LinkedHashSet<>(request.getCandidateClasses());
 
         Root root = request.getRootAnnotation();
         Class<?> rootClass = request.getRootClass();
         if (root == null || rootClass == null) {
-            diagnostics.add(Diagnostic.error(DiagnosticCode.ANALYZER_MISSING_INPUT));
-            return Collections.emptySet();
+            if (candidates.isEmpty()) {
+                diagnostics.add(Diagnostic.error(DiagnosticCode.ANALYZER_MISSING_INPUT));
+            }
+            return candidates;
         }
 
         Reflections reflections = new Reflections(createConfiguration(root, rootClass));
-        Set<Class<?>> candidates = new LinkedHashSet<>();
         candidates.add(rootClass);
         candidates.addAll(reflections.getTypesAnnotatedWith(Component.class));
         candidates.addAll(reflections.getTypesAnnotatedWith(Service.class));
@@ -132,13 +133,14 @@ public class VinjectAnalyzer {
         String rootPackagePath = rootPackage.replace('.', '/');
         String[] ignoredPackages = rootAnnotation.ignoredPackages();
         String[] includedPackages = rootAnnotation.includedPackages();
+        ClassLoader classLoader = rootClass.getClassLoader();
 
         ConfigurationBuilder builder = new ConfigurationBuilder();
         if (!rootPackage.isEmpty()) {
-            builder.forPackage(rootPackage);
+            builder.forPackage(rootPackage, classLoader);
         }
         for (String includedPackage : includedPackages) {
-            builder.forPackage(includedPackage);
+            builder.forPackage(includedPackage, classLoader);
         }
 
         builder.filterInputsBy(s -> {
@@ -264,7 +266,15 @@ public class VinjectAnalyzer {
 
             if (isComponentLike(clazz, request)) {
                 discovery.componentLoadClasses.add(clazz);
-                discovery.beans.add(new BeanModel(clazz, clazz, BeanKind.COMPONENT, priorityOf(clazz), null, componentAliases(clazz, diagnostics)));
+                discovery.beans.add(new BeanModel(
+                        clazz,
+                        clazz,
+                        BeanKind.COMPONENT,
+                        priorityOf(clazz),
+                        null,
+                        componentAliases(clazz, diagnostics),
+                        resolveBeanName(clazz)
+                ));
             }
         }
 
@@ -338,11 +348,11 @@ public class VinjectAnalyzer {
     }
 
     private Set<Class<?>> componentAliases(Class<?> clazz, List<Diagnostic> diagnostics) {
+        Set<Class<?>> aliases = new LinkedHashSet<>(TypeHierarchyUtils.collectRegistrationTypes(clazz));
         Component component = clazz.getAnnotation(Component.class);
         if (component == null) {
-            return Collections.emptySet();
+            return aliases;
         }
-        Set<Class<?>> aliases = new LinkedHashSet<>();
         for (Class<?> alias : component.registerSubclasses()) {
             if (!alias.isAssignableFrom(clazz)) {
                 diagnostics.add(Diagnostic.error(
@@ -355,6 +365,39 @@ public class VinjectAnalyzer {
             aliases.add(alias);
         }
         return aliases;
+    }
+
+    private String resolveBeanName(Class<?> clazz) {
+        Qualifier qualifier = clazz.getAnnotation(Qualifier.class);
+        if (qualifier != null && !qualifier.value().isEmpty()) {
+            return qualifier.value();
+        }
+        Component component = clazz.getAnnotation(Component.class);
+        if (component != null && !component.name().isEmpty()) {
+            return component.name();
+        }
+        return "";
+    }
+
+    private String resolveBeanMethodName(Method method) {
+        Qualifier qualifier = method.getAnnotation(Qualifier.class);
+        if (qualifier != null && !qualifier.value().isEmpty()) {
+            return qualifier.value();
+        }
+        Bean bean = method.getAnnotation(Bean.class);
+        if (bean != null && !bean.name().isEmpty()) {
+            return bean.name();
+        }
+        return "";
+    }
+
+    private String extractQualifier(Annotation[] annotations) {
+        for (Annotation annotation : annotations) {
+            if (annotation instanceof Qualifier qualifier && !qualifier.value().isEmpty()) {
+                return qualifier.value();
+            }
+        }
+        return "";
     }
 
     private void discoverBeanMethods(Class<?> serviceClass, Discovery discovery, List<Diagnostic> diagnostics) {
@@ -381,7 +424,7 @@ public class VinjectAnalyzer {
                 continue;
             }
             Bean bean = method.getAnnotation(Bean.class);
-            Set<Class<?>> aliases = new LinkedHashSet<>();
+            Set<Class<?>> aliases = new LinkedHashSet<>(TypeHierarchyUtils.collectRegistrationTypes(method.getReturnType()));
             for (Class<?> alias : bean.registerSubclasses()) {
                 if (!alias.isAssignableFrom(method.getReturnType())) {
                     diagnostics.add(Diagnostic.error(
@@ -393,7 +436,15 @@ public class VinjectAnalyzer {
                 }
                 aliases.add(alias);
             }
-            discovery.beans.add(new BeanModel(method.getReturnType(), serviceClass, BeanKind.BEAN_METHOD, 0, method, aliases));
+            discovery.beans.add(new BeanModel(
+                    method.getReturnType(),
+                    serviceClass,
+                    BeanKind.BEAN_METHOD,
+                    0,
+                    method,
+                    aliases,
+                    resolveBeanMethodName(method)
+            ));
         }
     }
 
@@ -452,6 +503,7 @@ public class VinjectAnalyzer {
                     DependencyEdgeKind.FIELD,
                     !field.isAnnotationPresent(OptionalDependency.class),
                     false,
+                    extractQualifier(field.getAnnotations()),
                     discovery,
                     request,
                     edges,
@@ -496,7 +548,19 @@ public class VinjectAnalyzer {
                 continue;
             }
             boolean required = !hasAnnotation(parameterAnnotations[i], OptionalDependency.class);
-            inspectDependency(source, parameters[i].getType(), memberName, kind, required, hard, discovery, request, edges, diagnostics);
+            inspectDependency(
+                    source,
+                    parameters[i].getType(),
+                    memberName,
+                    kind,
+                    required,
+                    hard,
+                    extractQualifier(parameterAnnotations[i]),
+                    discovery,
+                    request,
+                    edges,
+                    diagnostics
+            );
         }
     }
 
@@ -507,6 +571,7 @@ public class VinjectAnalyzer {
             DependencyEdgeKind kind,
             boolean required,
             boolean hard,
+            String qualifierName,
             Discovery discovery,
             VinjectAnalysisRequest request,
             List<DependencyEdge> edges,
@@ -517,6 +582,31 @@ public class VinjectAnalyzer {
         }
 
         List<BeanModel> providers = discovery.providers.getOrDefault(requestedType, Collections.emptyList());
+        if (!qualifierName.isEmpty()) {
+            providers = providers.stream()
+                    .filter(provider -> qualifierName.equals(provider.qualifierName()))
+                    .toList();
+            if (providers.isEmpty()) {
+                DiagnosticLocation location = DiagnosticLocation.memberLocation(source, memberName);
+                if (required) {
+                    diagnostics.add(Diagnostic.error(
+                            DiagnosticCode.MISSING_NAMED_DEPENDENCY,
+                            location,
+                            qualifierName,
+                            requestedType.getName(),
+                            source.getName()
+                    ));
+                } else {
+                    diagnostics.add(Diagnostic.warning(
+                            DiagnosticCode.OPTIONAL_DEPENDENCY_UNRESOLVED,
+                            location,
+                            requestedType.getName() + " (qualifier: " + qualifierName + ")",
+                            source.getName()
+                    ));
+                }
+                return;
+            }
+        }
         if (providers.isEmpty()) {
             DiagnosticLocation location = DiagnosticLocation.memberLocation(source, memberName);
             if (required) {

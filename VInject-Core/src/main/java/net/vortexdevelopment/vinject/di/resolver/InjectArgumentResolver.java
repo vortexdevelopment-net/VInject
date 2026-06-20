@@ -1,6 +1,7 @@
 package net.vortexdevelopment.vinject.di.resolver;
 
 import net.vortexdevelopment.vinject.annotation.ArgumentResolver;
+import net.vortexdevelopment.vinject.annotation.Qualifier;
 import net.vortexdevelopment.vinject.annotation.component.Component;
 import net.vortexdevelopment.vinject.annotation.Conditional;
 import net.vortexdevelopment.vinject.annotation.Inject;
@@ -10,6 +11,8 @@ import net.vortexdevelopment.vinject.annotation.component.Service;
 import net.vortexdevelopment.vinject.annotation.lifecycle.PostConstruct;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConditional;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
+
+import net.vortexdevelopment.vinject.di.utils.BeanNamingUtils;
 
 import java.lang.reflect.Field;
 import java.util.List;
@@ -67,7 +70,18 @@ public class InjectArgumentResolver implements ArgumentResolverProcessor {
     @Override
     public Object resolve(ArgumentResolverContext context) {
         Class<?> targetType = context.getTargetType();
-        
+        String qualifier = BeanNamingUtils.extractQualifier(context.getAnnotations());
+
+        if (!qualifier.isEmpty()) {
+            Object qualified = context.getContainer().getQualifiedDependencyOrNull(qualifier, targetType);
+            if (qualified == null && !context.hasAnnotation(OptionalDependency.class)) {
+                throw new RuntimeException("Named dependency '" + qualifier + "' of type "
+                        + targetType.getName() + " was not found"
+                        + formatInjectionLocation(context));
+            }
+            return qualified;
+        }
+
         // Check if dependency exists in container
         Object dependency = context.getContainer().getDependencyOrNull(targetType);
         
@@ -188,6 +202,16 @@ public class InjectArgumentResolver implements ArgumentResolverProcessor {
         }
         
         return dependency;
+    }
+
+    private String formatInjectionLocation(ArgumentResolverContext context) {
+        if (context.isField() && context.getField() != null) {
+            return " in field: " + context.getField().getName() + " of class: " + context.getDeclaringClass().getName();
+        }
+        if (context.isParameter()) {
+            return " in class: " + context.getDeclaringClass().getName();
+        }
+        return "";
     }
     
 }

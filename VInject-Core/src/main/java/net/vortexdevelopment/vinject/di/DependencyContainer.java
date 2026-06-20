@@ -41,7 +41,9 @@ import net.vortexdevelopment.vinject.di.resolver.ArgumentResolverContext;
 import net.vortexdevelopment.vinject.di.resolver.ArgumentResolverProcessor;
 import net.vortexdevelopment.vinject.di.resolver.ArgumentResolverRegistry;
 import net.vortexdevelopment.vinject.di.scan.ClasspathScanner;
+import net.vortexdevelopment.vinject.di.utils.BeanNamingUtils;
 import net.vortexdevelopment.vinject.di.utils.DependencyUtils;
+import net.vortexdevelopment.vinject.util.TypeHierarchyUtils;
 import net.vortexdevelopment.vinject.event.EventManager;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -59,6 +61,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -69,6 +72,8 @@ import java.util.stream.Collectors;
 public class DependencyContainer implements DependencyRepository {
 
     @Getter private final Map<Class<?>, Object> dependencies;
+    private final Map<String, Object> namedDependencies = new ConcurrentHashMap<>();
+    private final Map<Class<?>, Set<Object>> ambiguousProviders = new ConcurrentHashMap<>();
     @Getter private final Class<?> rootClass;
     private final Set<Class<?>> entities;
     private final Set<Class<?>> elementClasses;
@@ -430,11 +435,14 @@ public class DependencyContainer implements DependencyRepository {
             }
 
             // Register the instance in the dependency container BEFORE injecting fields
-            Class<?>[] subclasses = {};
+            Class<?>[] explicitAliases = {};
+            String beanName = "";
             if (clazz.isAnnotationPresent(Component.class)) {
-                subclasses = clazz.getAnnotation(Component.class).registerSubclasses();
+                Component componentAnnotation = clazz.getAnnotation(Component.class);
+                explicitAliases = componentAnnotation.registerSubclasses();
+                beanName = BeanNamingUtils.resolveComponentName(clazz);
             }
-            registerInstanceAndSubclasses(clazz, instance, subclasses, cache);
+            registerInstanceAndSubclasses(clazz, instance, explicitAliases, beanName, cache, true);
             
             // Inject static fields (now safe to refer to the class itself)
             injectionEngine.injectStatic(clazz);
@@ -453,19 +461,79 @@ public class DependencyContainer implements DependencyRepository {
         }
     }
 
-    private void registerInstanceAndSubclasses(Class<?> clazz, Object instance, Class<?>[] subclasses, boolean cache) {
-        if (!cache) return;
-        dependencies.put(clazz, instance);
-        for (Class<?> subclass : subclasses) {
-            dependencies.put(subclass, instance);
+    private void registerInstanceAndSubclasses(
+            Class<?> clazz,
+            Object instance,
+            Class<?>[] explicitSubclasses,
+            String beanName,
+            boolean cache,
+            boolean autoRegisterInheritedTypes
+    ) {
+        if (!cache) {
+            return;
         }
 
-        // Notify interceptors
+        registerProviderType(clazz, instance, false);
+
+        if (beanName != null && !beanName.isEmpty()) {
+            Object existingNamed = namedDependencies.putIfAbsent(beanName, instance);
+            if (existingNamed != null && existingNamed != instance) {
+                throw new RuntimeException("Duplicate named bean '" + beanName + "' registered by "
+                        + existingNamed.getClass().getName() + " and " + clazz.getName());
+            }
+        }
+
+        Set<Class<?>> types = new LinkedHashSet<>();
+        if (autoRegisterInheritedTypes) {
+            types.addAll(TypeHierarchyUtils.collectRegistrationTypes(clazz));
+        }
+        if (explicitSubclasses != null) {
+            for (Class<?> explicitSubclass : explicitSubclasses) {
+                types.add(explicitSubclass);
+            }
+        }
+
+        for (Class<?> type : types) {
+            registerProviderType(type, instance, true);
+        }
+
+        notifyComponentRegistered(clazz, instance);
+    }
+
+    private void notifyComponentRegistered(Class<?> clazz, Object instance) {
         if (componentInterceptors != null) {
             for (ComponentInterceptor interceptor : componentInterceptors) {
                 interceptor.onComponentRegistered(clazz, instance, this);
             }
         }
+    }
+
+    private void registerProviderType(Class<?> type, Object instance, boolean inheritedType) {
+        if (!inheritedType) {
+            dependencies.put(type, instance);
+            ambiguousProviders.remove(type);
+            return;
+        }
+
+        Object existing = dependencies.get(type);
+        if (existing == null) {
+            dependencies.put(type, instance);
+            return;
+        }
+        if (existing == instance) {
+            return;
+        }
+
+        dependencies.remove(type);
+        Set<Object> providers = ambiguousProviders.computeIfAbsent(type, k -> new LinkedHashSet<>());
+        if (providers.isEmpty()) {
+            providers.add(existing);
+        }
+        providers.add(instance);
+    }
+
+    private void registerInstanceAndSubclasses(Class<?> clazz, Object instance, Class<?>[] subclasses, boolean cache) {
+        registerInstanceAndSubclasses(clazz, instance, subclasses, "", cache, false);
     }
 
     private Object[] resolveParameters(Class<?> declaringClass, Executable executable, @Nullable Object instance, Object... extraArgs) {
@@ -545,9 +613,39 @@ public class DependencyContainer implements DependencyRepository {
             return contextBean;
         }
 
+        Set<Object> ambiguous = ambiguousProviders.get(dependency);
+        if (ambiguous != null && !ambiguous.isEmpty()) {
+            throw createAmbiguousDependencyException(dependency, ambiguous);
+        }
+
         // 2. Check main singleton cache
         Object result = dependencies.get(dependency);
         return result != null ? dependency.cast(result) : null;
+    }
+
+    public <T> @Nullable T getQualifiedDependencyOrNull(String qualifier, Class<T> type) {
+        if (qualifier == null || qualifier.isEmpty()) {
+            return getDependencyOrNull(type);
+        }
+
+        Object result = namedDependencies.get(qualifier);
+        if (result == null) {
+            return null;
+        }
+        if (!type.isInstance(result)) {
+            throw new RuntimeException("Named bean '" + qualifier + "' is not assignable to "
+                    + type.getName() + " (actual: " + result.getClass().getName() + ")");
+        }
+        return type.cast(result);
+    }
+
+    private RuntimeException createAmbiguousDependencyException(Class<?> type, Set<Object> providers) {
+        String providerNames = providers.stream()
+                .map(instance -> instance.getClass().getName())
+                .collect(Collectors.joining(", "));
+        return new RuntimeException("Ambiguous dependency for type " + type.getName()
+                + ". Multiple beans found: " + providerNames
+                + ". Inject the concrete type or add @Qualifier(\"name\") to select a named bean.");
     }
 
     /**
@@ -628,7 +726,14 @@ public class DependencyContainer implements DependencyRepository {
                 lifecycleManager.invokePostConstruct(beanInstance);
 
                 Bean annotation = beanMethod.getAnnotation(Bean.class);
-                registerInstanceAndSubclasses(beanMethod.getReturnType(), beanInstance, annotation.registerSubclasses(), true);
+                registerInstanceAndSubclasses(
+                        beanMethod.getReturnType(),
+                        beanInstance,
+                        annotation.registerSubclasses(),
+                        BeanNamingUtils.resolveBeanMethodName(beanMethod),
+                        true,
+                        false
+                );
             }
         } catch (Exception e) {
             if (e instanceof RuntimeException re) throw re;

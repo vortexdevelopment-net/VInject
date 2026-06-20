@@ -4,6 +4,7 @@ import net.vortexdevelopment.vinject.analyzer.diagnostic.DiagnosticSeverity;
 import net.vortexdevelopment.vinject.analyzer.model.BeanKind;
 import net.vortexdevelopment.vinject.annotation.Bean;
 import net.vortexdevelopment.vinject.annotation.Inject;
+import net.vortexdevelopment.vinject.annotation.Qualifier;
 import net.vortexdevelopment.vinject.annotation.component.Component;
 import net.vortexdevelopment.vinject.annotation.component.Registry;
 import net.vortexdevelopment.vinject.annotation.component.Root;
@@ -11,6 +12,7 @@ import net.vortexdevelopment.vinject.annotation.component.Service;
 import net.vortexdevelopment.vinject.annotation.lifecycle.PostConstruct;
 import net.vortexdevelopment.vinject.analyzer.fixtures.included.IncludedPackageComponent;
 import net.vortexdevelopment.vinject.analyzer.fixtures.root.IncludedPackageRoot;
+import net.vortexdevelopment.vinject.analyzer.fixtures.root.RootPackageComponent;
 import net.vortexdevelopment.vinject.di.registry.AnnotationHandler;
 import org.junit.jupiter.api.Test;
 
@@ -48,6 +50,33 @@ class VinjectAnalyzerTest {
 
         assertThat(result.diagnostics())
                 .anyMatch(diagnostic -> diagnostic.code().equals("VINJECT-DEP-002")
+                        && diagnostic.severity() == DiagnosticSeverity.ERROR);
+    }
+
+    @Test
+    void autoRegistersInterfaceWithoutRegisterSubclasses() {
+        VinjectAnalysisResult result = analyze(AutoPortConsumer.class, AutoPortImpl.class);
+
+        assertThat(result.hasErrors()).isFalse();
+    }
+
+    @Test
+    void resolvesQualifierWhenMultipleProvidersExist() {
+        VinjectAnalysisResult result = analyze(
+                NamedPortConsumer.class,
+                NamedPortProviderA.class,
+                NamedPortProviderB.class
+        );
+
+        assertThat(result.hasErrors()).isFalse();
+    }
+
+    @Test
+    void reportsMissingNamedDependency() {
+        VinjectAnalysisResult result = analyze(MissingNamedConsumer.class, NamedPortProviderA.class);
+
+        assertThat(result.diagnostics())
+                .anyMatch(diagnostic -> diagnostic.code().equals("VINJECT-DEP-005")
                         && diagnostic.severity() == DiagnosticSeverity.ERROR);
     }
 
@@ -113,6 +142,20 @@ class VinjectAnalyzerTest {
         assertThat(result.loadPlan().componentLoadOrder()).contains(IncludedPackageComponent.class);
     }
 
+    @Test
+    void rootScanningMergesWithExplicitCandidateClasses() {
+        Root root = IncludedPackageRoot.class.getAnnotation(Root.class);
+
+        VinjectAnalysisResult result = new VinjectAnalyzer().analyze(VinjectAnalysisRequest.builder()
+                .candidateClasses(Set.of(IncludedPackageRoot.class))
+                .root(root, IncludedPackageRoot.class)
+                .build());
+
+        assertThat(result.hasErrors()).isFalse();
+        assertThat(result.loadPlan().componentLoadOrder())
+                .contains(RootPackageComponent.class, IncludedPackageComponent.class);
+    }
+
     private VinjectAnalysisResult analyze(Class<?>... classes) {
         return new VinjectAnalyzer().analyze(VinjectAnalysisRequest.builder()
                 .candidateClasses(Set.of(classes))
@@ -155,6 +198,41 @@ class VinjectAnalyzerTest {
     @Component
     static class AmbiguousConsumer {
         @Inject AmbiguousPort port;
+    }
+
+    interface AutoPort {
+    }
+
+    @Component
+    static class AutoPortImpl implements AutoPort {
+    }
+
+    @Component
+    static class AutoPortConsumer {
+        @Inject AutoPort port;
+    }
+
+    @Component(name = "portA")
+    static class NamedPortProviderA implements AmbiguousPort {
+    }
+
+    @Qualifier("portB")
+    @Component
+    static class NamedPortProviderB implements AmbiguousPort {
+    }
+
+    @Component
+    static class NamedPortConsumer {
+        @Inject
+        @Qualifier("portB")
+        AmbiguousPort port;
+    }
+
+    @Component
+    static class MissingNamedConsumer {
+        @Inject
+        @Qualifier("missing")
+        AmbiguousPort port;
     }
 
     @Component

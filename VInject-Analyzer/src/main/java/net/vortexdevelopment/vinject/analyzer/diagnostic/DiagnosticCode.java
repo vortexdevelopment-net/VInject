@@ -37,6 +37,10 @@ public enum DiagnosticCode {
 
     MISSING_DEPENDENCY("VINJECT-DEP-001", "Missing dependency %s required by %s"),
     AMBIGUOUS_DEPENDENCY("VINJECT-DEP-002", "Ambiguous dependency %s required by %s. Providers: %s"),
+    MISSING_NAMED_DEPENDENCY(
+            "VINJECT-DEP-005",
+            "Named dependency '%s' of type %s required by %s was not found"
+    ),
     OPTIONAL_DEPENDENCY_UNRESOLVED("VINJECT-DEP-003", "Optional dependency %s is not available for %s"),
     YAML_EARLY_LOAD_DEPENDENCY(
             "VINJECT-DEP-004",

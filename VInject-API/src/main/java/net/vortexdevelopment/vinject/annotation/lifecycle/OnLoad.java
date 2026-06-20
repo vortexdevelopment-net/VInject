@@ -6,10 +6,10 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Annotation for methods that should be called after an entity is loaded from the database
- * and all fields have been set. Methods annotated with @OnLoad will be invoked after all
- * database fields have been mapped to the entity instance.
- * These methods should return void and can optionally accept parameters for dependency injection.
+ * Annotation for methods called after a YAML config object or database entity has its fields
+ * mapped. Methods annotated with @OnLoad are invoked after YAML/entity hydration - not as a
+ * general @Component startup hook (use @PostConstruct for that).
+ * These methods must return void. Parameters are optional and resolved from the container.
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.METHOD)

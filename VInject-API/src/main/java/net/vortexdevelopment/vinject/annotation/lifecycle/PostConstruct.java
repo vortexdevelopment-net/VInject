@@ -9,7 +9,7 @@ import java.lang.annotation.Target;
  * Annotation for methods that should be called after the constructor completes
  * and dependency injection is finished. Methods annotated with @PostConstruct will be
  * invoked after all dependencies have been injected into the component.
- * These methods should have no parameters and return void.
+ * These methods must return void. Parameters are optional and resolved from the container.
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.METHOD)

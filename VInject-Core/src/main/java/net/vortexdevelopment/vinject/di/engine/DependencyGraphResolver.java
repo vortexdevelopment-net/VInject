@@ -140,12 +140,24 @@ public class DependencyGraphResolver {
     }
 
     private Class<?> getProvidingClass(Set<Class<?>> components, Class<?> searchedClass) {
+        Class<?> match = null;
         for (Class<?> clazz : components) {
+            if (searchedClass.isAssignableFrom(clazz)) {
+                if (match != null && !match.equals(clazz)) {
+                    return null;
+                }
+                match = clazz;
+                continue;
+            }
+
             Component component = clazz.getAnnotation(Component.class);
             if (component != null) {
                 for (Class<?> providingClass : component.registerSubclasses()) {
                     if (providingClass.equals(searchedClass)) {
-                        return clazz;
+                        if (match != null && !match.equals(clazz)) {
+                            return null;
+                        }
+                        match = clazz;
                     }
                 }
             }
@@ -154,12 +166,15 @@ public class DependencyGraphResolver {
             if (bean != null) {
                 for (Class<?> providingClass : bean.registerSubclasses()) {
                     if (providingClass.equals(searchedClass)) {
-                        return clazz;
+                        if (match != null && !match.equals(clazz)) {
+                            return null;
+                        }
+                        match = clazz;
                     }
                 }
             }
         }
-        return null;
+        return match;
     }
 
     private LinkedList<Class<?>> performTopologicalSort(Map<Class<?>, Set<Class<?>>> dependencyGraph) {

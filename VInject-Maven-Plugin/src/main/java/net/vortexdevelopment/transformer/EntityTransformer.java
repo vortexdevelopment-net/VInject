@@ -148,6 +148,10 @@ public class EntityTransformer extends AbstractMojo {
     private void runAnalyzer(File classesRoot) throws MojoExecutionException {
         try (LoadedClasses loadedClasses = loadClasses(classesRoot)) {
             Set<Class<?>> classes = loadedClasses.classes();
+            if (classes.isEmpty()) {
+                getLog().debug("Skipping VInject analysis because no classes were found in " + classesRoot);
+                return;
+            }
             VinjectAnalysisRequest.Builder requestBuilder = VinjectAnalysisRequest.builder()
                     .candidateClasses(classes);
 
