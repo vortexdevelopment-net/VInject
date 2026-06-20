@@ -43,13 +43,26 @@ public class Database implements DatabaseConnector {
     }
 
     public Database(String host, String port, String database, String type, String username, String password, int maxPoolSize, File h2File) {
-        init(host, port, database, type, username, password, maxPoolSize, h2File);
+        init(host, port, database, type, username, password, maxPoolSize, h2File, true);
+    }
+
+    public Database(String host, String port, String database, String type, String username, String password, int maxPoolSize, File h2File, boolean h2ServerModeEnabled) {
+        init(host, port, database, type, username, password, maxPoolSize, h2File, h2ServerModeEnabled);
     }
 
     /**
      * Initialize the database connection parameters.
      */
     public void init(String host, String port, String database, String type, String username, String password, int maxPoolSize, File h2File) {
+        init(host, port, database, type, username, password, maxPoolSize, h2File, true);
+    }
+
+    /**
+     * Initialize the database connection parameters.
+     *
+     * @param h2ServerModeEnabled when {@code true}, file-based H2 databases use AUTO_SERVER mode (default).
+     */
+    public void init(String host, String port, String database, String type, String username, String password, int maxPoolSize, File h2File, boolean h2ServerModeEnabled) {
         hikariConfig = new HikariConfig();
 
         if (type.equalsIgnoreCase("h2")) {
@@ -67,8 +80,7 @@ public class Database implements DatabaseConnector {
                 // AUTO_RECONNECT=TRUE enables automatic reconnection
                 // Note: DB_CLOSE_ON_EXIT cannot be used with AUTO_SERVER
                 String filePath = h2File.getPath().replaceAll("\\\\", "/");
-                boolean autoServer = Boolean.parseBoolean(System.getProperty("vinject.database.h2.autoServer", "true"));
-                hikariConfig.setJdbcUrl("jdbc:h2:file:./" + filePath + (autoServer ? ";AUTO_SERVER=TRUE" : "") + ";AUTO_RECONNECT=TRUE;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE");
+                hikariConfig.setJdbcUrl("jdbc:h2:file:./" + filePath + (h2ServerModeEnabled ? ";AUTO_SERVER=TRUE" : "") + ";AUTO_RECONNECT=TRUE;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE");
             }
 
         } else {

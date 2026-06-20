@@ -73,7 +73,8 @@ public class MockDatabaseBuilder {
                 "sa",            // username
                 "",              // password
                 10,              // max pool size
-                dbFile           // h2 file
+                dbFile,          // h2 file
+                false            // disable AUTO_SERVER for parallel file-based tests
         );
         database.connect();
         return database;
