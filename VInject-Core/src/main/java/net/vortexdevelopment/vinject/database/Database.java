@@ -67,7 +67,8 @@ public class Database implements DatabaseConnector {
                 // AUTO_RECONNECT=TRUE enables automatic reconnection
                 // Note: DB_CLOSE_ON_EXIT cannot be used with AUTO_SERVER
                 String filePath = h2File.getPath().replaceAll("\\\\", "/");
-                hikariConfig.setJdbcUrl("jdbc:h2:file:./" + filePath + ";AUTO_SERVER=TRUE;AUTO_RECONNECT=TRUE;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE");
+                boolean autoServer = Boolean.parseBoolean(System.getProperty("vinject.database.h2.autoServer", "true"));
+                hikariConfig.setJdbcUrl("jdbc:h2:file:./" + filePath + (autoServer ? ";AUTO_SERVER=TRUE" : "") + ";AUTO_RECONNECT=TRUE;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE");
             }
 
         } else {
