@@ -9,7 +9,8 @@ A comprehensive catalog of annotations and features available in the VInject fra
 | Annotation | Target | Description |
 | --- | --- | --- |
 | `@Root` | Type | Marks the main application class. Triggers package scanning. Configuration properties: `packageName`, `ignoredPackages`, `includedPackages`, `createInstance`, `loadProperties`, `templateDependencies`. |
-| `@Component` | Type | Marks a class as a framework-managed component. Supports interface mapping via `registerSubclasses`. |
+| `@Component` | Type | Managed singleton. Auto-registers inherited types. Optional `name`, `registerSubclasses`, `priority`. |
+| `@Qualifier` | Type, Field, Parameter, Method | Bean name on producer or selector on injection point. |
 | `@Service` | Type | Marks a class as a business-logic service. |
 | `@Bean` | Method | Defines a factory method inside a component/service to register external or dynamically created classes. |
 | `@Repository` | Type | Marks an interface as a database repository for automated query generation. |
@@ -25,12 +26,14 @@ A comprehensive catalog of annotations and features available in the VInject fra
 
 ## 2. Component Lifecycle Hooks
 
+See [lifecycle-and-events.md](lifecycle-and-events.md) for full detail.
+
 | Annotation | Target | Description |
 | --- | --- | --- |
-| `@PostConstruct` | Method | Executed on a component immediately after its dependencies are injected. |
-| `@OnLoad` | Method | Executed when components are loaded. |
-| `@OnDestroy` | Method | Executed on components when the application is shut down. |
-| `@OnEvent` | Method | Registers a method as an event listener. Listens for the specified event names. Parameters are resolved contextually at invocation time. |
+| `@PostConstruct` | Method | After DI completes on `newInstance()`. Use for general startup setup. Supports optional injected parameters. |
+| `@OnLoad` | Method | After YAML fields or entity columns are mapped. **Not** a general component startup hook - use `@PostConstruct` for that. |
+| `@OnDestroy` | Method | On application/plugin shutdown. |
+| `@OnEvent` | Method | Internal event listener. Emit via `EventManager.emitEvent()`. Parameters resolved at invocation. |
 
 ---
 

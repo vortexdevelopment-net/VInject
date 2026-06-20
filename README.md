@@ -8,7 +8,12 @@ A lightweight, powerful dependency injection (DI) and configuration framework de
 
 For detailed tutorials and references, check out the specialized guides:
 
+* **[Documentation Index](docs/README.md)**: Full guide list and agent quick start.
 * **[Introduction & DI Concepts](docs/introduction.md)**: DI basics, Component vs. Service, writing Beans, and framework-managed class constraints.
+* **[Components & Injection](docs/components-and-injection.md)**: `@Root`, injection modes, `registerSubclasses`, registry annotations.
+* **[Lifecycle & Events](docs/lifecycle-and-events.md)**: `@PostConstruct`, `@OnLoad`, `@OnDestroy`, `@OnEvent`.
+* **[Load Order & Extensions](docs/load-order-and-extensions.md)**: Startup phases, `@Registry`, diagnostic codes.
+* **[Agent Reference](docs/agent-reference.md)**: One-page lookup for agents.
 * **[Features & Annotation Catalog](docs/features.md)**: A complete reference glossary of all VInject annotations and options.
 * **[Database & Repositories](docs/database_and_repositories.md)**: CRUD repositories, entity mapping, and schema constraints (no primitives!).
 * **[YAML Configuration Mapping](docs/yaml_configuration.md)**: Mapping single files/directories to Java configuration classes.
@@ -31,7 +36,7 @@ Add the following repository and dependency to your `pom.xml`:
 <dependency>
     <groupId>net.vortexdevelopment</groupId>
     <artifactId>VInject-Core</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <version>2.0.0-SNAPSHOT</version>
     <scope>compile</scope>
 </dependency>
 ```
@@ -43,7 +48,7 @@ The `vinject-maven-plugin` is required for entity dirty tracking (`@CachedField`
 <plugin>
     <groupId>net.vortexdevelopment</groupId>
     <artifactId>vinject-maven-plugin</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <version>2.0.0-SNAPSHOT</version>
     <executions>
         <execution>
             <id>process-classes</id>

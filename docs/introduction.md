@@ -157,3 +157,11 @@ public class MyPlugin {
 If `Class A` injects `Class B` and `Class B` injects `Class A`, you have a circular dependency cycle.
 * **Constructor Injection**: VInject **cannot** resolve circular dependencies if both classes use constructor parameters. The application will throw a cycle error during startup.
 * **Field Injection**: To break cycles, use `@Inject` on fields instead of constructors. VInject can defer field injection until both objects are instantiated.
+
+---
+
+## 6. Next Steps
+
+- [Components & Injection](components-and-injection.md) - `@Root`, injection modes, auto-registration, `@Qualifier`, registry vs `@Component`
+- [Lifecycle & Events](lifecycle-and-events.md) - `@PostConstruct`, `@OnLoad`, `@OnDestroy`, `@OnEvent`
+- [Load Order & Extensions](load-order-and-extensions.md) - startup phases, `@Registry`, diagnostic codes
