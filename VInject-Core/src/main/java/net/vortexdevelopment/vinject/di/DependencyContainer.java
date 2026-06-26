@@ -160,6 +160,9 @@ public class DependencyContainer implements DependencyRepository {
             entities.addAll(scanner.scanAndFilter(Entity.class, this::canLoadClass));
         }
 
+        // Interceptors must be available before YAML configs are instantiated as beans.
+        registerComponentInterceptors(scanner);
+
         // Load YAML configuration classes so components/services can depend on them
         // We collect only classes that can be loaded (respect DependsOn)
         Set<Class<?>> yamlConfigClasses = scanner.scanAndFilter(YamlConfiguration.class, this::canLoadClass);
@@ -235,9 +238,6 @@ public class DependencyContainer implements DependencyRepository {
         }
 
         //Collect all ComponentInterceptors
-        registerComponentInterceptors(scanner);
-
-        //Collect all Registry annotations
         registerHandlers(scanner);
 
         //Collect all ArgumentResolver annotations
