@@ -56,7 +56,19 @@ public class MySQLMapper implements SQLTypeMapper {
             }
             case "Boolean", "boolean" -> "TINYINT(1)";
             case "Date" -> "DATETIME";
-            case "Byte[]", "byte[]" -> "BLOB";
+            case "Byte[]", "byte[]" -> {
+                if (column.length() == -1) {
+                    yield "LONGBLOB";
+                } else if (column.length() <= 255) {
+                    yield "TINYBLOB";
+                } else if (column.length() <= 65535) {
+                    yield "BLOB";
+                } else if (column.length() <= 16777215) {
+                    yield "MEDIUMBLOB";
+                } else {
+                    yield "LONGBLOB";
+                }
+            }
             case "UUID" -> "UUID";
             case "BigDecimal" -> {
                 int p = column.precision() != -1 ? column.precision() : (column.length() != -1 ? column.length() : 10);
