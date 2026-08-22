@@ -39,6 +39,23 @@
         </dependency>
     </dependencies>
 
+    
+    
+    
+    <pluginRepositories>
+        <pluginRepository>
+            <id>vortex-repo</id>
+            <url>https://repo.vortexdevelopment.net/repository/maven-public/</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>true</enabled>
+            </snapshots>
+        </pluginRepository>
+    </pluginRepositories>
+
+
     <build>
         <plugins>
             <plugin>
