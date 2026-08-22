@@ -88,7 +88,8 @@
                     </execution>
                 </executions>
                 <configuration>
-                    <minimizeJar>true</minimizeJar>
+                    <!-- Keep the complete public library API in the published artifact. -->
+                    <minimizeJar>false</minimizeJar>
                     <createDependencyReducedPom>false</createDependencyReducedPom>
                     <filters>
                         <filter>
