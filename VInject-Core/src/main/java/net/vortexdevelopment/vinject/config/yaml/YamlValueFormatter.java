@@ -2,6 +2,9 @@ package net.vortexdevelopment.vinject.config.yaml;
 
 import net.vortexdevelopment.vinject.config.YamlSerializationWarnings;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class YamlValueFormatter {
 
     public static String serialize(Object val) {
@@ -69,6 +72,13 @@ public class YamlValueFormatter {
             return sb.toString();
         }
 
+        // YAML flow sequences (for example, [1, 2, 3]) are still sequences even
+        // when their elements are unquoted. Parse each element using the same
+        // scalar rules as block-list items.
+        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+            return deserializeInlineSequence(trimmed.substring(1, trimmed.length() - 1));
+        }
+
         // Try booleans
         if (trimmed.equalsIgnoreCase("true")) return true;
         if (trimmed.equalsIgnoreCase("false")) return false;
@@ -88,5 +98,59 @@ public class YamlValueFormatter {
         }
 
         return trimmed;
+    }
+
+    private static List<Object> deserializeInlineSequence(String content) {
+        List<Object> result = new ArrayList<>();
+        if (content.trim().isEmpty()) {
+            return result;
+        }
+
+        for (String item : splitInlineSequence(content)) {
+            result.add(deserialize(item));
+        }
+        return result;
+    }
+
+    private static List<String> splitInlineSequence(String content) {
+        List<String> items = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        char quote = 0;
+        boolean escaped = false;
+        int nesting = 0;
+
+        for (int i = 0; i < content.length(); i++) {
+            char c = content.charAt(i);
+            if (quote != 0) {
+                current.append(c);
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\' && quote == '"') {
+                    escaped = true;
+                } else if (c == quote) {
+                    quote = 0;
+                }
+                continue;
+            }
+
+            if (c == '\'' || c == '"') {
+                quote = c;
+                current.append(c);
+            } else if (c == '[' || c == '{') {
+                nesting++;
+                current.append(c);
+            } else if (c == ']' || c == '}') {
+                nesting--;
+                current.append(c);
+            } else if (c == ',' && nesting == 0) {
+                items.add(current.toString().trim());
+                current.setLength(0);
+            } else {
+                current.append(c);
+            }
+        }
+
+        items.add(current.toString().trim());
+        return items;
     }
 }

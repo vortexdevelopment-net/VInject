@@ -755,7 +755,7 @@ public class YamlConfig implements ConfigurationSection {
     @Override
     public boolean isList(String path) {
         KeyedNode node = getNode(path);
-        return node instanceof ListNode;
+        return node instanceof ListNode || node instanceof KeyValueNode kv && kv.getValue() instanceof List<?>;
     }
 
     @Override

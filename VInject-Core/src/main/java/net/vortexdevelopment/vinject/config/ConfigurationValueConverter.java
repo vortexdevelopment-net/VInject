@@ -7,12 +7,15 @@ import net.vortexdevelopment.vinject.annotation.yaml.YamlItem;
 import net.vortexdevelopment.vinject.config.serializer.YamlSerializerBase;
 import net.vortexdevelopment.vinject.config.serializer.YamlSerializerRegistry;
 import net.vortexdevelopment.vinject.config.yaml.YamlConfig;
+import net.vortexdevelopment.vinject.config.yaml.YamlValueFormatter;
 
+import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -163,8 +166,30 @@ public final class ConfigurationValueConverter {
         if (targetClass == boolean.class || targetClass == Boolean.class) return (value instanceof Boolean b) ? b : Boolean.parseBoolean(value.toString());
         if (targetClass == double.class || targetClass == Double.class) return (value instanceof Number n) ? n.doubleValue() : Double.parseDouble(value.toString());
 
+        if (targetClass == float.class || targetClass == Float.class) return (value instanceof Number n) ? n.floatValue() : Float.parseFloat(value.toString());
+        if (targetClass == short.class || targetClass == Short.class) return (value instanceof Number n) ? n.shortValue() : Short.parseShort(value.toString());
+        if (targetClass == byte.class || targetClass == Byte.class) return (value instanceof Number n) ? n.byteValue() : Byte.parseByte(value.toString());
+        if (targetClass == char.class || targetClass == Character.class) {
+            String text = value.toString();
+            if (text.length() != 1) {
+                throw new IllegalArgumentException("Expected a single character, got '" + text + "'");
+            }
+            return text.charAt(0);
+        }
+
         if (targetClass == ConfigurationSection.class && value instanceof ConfigurationSection) {
             return value;
+        }
+
+        if (targetClass.isArray()) {
+            List<?> sourceItems = asSequence(value);
+            Class<?> componentType = targetClass.getComponentType();
+            Object resultArray = Array.newInstance(componentType, sourceItems.size());
+            for (int i = 0; i < sourceItems.size(); i++) {
+                Object converted = convertValue(sourceItems.get(i), componentType, null);
+                Array.set(resultArray, i, converted);
+            }
+            return resultArray;
         }
 
         if (List.class.isAssignableFrom(targetClass)) {
@@ -178,14 +203,8 @@ public final class ConfigurationValueConverter {
                 }
             }
 
-            if (value instanceof List<?> list) {
-                for (Object item : list) {
-                    resultList.add(convertValue(item, elementType, null));
-                }
-            } else if (value instanceof String s && ("[]".equals(s.trim()) || s.trim().isEmpty())) {
-                // Return empty list
-            } else {
-                resultList.add(convertValue(value, elementType, null));
+            for (Object item : asSequence(value)) {
+                resultList.add(convertValue(item, elementType, null));
             }
             return resultList;
         }
@@ -269,6 +288,33 @@ public final class ConfigurationValueConverter {
         }
 
         return value;
+    }
+
+    private List<?> asSequence(Object value) {
+        if (value instanceof List<?> list) {
+            return list;
+        }
+        if (value instanceof Collection<?> collection) {
+            return new ArrayList<>(collection);
+        }
+        if (value != null && value.getClass().isArray()) {
+            int length = Array.getLength(value);
+            List<Object> result = new ArrayList<>(length);
+            for (int i = 0; i < length; i++) {
+                result.add(Array.get(value, i));
+            }
+            return result;
+        }
+        if (value instanceof String string) {
+            Object parsed = YamlValueFormatter.deserialize(string);
+            if (parsed instanceof List<?> list) {
+                return list;
+            }
+            if (string.trim().isEmpty() || "[]".equals(string.trim())) {
+                return List.of();
+            }
+        }
+        return List.of(value);
     }
 
     public Field findIdFieldForClass(Class<?> clazz) {
