@@ -12,6 +12,13 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class ClassData {
 
+    private static final Set<String> EXCLUDED_TYPES = Set.of(
+            "java.lang.Object",
+            "java.io.Serializable",
+            "java.lang.Cloneable",
+            "java.lang.AutoCloseable"
+    );
+
     private String qualifiedName;
     private Set<String> beans = ConcurrentHashMap.newKeySet(); //Provided beans by the class
 
@@ -23,19 +30,18 @@ public class ClassData {
         this.qualifiedName = psiClass.getQualifiedName();
 
         //Check if the class is annotated with @Service
-        if (Objects.equals(annotation.getQualifiedName(), "net.vortexdevelopment.vinject.annotation.component.Service")) {
+        if (Objects.equals(annotation.getQualifiedName(), BaseComponents.SERVICE)) {
             //Get all Beans
             for (PsiMethod method : psiClass.getMethods()) {
-                if (method.getAnnotation("net.vortexdevelopment.vinject.annotation.Bean") != null) {
-                    PsiAnnotation beanAnnotation = method.getAnnotation("net.vortexdevelopment.vinject.annotation.Bean");
+                if (method.getAnnotation(BaseComponents.BEAN) != null) {
+                    PsiAnnotation beanAnnotation = method.getAnnotation(BaseComponents.BEAN);
                     if (beanAnnotation != null) {
-                        List<String> registerSubclasses = ClassDataManager.getClassArray(beanAnnotation, "registerSubclasses");
-                        beans.addAll(registerSubclasses);
-
                         //Add return type of the method
                         PsiType returnType = method.getReturnType();
                         if (returnType != null) {
                             beans.add(returnType.getCanonicalText());
+                            PsiClass returnClass = com.intellij.psi.util.PsiUtil.resolveClassInType(returnType);
+                            addHierarchy(returnClass);
                         }
                     }
                 }
@@ -43,20 +49,18 @@ public class ClassData {
         }
 
         //Check for component annotations
-        if (Objects.equals(annotation.getQualifiedName(), "net.vortexdevelopment.vinject.annotation.component.Component")) {
-            //registerSubclasses
-            beans.addAll(ClassDataManager.getClassArray(annotation, "registerSubclasses"));
+        if (Objects.equals(annotation.getQualifiedName(), BaseComponents.COMPONENT)) {
             beans.add(psiClass.getQualifiedName());
+            addHierarchy(psiClass);
         }
 
         //Check for repository annotations
-        if (Objects.equals(annotation.getQualifiedName(), "net.vortexdevelopment.vinject.annotation.component.Repository")) {
-            //registerSubclasses
-            beans.addAll(ClassDataManager.getClassArray(annotation, "registerSubclasses"));
+        if (Objects.equals(annotation.getQualifiedName(), BaseComponents.REPOSITORY)) {
+            beans.add(psiClass.getQualifiedName());
         }
 
         //Root annotation
-        if (Objects.equals(annotation.getQualifiedName(), "net.vortexdevelopment.vinject.annotation.component.Root")) {
+        if (Objects.equals(annotation.getQualifiedName(), BaseComponents.ROOT)) {
             //Add the package name
             beans.add(psiClass.getQualifiedName());
         }
@@ -64,6 +68,18 @@ public class ClassData {
 
     public boolean isClassProvided(PsiClass psiClass) {
         return qualifiedName.equals(psiClass.getQualifiedName()) || beans.contains(psiClass.getQualifiedName());
+    }
+
+    private void addHierarchy(PsiClass psiClass) {
+        if (psiClass == null) {
+            return;
+        }
+        for (PsiClass superClass : psiClass.getSupers()) {
+            String name = superClass.getQualifiedName();
+            if (name != null && !EXCLUDED_TYPES.contains(name) && beans.add(name)) {
+                addHierarchy(superClass);
+            }
+        }
     }
 
 

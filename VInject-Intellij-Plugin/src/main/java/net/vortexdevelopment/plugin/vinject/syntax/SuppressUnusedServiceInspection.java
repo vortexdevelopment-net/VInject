@@ -11,6 +11,7 @@ import com.intellij.psi.PsiIdentifier;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiType;
+import net.vortexdevelopment.plugin.vinject.container.BaseComponents;
 import net.vortexdevelopment.plugin.vinject.container.ClassDataManager;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -19,27 +20,27 @@ public class SuppressUnusedServiceInspection implements InspectionSuppressor {
 
     private boolean checkClass(@NotNull PsiClass psiClass) {
         // Check if the class is annotated with @Service
-        if (psiClass.getAnnotation("net.vortexdevelopment.vinject.annotation.Service") != null) {
+        if (psiClass.getAnnotation(BaseComponents.SERVICE) != null) {
             // Check if it contains any @Bean methods
             for (PsiMethod method : psiClass.getMethods()) {
-                if (method.getAnnotation("net.vortexdevelopment.vinject.annotation.Bean") != null) {
+                if (method.getAnnotation(BaseComponents.BEAN) != null) {
                     // Mark the class as "used" by skipping unused highlighting
                     return true; // No problems reported, so no highlighting as unused
                 }
             }
         }
         //Non service classes check here:
-        return ClassDataManager.isClassProvided(psiClass) && psiClass.getAnnotation("net.vortexdevelopment.vinject.annotation.Service") == null;
+        return ClassDataManager.isClassProvided(psiClass) && psiClass.getAnnotation(BaseComponents.SERVICE) == null;
     }
 
     private boolean checkMethod(@NotNull PsiMethod method) {
         //Check @Bean annotation
-        if (method.getAnnotation("net.vortexdevelopment.vinject.annotation.Bean") != null) {
+        if (method.getAnnotation(BaseComponents.BEAN) != null) {
             //Check if the method is in a Service class
             PsiClass containingClass = method.getContainingClass();
             if (containingClass != null) {
                 // Mark the method as "used" by skipping unused highlighting
-                return containingClass.getAnnotation("net.vortexdevelopment.vinject.annotation.Service") != null; // No problems reported, so no highlighting as unused
+                return containingClass.getAnnotation(BaseComponents.SERVICE) != null; // No problems reported, so no highlighting as unused
             }
         }
         return false;
@@ -47,7 +48,7 @@ public class SuppressUnusedServiceInspection implements InspectionSuppressor {
 
     private boolean checkField(@NotNull PsiField field) {
         //Check if the field is annotated with @Inject
-        if (field.getAnnotation("net.vortexdevelopment.vinject.annotation.Inject") != null) {
+        if (field.getAnnotation(BaseComponents.INJECT) != null) {
             //Check if the field is used in a Service class
             PsiClass containingClass = field.getContainingClass();
             if (containingClass != null && ClassDataManager.isComponentClass(containingClass)) {

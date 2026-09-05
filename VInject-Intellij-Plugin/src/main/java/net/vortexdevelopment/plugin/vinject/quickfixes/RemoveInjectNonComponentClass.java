@@ -10,6 +10,7 @@ import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.codeStyle.JavaCodeStyleManager;
 import net.vortexdevelopment.plugin.vinject.Plugin;
+import net.vortexdevelopment.plugin.vinject.container.BaseComponents;
 import org.jetbrains.annotations.NotNull;
 
 public class RemoveInjectNonComponentClass implements LocalQuickFix {
@@ -34,7 +35,7 @@ public class RemoveInjectNonComponentClass implements LocalQuickFix {
             //Remove @Inject annotation from field
             // Find and remove the @Inject annotation
             if (psiField.getModifierList() != null) {
-                PsiAnnotation injectAnnotation = psiField.getModifierList().findAnnotation("net.vortexdevelopment.vinject.annotation.Inject");
+                PsiAnnotation injectAnnotation = psiField.getModifierList().findAnnotation(BaseComponents.INJECT);
                 if (injectAnnotation != null) {
                     injectAnnotation.delete();
                 }

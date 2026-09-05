@@ -9,6 +9,7 @@ import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.codeStyle.JavaCodeStyleManager;
+import net.vortexdevelopment.plugin.vinject.container.BaseComponents;
 import org.jetbrains.annotations.NotNull;
 
 public class BeanNonAnnotatedQuickFix implements LocalQuickFix {
@@ -30,7 +31,7 @@ public class BeanNonAnnotatedQuickFix implements LocalQuickFix {
         com.intellij.openapi.application.ApplicationManager.getApplication().runWriteAction(() -> {
             // Add the annotation to the method
             PsiAnnotation annotation = JavaPsiFacade.getElementFactory(project)
-                    .createAnnotationFromText("@net.vortexdevelopment.vinject.annotation.Bean", method);
+                    .createAnnotationFromText("@" + BaseComponents.BEAN, method);
             method.getModifierList().addBefore(annotation, method.getModifierList().getFirstChild());
 
             // Optimize imports after adding the annotation

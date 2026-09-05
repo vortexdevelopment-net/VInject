@@ -53,6 +53,7 @@ public class Plugin implements ProjectActivity, Disposable {
                     ApplicationManager.getApplication().runReadAction((Computable<List<VirtualFile>>) () -> {
                         // Ensure templates from dependency jars are loaded on startup
                         TemplateManager.getInstance().reloadTemplates(project);
+                        ClassDataManager.registerRegistryAnnotations(project);
 
                         indicator.setText("Collecting source files...");
                         List<VirtualFile> roots = new ArrayList<>();
@@ -154,6 +155,7 @@ public class Plugin implements ProjectActivity, Disposable {
                         // provided by library jars are available. This method avoids duplicate registration.
                         indicator.setText("Reloading templates...");
                         TemplateManager.getInstance().reloadTemplates(proj);
+                        ClassDataManager.registerRegistryAnnotations(proj);
 
                         // Process files with progress indication to prevent UI freezes
                         indicator.setText("Processing " + roots.size() + " files...");

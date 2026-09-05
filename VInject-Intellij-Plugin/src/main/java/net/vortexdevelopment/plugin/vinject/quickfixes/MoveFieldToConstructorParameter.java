@@ -11,6 +11,7 @@ import com.intellij.psi.search.searches.ReferencesSearch;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.util.Query;
 import net.vortexdevelopment.plugin.vinject.Plugin;
+import net.vortexdevelopment.plugin.vinject.container.BaseComponents;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.Collection;
@@ -104,7 +105,7 @@ public class MoveFieldToConstructorParameter implements LocalQuickFix {
                 // Field is used elsewhere, just remove @Inject annotation
                 if (psiField.getModifierList() != null) {
                     PsiAnnotation injectAnnotation = psiField.getModifierList()
-                            .findAnnotation("net.vortexdevelopment.vinject.annotation.Inject");
+                            .findAnnotation(BaseComponents.INJECT);
                     if (injectAnnotation != null) {
                         injectAnnotation.delete();
                     }

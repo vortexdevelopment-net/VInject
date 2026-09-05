@@ -1,0 +1,79 @@
+<!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
+<idea-plugin>
+    <!-- Unique identifier of the plugin. It should be FQN. It cannot be changed between the plugin versions. -->
+    <id>net.vortexdevelopment.VInject-Framework</id>
+
+    <!-- Public plugin name should be written in Title Case.
+         Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-name -->
+    <name>VInject Framework</name>
+
+    <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
+    <vendor email="dev.ceze@gmail.com">Vortex Development</vendor>
+
+    <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
+         Simple HTML elements (text formatting, paragraphs, and lists) can be added inside of <![CDATA[ ]]> tag.
+         Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-description -->
+    <description><![CDATA[
+      Annotation Processor for VInject Framework.
+      <p>This plugin provides an annotation processor for the VInject framework.</p>
+  ]]></description>
+
+    <!-- Product and plugin compatibility requirements.
+         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
+    <depends>com.intellij.modules.java</depends>
+
+
+    <!-- Extension points defined by the plugin.
+         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
+    <extensions defaultExtensionNs="com.intellij">
+        <backgroundPostStartupActivity implementation="net.vortexdevelopment.plugin.vinject.Plugin"/>
+        <localInspection language="JAVA"
+                         groupName="VInject"
+                           displayName="Ensure @Inject is only used in VInject-managed classes"
+                         implementationClass="net.vortexdevelopment.plugin.vinject.syntax.ComponentHighlighter"
+                         enabledByDefault="true"/>
+        <localInspection language="JAVA"
+                         groupName="VInject"
+                         displayName="Validate VInject database annotations"
+                         shortName="VInjectDatabaseAnnotations"
+                         implementationClass="net.vortexdevelopment.plugin.vinject.syntax.DatabaseAnnotationInspection"
+                         enabledByDefault="true"/>
+        <lang.inspectionSuppressor id="UnusedDeclarationComponent"
+                                   language="JAVA"
+                                   implementationClass="net.vortexdevelopment.plugin.vinject.syntax.SuppressUnusedServiceInspection"/>
+        <moduleBuilder
+                builderClass="net.vortexdevelopment.plugin.vinject.project.VInjectModuleBuilder"
+                order="last"
+                id="MY_PLUGIN_SINGLE_PAGE_BUILDER"/>
+
+        <!-- Discord RPC Configuration -->
+        <projectConfigurable
+            id="discord.rpc.settings"
+            displayName="Discord Rich Presence"
+            parentId="other"
+            instance="net.vortexdevelopment.plugin.vinject.discord.DiscordSettingsConfigurable"
+            dynamic="true"/>
+
+        <!--<compiler.inspectionValidator implementation="net.vortexdevelopment.plugin.vinject.build.VInjectInspectionValidator" order="first" id="vinject.component.validator"/>
+        <lang.psiAugmentProvider implementation="net.vortexdevelopment.plugin.vinject.annotation.EntityAugmentProvider"/>
+        <highlightErrorFilter implementation="net.vortexdevelopment.plugin.vinject.syntax.ErrorFilter"/>-->
+    </extensions>
+
+    <actions>
+        <action id="VInject.NewComponent"
+                class="net.vortexdevelopment.plugin.vinject.templates.TemplateFileAction"
+                text="VInject Component"
+                description="Create a new VInject component class">
+            <add-to-group group-id="NewGroup1" anchor="after" relative-to-action="NewClass"/>
+        </action>
+        <action id="VInject.Reload"
+                class="net.vortexdevelopment.plugin.vinject.actions.ReloadVInjectAction"
+                text="Reload VInject"
+                description="Re-scan the project for VInject annotations"
+                icon="net.vortexdevelopment.plugin.vinject.utils.PluginIcons.PLUGIN_ICON">
+            <!-- Add to editor context menu and project view popup (cover common group IDs) -->
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>

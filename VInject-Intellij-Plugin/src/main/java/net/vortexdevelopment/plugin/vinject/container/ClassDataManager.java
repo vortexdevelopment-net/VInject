@@ -6,6 +6,7 @@ import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.roots.ModuleRootManager;
 import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiArrayInitializerMemberValue;
@@ -15,7 +16,9 @@ import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiNameValuePair;
 import com.intellij.psi.PsiTypeElement;
-import net.vortexdevelopment.plugin.vinject.Plugin;
+import com.intellij.psi.search.GlobalSearchScope;
+import com.intellij.psi.search.searches.AnnotatedElementsSearch;
+import com.intellij.util.Query;
 import net.vortexdevelopment.plugin.vinject.templates.TemplateManager;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -24,33 +27,29 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class ClassDataManager {
 
+    private static final String REGISTRY_ANNOTATION = BaseComponents.REGISTRY;
     public static final Set<String> COMPONENT_ANNOTATIONS = ConcurrentHashMap.newKeySet();
     public static final Set<String> COMPONENT_ANNOTATION_PACKAGES = Set.of(
-            "net.vortexdevelopment.vinject.annotation.component",
-            "net.vortexdevelopment.vortexcore.vinject.annotation",
-            "net.vortexdevelopment.vortexcore.command.annotation"
+            BaseComponents.V_INJECT_COMPONENT_PACKAGE
     );
     private static Map<String, ClassData> classData = new ConcurrentHashMap<>();
 
     static {
         // Pre-register the standard annotations - Legacy support
-        COMPONENT_ANNOTATIONS.add("net.vortexdevelopment.vinject.annotation.component.Root");
-        COMPONENT_ANNOTATIONS.add("net.vortexdevelopment.vinject.annotation.component.Registry");
-        COMPONENT_ANNOTATIONS.add("net.vortexdevelopment.vinject.annotation.component.Service");
-        COMPONENT_ANNOTATIONS.add("net.vortexdevelopment.vinject.annotation.component.Component");
-        COMPONENT_ANNOTATIONS.add("net.vortexdevelopment.vinject.annotation.component.Repository");
-        COMPONENT_ANNOTATIONS.add("net.vortexdevelopment.vinject.annotation.util.Injectable");
-        COMPONENT_ANNOTATIONS.add("net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration");
-        COMPONENT_ANNOTATIONS.add("net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory");
-        COMPONENT_ANNOTATIONS.add("net.vortexdevelopment.vinject.annotation.yaml.Element"); // Elements are injectable
-
-        COMPONENT_ANNOTATIONS.add("net.vortexdevelopment.vortexcore.vinject.annotation.Api");
+        COMPONENT_ANNOTATIONS.add(BaseComponents.ROOT);
+        COMPONENT_ANNOTATIONS.add(BaseComponents.REGISTRY);
+        COMPONENT_ANNOTATIONS.add(BaseComponents.SERVICE);
+        COMPONENT_ANNOTATIONS.add(BaseComponents.COMPONENT);
+        COMPONENT_ANNOTATIONS.add(BaseComponents.REPOSITORY);
+        COMPONENT_ANNOTATIONS.add(BaseComponents.INJECTABLE);
+        COMPONENT_ANNOTATIONS.add(BaseComponents.YAML_CONFIGURATION);
+        COMPONENT_ANNOTATIONS.add(BaseComponents.YAML_DIRECTORY);
+        COMPONENT_ANNOTATIONS.add(BaseComponents.ELEMENT); // Elements are injectable
 
         // VortexCore - Add classData for org.bukkit.Plugin - It is always provided
         classData.put("org.bukkit.plugin.Plugin", new ClassData("org.bukkit.plugin.Plugin"));
@@ -83,16 +82,10 @@ public class ClassDataManager {
             }
             for (PsiClass psi : classes) {
                 // Process Registry annotations to discover new component annotations
-                PsiAnnotation registryAnnotation = psi.getAnnotation("net.vortexdevelopment.vinject.annotation.Registry");
-                if (registryAnnotation != null) {
-                    List<String> newAnnotations = getClassArray(registryAnnotation, "annotation");
-                    for (String annotation : newAnnotations) {
-                        registerComponentAnnotation(annotation);
-                    }
-                }
+                registerAnnotationsFromRegistry(psi.getAnnotation(REGISTRY_ANNOTATION));
 
                 // Process Root annotations
-                PsiAnnotation rootAnnotation = psi.getAnnotation("net.vortexdevelopment.vinject.annotation.component.Root");
+                PsiAnnotation rootAnnotation = psi.getAnnotation(BaseComponents.ROOT);
                 if (rootAnnotation != null) {
                     ClassData classData = new ClassData(psi, rootAnnotation);
                     List<String> componentAnnotations = getClassArray(rootAnnotation, "componentAnnotations");
@@ -132,7 +125,7 @@ public class ClassDataManager {
                 }
 
                 // Process RegisterTemplate annotations
-                PsiAnnotation registerTemplateAnnotation = psi.getAnnotation("net.vortexdevelopment.vinject.annotation.RegisterTemplate");
+                PsiAnnotation registerTemplateAnnotation = psi.getAnnotation(BaseComponents.REGISTER_TEMPLATE);
                 if (registerTemplateAnnotation != null) {
                     PsiAnnotationMemberValue annotationFqcnValue = registerTemplateAnnotation.findAttributeValue("annotationFqcn");
                     PsiAnnotationMemberValue resourceValue = registerTemplateAnnotation.findAttributeValue("resource");
@@ -174,6 +167,44 @@ public class ClassDataManager {
                     removeClassData(psi);
                 }
             }
+        }
+    }
+
+    /**
+     * Discovers registry handlers from both project sources and dependency libraries.
+     * Registry handlers declare the annotation they manage through
+     * {@code @Registry(annotation = SomeAnnotation.class)}; that annotation is a
+     * managed component annotation for IntelliJ inspection purposes.
+     *
+     * @param project project whose source and dependency PSI should be searched
+     */
+    public static void registerRegistryAnnotations(@NotNull Project project) {
+        if (DumbService.isDumb(project)) {
+            DumbService.getInstance(project).runWhenSmart(() -> registerRegistryAnnotations(project));
+            return;
+        }
+
+        PsiClass registryAnnotation = JavaPsiFacade.getInstance(project)
+                .findClass(REGISTRY_ANNOTATION, GlobalSearchScope.allScope(project));
+        if (registryAnnotation == null) {
+            return;
+        }
+
+        Query<PsiClass> registryClasses = AnnotatedElementsSearch.searchPsiClasses(
+                registryAnnotation,
+                GlobalSearchScope.allScope(project)
+        );
+        for (PsiClass registryClass : registryClasses) {
+            registerAnnotationsFromRegistry(registryClass.getAnnotation(REGISTRY_ANNOTATION));
+        }
+    }
+
+    private static void registerAnnotationsFromRegistry(@Nullable PsiAnnotation registryAnnotation) {
+        if (registryAnnotation == null) {
+            return;
+        }
+        for (String annotation : getClassArray(registryAnnotation, "annotation")) {
+            registerComponentAnnotation(annotation);
         }
     }
 

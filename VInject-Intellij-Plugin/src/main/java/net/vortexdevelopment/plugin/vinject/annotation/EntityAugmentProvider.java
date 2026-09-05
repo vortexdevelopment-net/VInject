@@ -17,6 +17,7 @@ import com.intellij.psi.PsiTypes;
 import com.intellij.psi.augment.PsiAugmentProvider;
 import com.intellij.psi.impl.light.LightFieldBuilder;
 import com.intellij.psi.impl.light.LightMethodBuilder;
+import net.vortexdevelopment.plugin.vinject.container.BaseComponents;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -33,7 +34,7 @@ public class EntityAugmentProvider extends PsiAugmentProvider {
             return Collections.emptyList();
         }
 
-        PsiAnnotation entityAnnotation = psiClass.getAnnotation("net.vortexdevelopment.vinject.annotation.database.Entity");
+        PsiAnnotation entityAnnotation = psiClass.getAnnotation(BaseComponents.ENTITY);
         if (entityAnnotation == null) {
             return Collections.emptyList();
         }

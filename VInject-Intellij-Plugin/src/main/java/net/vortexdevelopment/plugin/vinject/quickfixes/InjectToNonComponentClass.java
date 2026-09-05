@@ -11,6 +11,7 @@ import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.codeStyle.JavaCodeStyleManager;
 import net.vortexdevelopment.plugin.vinject.Plugin;
+import net.vortexdevelopment.plugin.vinject.container.BaseComponents;
 import org.jetbrains.annotations.NotNull;
 
 public class InjectToNonComponentClass implements LocalQuickFix {
@@ -36,7 +37,7 @@ public class InjectToNonComponentClass implements LocalQuickFix {
         Plugin.runWriteAction(() -> {
             // Add the annotation to the method
             PsiAnnotation annotation = JavaPsiFacade.getElementFactory(project)
-                    .createAnnotationFromText("@net.vortexdevelopment.vinject.annotation.Component", psiClass);
+                    .createAnnotationFromText("@" + BaseComponents.COMPONENT, psiClass);
             psiClass.getModifierList().addBefore(annotation, psiClass.getModifierList().getFirstChild());
 
             // Optimize imports after adding the annotation
