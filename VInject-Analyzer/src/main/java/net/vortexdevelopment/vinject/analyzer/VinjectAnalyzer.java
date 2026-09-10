@@ -26,6 +26,12 @@ import net.vortexdevelopment.vinject.annotation.component.Service;
 import net.vortexdevelopment.vinject.annotation.lifecycle.PostConstruct;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory;
+import net.vortexdevelopment.vinject.annotation.database.Column;
+import net.vortexdevelopment.vinject.annotation.database.Entity;
+import net.vortexdevelopment.vinject.annotation.database.ForeignKey;
+import net.vortexdevelopment.vinject.annotation.database.ForeignKeyAction;
+import net.vortexdevelopment.vinject.annotation.database.Id;
+import net.vortexdevelopment.vinject.annotation.database.Index;
 import net.vortexdevelopment.vinject.di.registry.RegistryOrder;
 import org.reflections.Reflections;
 import org.reflections.util.ConfigurationBuilder;
@@ -75,6 +81,8 @@ public class VinjectAnalyzer {
                 .sorted(Comparator.comparing(Class::getName))
                 .collect(Collectors.toList());
 
+        validateDatabaseAnnotations(loadableCandidates, diagnostics);
+
         Discovery discovery = discover(loadableCandidates, request, diagnostics);
         List<DependencyEdge> edges = buildEdges(discovery, request, diagnostics);
 
@@ -85,6 +93,351 @@ public class VinjectAnalyzer {
         DependencyGraph dependencyGraph = new DependencyGraph(edges);
         DependencyLoadPlan loadPlan = new DependencyLoadPlan(serviceLoadOrder, componentLoadOrder);
         return new VinjectAnalysisResult(applicationModel, dependencyGraph, loadPlan, diagnostics);
+    }
+
+    private void validateDatabaseAnnotations(Collection<Class<?>> candidates, List<Diagnostic> diagnostics) {
+        for (Class<?> candidate : candidates) {
+            boolean entity = candidate.isAnnotationPresent(Entity.class);
+            Index[] classIndexes = candidate.getAnnotationsByType(Index.class);
+            if (!entity && classIndexes.length > 0) {
+                diagnostics.add(Diagnostic.error(DiagnosticCode.INDEX_NOT_ON_ENTITY,
+                        DiagnosticLocation.classLocation(candidate), candidate.getName()));
+            }
+            if (entity) {
+                validateEntityIndexes(candidate, classIndexes, diagnostics);
+            }
+
+            for (Field field : safeDeclaredFields(candidate, diagnostics)) {
+                Index[] fieldIndexes = field.getAnnotationsByType(Index.class);
+                if (fieldIndexes.length > 0) {
+                    if (!entity) {
+                        diagnostics.add(Diagnostic.error(DiagnosticCode.INDEX_NOT_ON_ENTITY,
+                                DiagnosticLocation.memberLocation(candidate, field.getName()), describe(field)));
+                    } else {
+                        validateFieldIndexes(candidate, field, fieldIndexes, diagnostics);
+                    }
+                }
+                ForeignKey foreignKey = field.getAnnotation(ForeignKey.class);
+                if (foreignKey != null) {
+                    validateForeignKey(candidate, field, foreignKey, entity, diagnostics);
+                }
+            }
+        }
+        validateForeignKeyDeleteCycles(candidates, diagnostics);
+    }
+
+    private void validateForeignKeyDeleteCycles(Collection<Class<?>> candidates, List<Diagnostic> diagnostics) {
+        List<ForeignKeyDeleteEdge> edges = collectForeignKeyDeleteEdges(candidates, diagnostics);
+        Map<Class<?>, List<ForeignKeyDeleteEdge>> outgoing = new LinkedHashMap<>();
+        Set<Class<?>> nodes = new LinkedHashSet<>();
+        for (ForeignKeyDeleteEdge edge : edges) {
+            nodes.add(edge.owner());
+            nodes.add(edge.target());
+            outgoing.computeIfAbsent(edge.owner(), ignored -> new ArrayList<>()).add(edge);
+        }
+        outgoing.values().forEach(list -> list.sort(Comparator
+                .comparing((ForeignKeyDeleteEdge edge) -> edge.target().getName())
+                .thenComparing(edge -> edge.field().getName())));
+
+        Map<Class<?>, Integer> indexes = new HashMap<>();
+        Map<Class<?>, Integer> lowLinks = new HashMap<>();
+        ArrayDeque<Class<?>> stack = new ArrayDeque<>();
+        Set<Class<?>> onStack = new HashSet<>();
+        int[] nextIndex = {0};
+
+        nodes.stream().sorted(Comparator.comparing(Class::getName)).forEach(node -> {
+            if (!indexes.containsKey(node)) {
+                findForeignKeyComponents(node, outgoing, indexes, lowLinks, stack, onStack,
+                        nextIndex, diagnostics);
+            }
+        });
+    }
+
+    private List<ForeignKeyDeleteEdge> collectForeignKeyDeleteEdges(Collection<Class<?>> candidates,
+                                                                    List<Diagnostic> diagnostics) {
+        List<ForeignKeyDeleteEdge> edges = new ArrayList<>();
+        ArrayDeque<Class<?>> pending = candidates.stream()
+                .filter(candidate -> candidate.isAnnotationPresent(Entity.class))
+                .sorted(Comparator.comparing(Class::getName))
+                .collect(Collectors.toCollection(ArrayDeque::new));
+        Set<Class<?>> visited = new HashSet<>();
+
+        while (!pending.isEmpty()) {
+            Class<?> owner = pending.removeFirst();
+            if (!visited.add(owner)) continue;
+            for (Field field : safeDeclaredFields(owner, diagnostics)) {
+                ForeignKey foreignKey = field.getAnnotation(ForeignKey.class);
+                if (foreignKey == null || !isPersistentField(field)) continue;
+                Class<?> target = foreignKey.entity() == void.class ? field.getType() : foreignKey.entity();
+                if (!target.isAnnotationPresent(Entity.class)) continue;
+                if (!visited.contains(target)) pending.addLast(target);
+
+                // SET_NULL breaks the delete chain. Self references are valid for trees such as parent_id.
+                if (owner.equals(target) || foreignKey.onDelete() == ForeignKeyAction.SET_NULL) continue;
+                edges.add(new ForeignKeyDeleteEdge(owner, target, field, foreignKey.onDelete()));
+            }
+        }
+        return edges;
+    }
+
+    private void findForeignKeyComponents(
+            Class<?> node,
+            Map<Class<?>, List<ForeignKeyDeleteEdge>> outgoing,
+            Map<Class<?>, Integer> indexes,
+            Map<Class<?>, Integer> lowLinks,
+            ArrayDeque<Class<?>> stack,
+            Set<Class<?>> onStack,
+            int[] nextIndex,
+            List<Diagnostic> diagnostics
+    ) {
+        int index = nextIndex[0]++;
+        indexes.put(node, index);
+        lowLinks.put(node, index);
+        stack.push(node);
+        onStack.add(node);
+
+        for (ForeignKeyDeleteEdge edge : outgoing.getOrDefault(node, Collections.emptyList())) {
+            Class<?> target = edge.target();
+            if (!indexes.containsKey(target)) {
+                findForeignKeyComponents(target, outgoing, indexes, lowLinks, stack, onStack,
+                        nextIndex, diagnostics);
+                lowLinks.put(node, Math.min(lowLinks.get(node), lowLinks.get(target)));
+            } else if (onStack.contains(target)) {
+                lowLinks.put(node, Math.min(lowLinks.get(node), indexes.get(target)));
+            }
+        }
+
+        if (!lowLinks.get(node).equals(indexes.get(node))) return;
+        Set<Class<?>> component = new LinkedHashSet<>();
+        Class<?> member;
+        do {
+            member = stack.pop();
+            onStack.remove(member);
+            component.add(member);
+        } while (!member.equals(node));
+        if (component.size() < 2) return;
+
+        List<ForeignKeyDeleteEdge> cycleEdges = outgoing.values().stream()
+                .flatMap(Collection::stream)
+                .filter(edge -> component.contains(edge.owner()) && component.contains(edge.target()))
+                .sorted(Comparator.comparing((ForeignKeyDeleteEdge edge) -> edge.owner().getName())
+                        .thenComparing(edge -> edge.field().getName()))
+                .toList();
+        ForeignKeyDeleteEdge locationEdge = cycleEdges.stream()
+                .filter(edge -> edge.action() == ForeignKeyAction.RESTRICT
+                        || edge.action() == ForeignKeyAction.NO_ACTION)
+                .findFirst()
+                .orElse(cycleEdges.get(0));
+        String entities = component.stream()
+                .map(Class::getSimpleName)
+                .sorted()
+                .collect(Collectors.joining(" <-> "));
+        DiagnosticLocation location = DiagnosticLocation.memberLocation(
+                locationEdge.owner(), locationEdge.field().getName());
+
+        if (cycleEdges.stream().anyMatch(edge -> edge.action() == ForeignKeyAction.RESTRICT
+                || edge.action() == ForeignKeyAction.NO_ACTION)) {
+            diagnostics.add(Diagnostic.error(
+                    DiagnosticCode.FOREIGN_KEY_RESTRICTIVE_DELETE_CYCLE, location, entities));
+        } else {
+            diagnostics.add(Diagnostic.warning(
+                    DiagnosticCode.FOREIGN_KEY_CASCADE_DELETE_CYCLE, location, entities));
+        }
+    }
+
+    private void validateEntityIndexes(Class<?> entity, Index[] indexes, List<Diagnostic> diagnostics) {
+        Set<String> indexNames = new HashSet<>();
+        for (Index index : indexes) {
+            if (index.columns().length == 0) {
+                diagnostics.add(Diagnostic.error(DiagnosticCode.INVALID_INDEX_DECLARATION,
+                        DiagnosticLocation.classLocation(entity),
+                        "Class-level @Index must declare at least one column on " + entity.getName()));
+                continue;
+            }
+            validateIndexColumns(entity, index, DiagnosticLocation.classLocation(entity), diagnostics);
+            validateIndexName(entity, index, indexNames, diagnostics);
+        }
+        for (Field field : safeDeclaredFields(entity, diagnostics)) {
+            for (Index index : field.getAnnotationsByType(Index.class)) {
+                validateIndexName(entity, index, indexNames, diagnostics);
+            }
+        }
+    }
+
+    private void validateFieldIndexes(Class<?> entity, Field field, Index[] indexes, List<Diagnostic> diagnostics) {
+        DiagnosticLocation location = DiagnosticLocation.memberLocation(entity, field.getName());
+        if (!isPersistentField(field)) {
+            diagnostics.add(Diagnostic.error(DiagnosticCode.INVALID_INDEX_DECLARATION, location,
+                    "Field-level @Index requires @Column, @Id, or @Temporal on " + describe(field)));
+        }
+        for (Index index : indexes) {
+            if (index.columns().length > 0) {
+                diagnostics.add(Diagnostic.error(DiagnosticCode.INVALID_INDEX_DECLARATION, location,
+                        "Field-level @Index must not declare columns on " + describe(field)));
+            }
+        }
+    }
+
+    private void validateIndexColumns(Class<?> entity, Index index, DiagnosticLocation location,
+                                      List<Diagnostic> diagnostics) {
+        Set<Field> resolved = new HashSet<>();
+        for (String requested : index.columns()) {
+            Field field = resolveEntityField(entity, requested);
+            if (field == null) {
+                diagnostics.add(Diagnostic.error(DiagnosticCode.UNKNOWN_INDEX_COLUMN, location,
+                        requested, entity.getName()));
+            } else if (!resolved.add(field)) {
+                diagnostics.add(Diagnostic.error(DiagnosticCode.DUPLICATE_INDEX_COLUMN, location,
+                        requested, entity.getName()));
+            }
+        }
+    }
+
+    private void validateIndexName(Class<?> entity, Index index, Set<String> names,
+                                   List<Diagnostic> diagnostics) {
+        if (index.name().isBlank()) return;
+        String normalized = index.name().toLowerCase(java.util.Locale.ENGLISH);
+        if (!names.add(normalized)) {
+            diagnostics.add(Diagnostic.error(DiagnosticCode.DUPLICATE_INDEX_NAME,
+                    DiagnosticLocation.classLocation(entity), index.name(), entity.getName()));
+        }
+    }
+
+    private void validateForeignKey(Class<?> owner, Field field, ForeignKey foreignKey, boolean ownerIsEntity,
+                                    List<Diagnostic> diagnostics) {
+        DiagnosticLocation location = DiagnosticLocation.memberLocation(owner, field.getName());
+        if (!ownerIsEntity || !isPersistentField(field)) {
+            diagnostics.add(Diagnostic.error(DiagnosticCode.FOREIGN_KEY_NOT_ON_ENTITY, location, describe(field)));
+            return;
+        }
+
+        Class<?> targetEntity = foreignKey.entity();
+        if (targetEntity == void.class) {
+            if (field.getType().isAnnotationPresent(Entity.class)) {
+                targetEntity = field.getType();
+            } else {
+                diagnostics.add(Diagnostic.error(DiagnosticCode.FOREIGN_KEY_ENTITY_REQUIRED, location, describe(field)));
+                return;
+            }
+        }
+        if (!targetEntity.isAnnotationPresent(Entity.class)) {
+            diagnostics.add(Diagnostic.error(DiagnosticCode.FOREIGN_KEY_TARGET_NOT_ENTITY, location,
+                    targetEntity.getName()));
+            return;
+        }
+
+        Field targetField = foreignKey.referencedColumn().isBlank()
+                ? findPrimaryKey(targetEntity)
+                : resolveEntityField(targetEntity, foreignKey.referencedColumn());
+        if (targetField == null) {
+            diagnostics.add(Diagnostic.error(DiagnosticCode.FOREIGN_KEY_TARGET_COLUMN_UNKNOWN, location,
+                    foreignKey.referencedColumn().isBlank() ? "<primary key>" : foreignKey.referencedColumn(),
+                    targetEntity.getName()));
+            return;
+        }
+        Column targetColumn = targetField.getAnnotation(Column.class);
+        boolean targetIsKey = targetField.isAnnotationPresent(Id.class)
+                || (targetColumn != null && (targetColumn.primaryKey() || targetColumn.unique()));
+        if (!targetIsKey) {
+            diagnostics.add(Diagnostic.error(DiagnosticCode.FOREIGN_KEY_TARGET_NOT_KEY, location,
+                    describe(targetField)));
+        }
+
+        if (!field.getType().equals(targetEntity)
+                && !boxed(field.getType()).equals(boxed(targetField.getType()))) {
+            diagnostics.add(Diagnostic.error(DiagnosticCode.FOREIGN_KEY_TYPE_MISMATCH, location,
+                    describe(field), field.getType().getName(), describe(targetField), targetField.getType().getName()));
+        }
+
+        if ((foreignKey.onDelete() == ForeignKeyAction.SET_NULL || foreignKey.onUpdate() == ForeignKeyAction.SET_NULL)
+                && !isNullable(field)) {
+            diagnostics.add(Diagnostic.error(DiagnosticCode.FOREIGN_KEY_SET_NULL_NOT_NULLABLE, location,
+                    describe(field)));
+        }
+    }
+
+    private Field resolveEntityField(Class<?> entity, String name) {
+        for (Field field : entity.getDeclaredFields()) {
+            if (!isPersistentField(field)) continue;
+            if (field.getName().equals(name) || physicalColumnName(field).equals(name)) return field;
+        }
+        return null;
+    }
+
+    private Field findPrimaryKey(Class<?> entity) {
+        for (Field field : entity.getDeclaredFields()) {
+            Column column = field.getAnnotation(Column.class);
+            if (field.isAnnotationPresent(Id.class) || (column != null && column.primaryKey())) return field;
+        }
+        return null;
+    }
+
+    private boolean isPersistentField(Field field) {
+        return field.isAnnotationPresent(Column.class) || field.isAnnotationPresent(Id.class)
+                || hasAnnotation(field, "net.vortexdevelopment.vinject.annotation.database.Temporal");
+    }
+
+    private String physicalColumnName(Field field) {
+        Column column = field.getAnnotation(Column.class);
+        if (column != null && !column.name().isBlank()) return column.name();
+        String temporalName = annotationStringValue(field,
+                "net.vortexdevelopment.vinject.annotation.database.Temporal", "name");
+        return temporalName == null || temporalName.isBlank() ? field.getName() : temporalName;
+    }
+
+    private boolean isNullable(Field field) {
+        if (field.isAnnotationPresent(Id.class)) return false;
+        Column column = field.getAnnotation(Column.class);
+        if (column != null) return column.nullable();
+        Boolean temporalNullable = annotationBooleanValue(field,
+                "net.vortexdevelopment.vinject.annotation.database.Temporal", "nullable");
+        return temporalNullable == null || temporalNullable;
+    }
+
+    private boolean hasAnnotation(Field field, String annotationName) {
+        for (Annotation annotation : field.getDeclaredAnnotations()) {
+            if (annotation.annotationType().getName().equals(annotationName)) return true;
+        }
+        return false;
+    }
+
+    private String annotationStringValue(Field field, String annotationName, String method) {
+        Object value = annotationValue(field, annotationName, method);
+        return value instanceof String string ? string : null;
+    }
+
+    private Boolean annotationBooleanValue(Field field, String annotationName, String method) {
+        Object value = annotationValue(field, annotationName, method);
+        return value instanceof Boolean bool ? bool : null;
+    }
+
+    private Object annotationValue(Field field, String annotationName, String method) {
+        for (Annotation annotation : field.getDeclaredAnnotations()) {
+            if (!annotation.annotationType().getName().equals(annotationName)) continue;
+            try {
+                return annotation.annotationType().getMethod(method).invoke(annotation);
+            } catch (ReflectiveOperationException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private Class<?> boxed(Class<?> type) {
+        if (!type.isPrimitive()) return type;
+        if (type == int.class) return Integer.class;
+        if (type == long.class) return Long.class;
+        if (type == double.class) return Double.class;
+        if (type == float.class) return Float.class;
+        if (type == boolean.class) return Boolean.class;
+        if (type == byte.class) return Byte.class;
+        if (type == short.class) return Short.class;
+        if (type == char.class) return Character.class;
+        return type;
+    }
+
+    private String describe(Field field) {
+        return field.getDeclaringClass().getName() + "#" + field.getName();
     }
 
     private Set<Class<?>> collectCandidates(VinjectAnalysisRequest request, List<Diagnostic> diagnostics) {
@@ -272,7 +625,7 @@ public class VinjectAnalyzer {
                         BeanKind.COMPONENT,
                         priorityOf(clazz),
                         null,
-                        componentAliases(clazz, diagnostics),
+                        providedTypes(clazz),
                         resolveBeanName(clazz)
                 ));
             }
@@ -347,24 +700,8 @@ public class VinjectAnalyzer {
         return 10;
     }
 
-    private Set<Class<?>> componentAliases(Class<?> clazz, List<Diagnostic> diagnostics) {
-        Set<Class<?>> aliases = new LinkedHashSet<>(TypeHierarchyUtils.collectRegistrationTypes(clazz));
-        Component component = clazz.getAnnotation(Component.class);
-        if (component == null) {
-            return aliases;
-        }
-        for (Class<?> alias : component.registerSubclasses()) {
-            if (!alias.isAssignableFrom(clazz)) {
-                diagnostics.add(Diagnostic.error(
-                        DiagnosticCode.INVALID_COMPONENT_ALIAS,
-                        DiagnosticLocation.classLocation(clazz),
-                        alias.getName(),
-                        clazz.getName()
-                ));
-            }
-            aliases.add(alias);
-        }
-        return aliases;
+    private Set<Class<?>> providedTypes(Class<?> clazz) {
+        return new LinkedHashSet<>(TypeHierarchyUtils.collectRegistrationTypes(clazz));
     }
 
     private String resolveBeanName(Class<?> clazz) {
@@ -424,18 +761,8 @@ public class VinjectAnalyzer {
                 continue;
             }
             Bean bean = method.getAnnotation(Bean.class);
-            Set<Class<?>> aliases = new LinkedHashSet<>(TypeHierarchyUtils.collectRegistrationTypes(method.getReturnType()));
-            for (Class<?> alias : bean.registerSubclasses()) {
-                if (!alias.isAssignableFrom(method.getReturnType())) {
-                    diagnostics.add(Diagnostic.error(
-                            DiagnosticCode.INVALID_BEAN_ALIAS,
-                            DiagnosticLocation.memberLocation(serviceClass, method.getName()),
-                            alias.getName(),
-                            method.getReturnType().getName()
-                    ));
-                }
-                aliases.add(alias);
-            }
+            Set<Class<?>> aliases = new LinkedHashSet<>(
+                    TypeHierarchyUtils.collectRegistrationTypes(method.getReturnType()));
             discovery.beans.add(new BeanModel(
                     method.getReturnType(),
                     serviceClass,
@@ -606,6 +933,12 @@ public class VinjectAnalyzer {
                 }
                 return;
             }
+        }
+        List<BeanModel> exactProviders = providers.stream()
+                .filter(provider -> provider.beanType().equals(requestedType))
+                .toList();
+        if (!exactProviders.isEmpty()) {
+            providers = exactProviders;
         }
         if (providers.isEmpty()) {
             DiagnosticLocation location = DiagnosticLocation.memberLocation(source, memberName);
@@ -843,5 +1176,9 @@ public class VinjectAnalyzer {
             }
             providers.values().forEach(list -> list.removeIf(Objects::isNull));
         }
+    }
+
+    private record ForeignKeyDeleteEdge(Class<?> owner, Class<?> target, Field field,
+                                        ForeignKeyAction action) {
     }
 }

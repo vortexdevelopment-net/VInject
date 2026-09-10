@@ -1,10 +1,8 @@
-import org.jetbrains.kotlin.ir.backend.js.compile
-
 plugins {
     id("java")
-    id("org.jetbrains.kotlin.jvm") version "1.9.25"
+    id("org.jetbrains.kotlin.jvm") version "2.4.10"
     id("org.jetbrains.intellij.platform") version "2.6.0"
-    id("com.github.johnrengelman.shadow") version "8.1.1"
+    id("com.gradleup.shadow") version "9.6.1"
 }
 
 group = "net.vortexdevelopment"
@@ -38,6 +36,12 @@ java {
     targetCompatibility = JavaVersion.VERSION_17
 }
 
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
 sourceSets {
     main {
         java.srcDirs("src/main/java")
@@ -50,12 +54,6 @@ tasks {
     withType<JavaCompile> {
         sourceCompatibility = "17"
         targetCompatibility = "17"
-    }
-
-    withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-        kotlinOptions {
-            jvmTarget = "17"
-        }
     }
 
     withType<Jar> {
@@ -130,7 +128,7 @@ tasks {
 
     patchPluginXml {
         sinceBuild.set("232.*")
-        untilBuild.set("UI-261.*")
+        untilBuild.set("271.*")
     }
 
     signPlugin {

@@ -73,6 +73,46 @@ public interface Cache<K, V> {
      * @param key the key
      */
     void markDirty(K key);
+
+    /**
+     * Adds a reference-counted pin to an entry. Pinned entries cannot be evicted.
+     *
+     * @param key the entry key
+     * @param reason optional diagnostic reason
+     * @return true when the entry exists and was pinned
+     */
+    default boolean pin(K key, String reason) {
+        CacheEntry<V> entry = getAllEntries().get(key);
+        if (entry == null) {
+            return false;
+        }
+        entry.pin(reason);
+        return true;
+    }
+
+    /**
+     * Releases one reference-counted pin from an entry.
+     *
+     * @param key the entry key
+     * @param reason optional diagnostic reason
+     * @return true when the entry exists and a pin was released
+     */
+    default boolean unpin(K key, String reason) {
+        CacheEntry<V> entry = getAllEntries().get(key);
+        if (entry == null) {
+            return false;
+        }
+        entry.unpin(reason);
+        return true;
+    }
+
+    /**
+     * Returns the current pin count, or zero when the entry is absent.
+     */
+    default int getPinCount(K key) {
+        CacheEntry<V> entry = getAllEntries().get(key);
+        return entry == null ? 0 : entry.getPinCount().get();
+    }
     
     /**
      * Get cache hit count.
@@ -93,4 +133,10 @@ public interface Cache<K, V> {
      * Get current cache size.
      */
     int size();
+
+    /**
+     * Performs policy-specific maintenance such as TTL eviction.
+     */
+    default void cleanup() {
+    }
 }

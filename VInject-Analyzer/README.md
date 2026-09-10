@@ -27,10 +27,8 @@ Severity behavior:
 | `VINJECT-COND-001` | Error | A load condition or load predicate failed with a runtime exception while deciding whether a class can load. | Fix the condition logic or the dependency that condition evaluation needs. |
 | `VINJECT-COND-002` | Error | The analyzer could not evaluate load conditions for a class because inspection failed unexpectedly. | Make sure the class and all types referenced by its conditions are available on the analyzer classpath. |
 | `VINJECT-REG-001` | Error | A class annotated with `@Registry` does not extend `AnnotationHandler`. | Make the registry class extend `net.vortexdevelopment.vinject.di.registry.AnnotationHandler`. |
-| `VINJECT-COMP-001` | Error | A `@Component(registerSubclasses = ...)` alias is not assignable from the component implementation. | Remove the alias or replace it with an interface/superclass implemented by the component. |
 | `VINJECT-BEAN-001` | Error | A `@Bean` method returns `void`. | Change the method to return the bean type it creates. |
 | `VINJECT-BEAN-003` | Error | A `@Service` class with `@Bean` methods does not have a default constructor. | Add a no-argument constructor, or move bean creation to a service that can be instantiated without constructor dependencies. |
-| `VINJECT-BEAN-004` | Error | A `@Bean(registerSubclasses = ...)` alias is not assignable from the bean method return type. | Remove the alias or use an interface/superclass of the returned bean type. |
 | `VINJECT-DEP-001` | Error | A required dependency has no provider. | Add a matching component/service/repository/bean, register the dependency externally, or mark it optional if null is valid. |
 | `VINJECT-DEP-002` | Error | A required dependency has multiple possible providers. | Inject the concrete class, add `@Qualifier("name")` on the injection point, or name one producer with `@Component(name)` / `@Qualifier`. |
 | `VINJECT-DEP-005` | Error | A named dependency requested via `@Qualifier` was not found. | Add a producer with matching `@Component(name)` / `@Qualifier`, or fix the qualifier string on the injection point. |

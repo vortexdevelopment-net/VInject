@@ -16,6 +16,7 @@ import java.util.stream.Collectors;
 import net.vortexdevelopment.vinject.annotation.database.Column;
 import net.vortexdevelopment.vinject.annotation.database.Temporal;
 import net.vortexdevelopment.vinject.database.cache.Cache;
+import net.vortexdevelopment.vinject.database.cache.CacheEntry;
 import net.vortexdevelopment.vinject.database.cache.CacheConfig;
 import net.vortexdevelopment.vinject.database.cache.CacheManager;
 import net.vortexdevelopment.vinject.database.cache.CachePolicy;
@@ -35,6 +36,8 @@ import org.jetbrains.annotations.NotNull;
 public class CrudMethodHandler extends BaseMethodHandler {
 
     private boolean isPreloaded = false;
+    private volatile CacheConfig activeCacheConfig;
+    private volatile boolean flushTaskRegistered;
 
     public static final Set<String> SUPPORTED_METHODS = Set.of(
         "save",
@@ -47,7 +50,8 @@ public class CrudMethodHandler extends BaseMethodHandler {
         "deleteById",
         "delete",
         "deleteAllById",
-        "deleteAll"
+        "deleteAll",
+        "flushCache"
     );
 
     @Override
@@ -66,6 +70,7 @@ public class CrudMethodHandler extends BaseMethodHandler {
         return switch (methodName) {
             case "save" -> save(context, args[0]);
             case "saveAll" -> saveAll(context, (Iterable<?>) args[0]);
+            case "flushCache" -> flushAll(context);
             case "findById" -> findById(context, args[0]);
             case "existsById" -> existsById(context, args[0]);
             case "findAll" -> {
@@ -101,7 +106,7 @@ public class CrudMethodHandler extends BaseMethodHandler {
         };
     }
 
-    private Cache<Object, Object> getCache(
+    public Cache<Object, Object> getCache(
         RepositoryInvocationContext<?, ?> context
     ) {
         DependencyContainer container = context.getDependencyContainer();
@@ -198,6 +203,8 @@ public class CrudMethodHandler extends BaseMethodHandler {
             net.vortexdevelopment.vinject.database.cache.CacheConfig config =
                 configBuilder.build();
 
+            activeCacheConfig = config;
+
             if (!config.isEnabled()) {
                 return null;
             }
@@ -216,6 +223,17 @@ public class CrudMethodHandler extends BaseMethodHandler {
             } else {
                 cacheManager.createCache(cacheName, config);
                 cache = cacheManager.getCache(cacheName);
+            }
+
+            if (!flushTaskRegistered &&
+                config.getWriteStrategy() == WriteStrategy.WRITE_BACK &&
+                config.getFlushIntervalSeconds() > 0) {
+                flushTaskRegistered = true;
+                cacheManager.registerFlushTask(
+                    cacheName,
+                    () -> flushAll(context),
+                    config.getFlushIntervalSeconds()
+                );
             }
 
             // Handle preloading for STATIC policy
@@ -246,6 +264,107 @@ public class CrudMethodHandler extends BaseMethodHandler {
         }
 
         return null;
+    }
+
+    /**
+     * Flushes one dirty cached entity to the database.
+     *
+     * @return true when the entry is absent, clean, or successfully persisted
+     */
+    public boolean flush(
+        RepositoryInvocationContext<?, ?> context,
+        Object id
+    ) {
+        Cache<Object, Object> cache = getCache(context);
+        if (cache == null) {
+            return true;
+        }
+
+        CacheEntry<Object> entry = cache.getAllEntries().get(id);
+        if (entry == null || !entry.isDirty()) {
+            return true;
+        }
+
+        try {
+            update(context, entry.getValue());
+            cache.markClean(id);
+            return true;
+        } catch (Exception exception) {
+            DebugLogger.log(
+                context.getRepositoryClass(),
+                "Failed to flush dirty cache entry %s: %s",
+                id,
+                exception.getMessage()
+            );
+            return false;
+        }
+    }
+
+    /**
+     * Flushes every dirty entry in this repository cache.
+     */
+    public int flushAll(RepositoryInvocationContext<?, ?> context) {
+        Cache<Object, Object> cache = getCache(context);
+        if (cache == null) {
+            return 0;
+        }
+
+        int flushed = 0;
+        for (Object id : new ArrayList<>(cache.getAllEntries().keySet())) {
+            CacheEntry<Object> entry = cache.getAllEntries().get(id);
+            if (entry != null && entry.isDirty() && flush(context, id)) {
+                flushed++;
+            }
+        }
+        return flushed;
+    }
+
+    /**
+     * Returns the canonical cached instance for an entity result, inserting it
+     * when this primary key has not been cached yet.
+     */
+    public Object canonicalize(
+        RepositoryInvocationContext<?, ?> context,
+        Object result
+    ) {
+        if (result == null || !context.getEntityClass().isInstance(result)) {
+            return result;
+        }
+
+        Cache<Object, Object> cache = getCache(context);
+        if (cache == null) {
+            return result;
+        }
+
+        Object id = context.getEntityMetadata().getPrimaryKeyFieldContent(result);
+        if (id == null) {
+            return result;
+        }
+
+        CacheEntry<Object> existing = cache.getAllEntries().get(id);
+        if (existing != null) {
+            return existing.getValue();
+        }
+
+        cache.put(id, result);
+        return result;
+    }
+
+    /**
+     * Canonicalizes an entity or a collection of entities returned by a query.
+     */
+    public Object canonicalizeResult(
+        RepositoryInvocationContext<?, ?> context,
+        Object result
+    ) {
+        if (result instanceof Iterable<?> iterable) {
+            List<Object> canonical = new ArrayList<>();
+            for (Object value : iterable) {
+                canonical.add(canonicalize(context, value));
+            }
+            return canonical;
+        }
+        return canonicalize(context, result);
     }
 
     /**
@@ -362,6 +481,57 @@ public class CrudMethodHandler extends BaseMethodHandler {
     }
 
     /**
+     * Pins every currently cached entity whose auto-load field matches a value.
+     */
+    public void pinByNamespace(
+        RepositoryInvocationContext<?, ?> context,
+        String namespace,
+        Object value,
+        String reason
+    ) {
+        Field field = context.getEntityMetadata().getAutoLoadFields().get(namespace);
+        Cache<Object, Object> cache = getCache(context);
+        if (field == null || cache == null) return;
+
+        field.setAccessible(true);
+        for (Map.Entry<Object, CacheEntry<Object>> entry : cache.getAllEntries().entrySet()) {
+            try {
+                if (java.util.Objects.equals(field.get(entry.getValue().getValue()), value)) {
+                    cache.pin(entry.getKey(), reason);
+                }
+            } catch (IllegalAccessException ignored) {
+                // Ignore fields that cannot be inspected.
+            }
+        }
+    }
+
+    /**
+     * Releases one pin from every cached entity whose auto-load field matches a value.
+     */
+    public void unpinByNamespace(
+        RepositoryInvocationContext<?, ?> context,
+        String namespace,
+        Object value,
+        String reason
+    ) {
+        Field field = context.getEntityMetadata().getAutoLoadFields().get(namespace);
+        Cache<Object, Object> cache = getCache(context);
+        if (field == null || cache == null) return;
+
+        field.setAccessible(true);
+        for (Map.Entry<Object, CacheEntry<Object>> entry : cache.getAllEntries().entrySet()) {
+            try {
+                if (java.util.Objects.equals(field.get(entry.getValue().getValue()), value) &&
+                    entry.getValue().getPinsByReason().containsKey(reason)) {
+                    cache.unpin(entry.getKey(), reason);
+                }
+            } catch (IllegalAccessException ignored) {
+                // Ignore fields that cannot be inspected.
+            }
+        }
+    }
+
+    /**
      * Invalidates entities by a namespace value in the cache.
      * Note: This only works if we load them first or if the ID is known.
      * Since we might not know the PK, we load and then remove.
@@ -446,19 +616,31 @@ public class CrudMethodHandler extends BaseMethodHandler {
         EntityMetadata metadata = context.getEntityMetadata();
         Field pkField = metadata.getPrimaryKeyField();
         Object pkValue = pkField.get(entity);
+        Cache<Object, Object> cache = getCache(context);
+        boolean writeBack = activeCacheConfig != null &&
+            activeCacheConfig.getWriteStrategy() == WriteStrategy.WRITE_BACK;
 
         if (pkValue == null || !existsByIdInternal(context, pkValue)) {
             insert(context, entity);
             // Re-read PK value after insert (for auto-generated keys)
             pkValue = pkField.get(entity);
+            if (cache != null && pkValue != null) {
+                cache.put(pkValue, entity);
+                cache.markClean(pkValue);
+            }
+            return entity;
+        } else if (writeBack && cache != null) {
+            cache.put(pkValue, entity);
+            cache.markDirty(pkValue);
+            return entity;
         } else {
             update(context, entity);
         }
 
         // Update cache
-        Cache<Object, Object> cache = getCache(context);
         if (cache != null && pkValue != null) {
             cache.put(pkValue, entity);
+            cache.markClean(pkValue);
         }
 
         return entity;

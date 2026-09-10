@@ -32,9 +32,9 @@ public class MyApplication { }
 | `@Service` | Business logic layer. Supports `@Bean` factory methods. |
 | `@Repository` | Database repository interfaces (auto-proxied). |
 
-### Auto-registration and `registerSubclasses`
+### Automatic type registration
 
-`@Component` classes automatically register under all inherited interfaces and superclasses (except `Object`, `Serializable`, etc.). You can `@Inject` an interface when only one component implements it - no `registerSubclasses` required:
+`@Component` classes automatically register under all inherited interfaces and superclasses (except `Object`, `Serializable`, etc.). You can `@Inject` an interface when only one component implements it:
 
 ```java
 @Component
@@ -46,7 +46,7 @@ public class Consumer {
 }
 ```
 
-`registerSubclasses` remains optional for **extra** type aliases beyond auto-discovered super-types.
+Bean methods use the same automatic type registration based on their return type.
 
 ### Named beans and `@Qualifier`
 

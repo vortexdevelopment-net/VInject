@@ -1,5 +1,7 @@
 package net.vortexdevelopment.vinject.database;
 
+import net.vortexdevelopment.vinject.annotation.database.ForeignKeyAction;
+
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
@@ -7,9 +9,11 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.TreeMap;
 
 public class DBUtils {
 
@@ -139,6 +143,84 @@ public class DBUtils {
             e.printStackTrace();
         }
         return "(" + String.join(",", values) + ")";
+    }
+
+    public static Map<String, IndexInfo> getExistingIndexes(Connection connection, String tableName) throws SQLException {
+        Map<String, IndexAccumulator> accumulators = new LinkedHashMap<>();
+        DatabaseMetaData metaData = connection.getMetaData();
+        try (ResultSet rs = metaData.getIndexInfo(connection.getCatalog(), null, tableName, false, false)) {
+            while (rs.next()) {
+                String name = rs.getString("INDEX_NAME");
+                String column = rs.getString("COLUMN_NAME");
+                if (name == null || column == null || rs.getShort("TYPE") == DatabaseMetaData.tableIndexStatistic) {
+                    continue;
+                }
+                String key = name.toLowerCase(Locale.ENGLISH);
+                IndexAccumulator accumulator = accumulators.computeIfAbsent(key,
+                        ignored -> new IndexAccumulator(name, !rsBoolean(rs, "NON_UNIQUE")));
+                accumulator.columns.put((int) rs.getShort("ORDINAL_POSITION"), column);
+            }
+        }
+        Map<String, IndexInfo> indexes = new LinkedHashMap<>();
+        accumulators.forEach((key, value) -> indexes.put(key,
+                new IndexInfo(value.name, value.unique, new ArrayList<>(value.columns.values()))));
+        return indexes;
+    }
+
+    public static Map<String, ForeignKeyInfo> getExistingForeignKeys(Connection connection, String tableName)
+            throws SQLException {
+        Map<String, ForeignKeyInfo> foreignKeys = new LinkedHashMap<>();
+        DatabaseMetaData metaData = connection.getMetaData();
+        try (ResultSet rs = metaData.getImportedKeys(connection.getCatalog(), null, tableName)) {
+            while (rs.next()) {
+                String name = rs.getString("FK_NAME");
+                if (name == null) continue;
+                foreignKeys.put(name.toLowerCase(Locale.ENGLISH), new ForeignKeyInfo(
+                        name,
+                        rs.getString("FKCOLUMN_NAME"),
+                        rs.getString("PKTABLE_NAME"),
+                        rs.getString("PKCOLUMN_NAME"),
+                        fromJdbcRule(rs.getShort("DELETE_RULE")),
+                        fromJdbcRule(rs.getShort("UPDATE_RULE"))
+                ));
+            }
+        }
+        return foreignKeys;
+    }
+
+    private static boolean rsBoolean(ResultSet resultSet, String column) {
+        try {
+            return resultSet.getBoolean(column);
+        } catch (SQLException e) {
+            throw new IllegalStateException("Unable to read JDBC metadata column " + column, e);
+        }
+    }
+
+    private static ForeignKeyAction fromJdbcRule(short rule) {
+        return switch (rule) {
+            case DatabaseMetaData.importedKeyCascade -> ForeignKeyAction.CASCADE;
+            case DatabaseMetaData.importedKeyRestrict -> ForeignKeyAction.RESTRICT;
+            case DatabaseMetaData.importedKeySetNull -> ForeignKeyAction.SET_NULL;
+            default -> ForeignKeyAction.NO_ACTION;
+        };
+    }
+
+    public record IndexInfo(String name, boolean unique, List<String> columns) {
+    }
+
+    public record ForeignKeyInfo(String name, String column, String referencedTable, String referencedColumn,
+                                 ForeignKeyAction onDelete, ForeignKeyAction onUpdate) {
+    }
+
+    private static final class IndexAccumulator {
+        private final String name;
+        private final boolean unique;
+        private final Map<Integer, String> columns = new TreeMap<>();
+
+        private IndexAccumulator(String name, boolean unique) {
+            this.name = name;
+            this.unique = unique;
+        }
     }
 
 

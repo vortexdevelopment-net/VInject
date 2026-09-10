@@ -31,10 +31,18 @@ public class TTLCache<K, V> implements Cache<K, V> {
             if (entry.isExpired(ttlMillis)) {
                 DebugLogger.log("Entry expired for key: %s (age: %d ms)", 
                         key, System.currentTimeMillis() - entry.getLastWrite());
-                storage.remove(key);
-                evictions.incrementAndGet();
-                misses.incrementAndGet();
-                return null;
+                if (storage.remove(key, entry)) {
+                    evictions.incrementAndGet();
+                    misses.incrementAndGet();
+                    return null;
+                }
+
+                // A concurrent pin or replacement won the race with eviction.
+                entry = storage.get(key);
+                if (entry == null) {
+                    misses.incrementAndGet();
+                    return null;
+                }
             }
             hits.incrementAndGet();
             entry.markAccessed();
@@ -49,7 +57,13 @@ public class TTLCache<K, V> implements Cache<K, V> {
     @Override
     public void put(K key, V value) {
         DebugLogger.log("Caching entry for key: %s with TTL=%d seconds", key, ttlMillis / 1000);
-        storage.put(key, new CacheEntry<>(value));
+        storage.compute(key, (ignored, existing) -> {
+            if (existing == null) {
+                return new CacheEntry<>(value);
+            }
+            existing.replaceValue(value);
+            return existing;
+        });
     }
     
     @Override
@@ -68,6 +82,7 @@ public class TTLCache<K, V> implements Cache<K, V> {
      * Clean up expired entries.
      * Should be called periodically by the cache manager.
      */
+    @Override
     public void cleanup() {
         List<K> expiredKeys = new ArrayList<>();
         for (Map.Entry<K, CacheEntry<V>> entry : storage.entrySet()) {
@@ -79,8 +94,10 @@ public class TTLCache<K, V> implements Cache<K, V> {
         if (!expiredKeys.isEmpty()) {
             DebugLogger.log("Cleaning up %d expired entries", expiredKeys.size());
             for (K key : expiredKeys) {
-                storage.remove(key);
-                evictions.incrementAndGet();
+                CacheEntry<V> entry = storage.get(key);
+                if (entry != null && entry.isExpired(ttlMillis) && storage.remove(key, entry)) {
+                    evictions.incrementAndGet();
+                }
             }
         }
     }

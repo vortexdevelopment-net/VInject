@@ -49,6 +49,7 @@ public class CacheCoordinator {
         
         // 1. Automatic loading via @AutoLoad in repositories
         repositoryContainer.loadByNamespace(namespace, value);
+        repositoryContainer.pinByNamespace(namespace, value, "auto-load:" + namespace);
 
         // 2. Manual contributors
         List<CacheContributor<?>> list = contributors.get(namespace);
@@ -75,8 +76,9 @@ public class CacheCoordinator {
         }
         DebugLogger.log("Triggering cache unloading for %s = %s", namespace, value);
 
-        // 1. Automatic invalidation in repositories
-        repositoryContainer.invalidateByNamespace(namespace, value);
+        // 1. Release the automatic player pin. The cache policy now controls
+        // when the no-longer-used entity is evicted.
+        repositoryContainer.unpinByNamespace(namespace, value, "auto-load:" + namespace);
 
         // 2. Manual contributors
         List<CacheContributor<?>> list = contributors.get(namespace);

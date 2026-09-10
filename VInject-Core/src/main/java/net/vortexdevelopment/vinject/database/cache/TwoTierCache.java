@@ -32,39 +32,10 @@ public class TwoTierCache<K, V> implements Cache<K, V> {
         this.hotTierSize = hotTierSize;
         this.normalTierSize = normalTierSize;
         
-        // HOT tier with access-order LRU
-        this.hotTier = new LinkedHashMap<K, CacheEntry<V>>(hotTierSize, 0.75f, true) {
-            @Override
-            protected boolean removeEldestEntry(Map.Entry<K, CacheEntry<V>> eldest) {
-                boolean shouldRemove = size() > TwoTierCache.this.hotTierSize;
-                if (shouldRemove) {
-                    evictions.incrementAndGet();
-                    DebugLogger.log("Evicting from HOT tier: %s", eldest.getKey());
-                    
-                    if (eldest.getValue().isDirty()) {
-                        DebugLogger.log("WARNING: Evicting dirty entry from HOT tier: %s", eldest.getKey());
-                    }
-                }
-                return shouldRemove;
-            }
-        };
-        
-        // NORMAL tier with access-order LRU (more aggressive eviction)
-        this.normalTier = new LinkedHashMap<K, CacheEntry<V>>(normalTierSize, 0.75f, true) {
-            @Override
-            protected boolean removeEldestEntry(Map.Entry<K, CacheEntry<V>> eldest) {
-                boolean shouldRemove = size() > TwoTierCache.this.normalTierSize;
-                if (shouldRemove) {
-                    evictions.incrementAndGet();
-                    DebugLogger.log("Evicting from NORMAL tier: %s", eldest.getKey());
-                    
-                    if (eldest.getValue().isDirty()) {
-                        DebugLogger.log("WARNING: Evicting dirty entry from NORMAL tier: %s", eldest.getKey());
-                    }
-                }
-                return shouldRemove;
-            }
-        };
+        // Both tiers use access-order LRU. Eviction is explicit so pinned and
+        // dirty entries can be skipped safely.
+        this.hotTier = new LinkedHashMap<>(hotTierSize, 0.75f, true);
+        this.normalTier = new LinkedHashMap<>(normalTierSize, 0.75f, true);
         
         DebugLogger.log("Created Two-Tier cache: HOT=%d, NORMAL=%d", hotTierSize, normalTierSize);
     }
@@ -112,18 +83,41 @@ public class TwoTierCache<K, V> implements Cache<K, V> {
     public void put(K key, V value) {
         lock.writeLock().lock();
         try {
-            // New entries go to NORMAL tier by default
-            CacheEntry<V> entry = new CacheEntry<>(value);
-            
-            // Remove from both tiers if exists
-            hotTier.remove(key);
-            normalTier.remove(key);
-            
-            normalTier.put(key, entry);
+            CacheEntry<V> existing = hotTier.remove(key);
+            if (existing == null) {
+                existing = normalTier.remove(key);
+            }
+
+            // New entries go to NORMAL tier by default. Preserve metadata when
+            // updating an existing entry so pins survive repository saves.
+            if (existing == null) {
+                existing = new CacheEntry<>(value);
+            } else {
+                existing.replaceValue(value);
+            }
+            normalTier.put(key, existing);
+            evictIfNeeded(normalTier, normalTierSize, "NORMAL");
             DebugLogger.log("Added entry to NORMAL tier: %s (size: %d/%d)", 
                     key, normalTier.size(), normalTierSize);
         } finally {
             lock.writeLock().unlock();
+        }
+    }
+
+    private void evictIfNeeded(Map<K, CacheEntry<V>> tier, int tierSize, String tierName) {
+        while (tier.size() > tierSize) {
+            Map.Entry<K, CacheEntry<V>> candidate = tier.entrySet().stream()
+                    .filter(entry -> !entry.getValue().isPinned())
+                    .filter(entry -> !entry.getValue().isDirty())
+                    .findFirst()
+                    .orElse(null);
+            if (candidate == null) {
+                return;
+            }
+
+            tier.remove(candidate.getKey());
+            evictions.incrementAndGet();
+            DebugLogger.log("Evicting from %s tier: %s", tierName, candidate.getKey());
         }
     }
     
@@ -287,6 +281,7 @@ public class TwoTierCache<K, V> implements Cache<K, V> {
     private void promoteToHot(K key, CacheEntry<V> entry) {
         normalTier.remove(key);
         hotTier.put(key, entry);
+        evictIfNeeded(hotTier, hotTierSize, "HOT");
         promotions.incrementAndGet();
         
         DebugLogger.log("PROMOTED to HOT tier: %s (access count: %d, HOT size: %d/%d)", 

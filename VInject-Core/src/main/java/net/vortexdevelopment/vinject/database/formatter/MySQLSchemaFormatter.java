@@ -1,5 +1,10 @@
 package net.vortexdevelopment.vinject.database.formatter;
 
+import net.vortexdevelopment.vinject.annotation.database.ForeignKeyAction;
+
+import java.util.List;
+import java.util.stream.Collectors;
+
 /**
  * Schema formatter implementation for MySQL and MariaDB databases.
  * Uses backticks for identifiers.
@@ -47,5 +52,32 @@ public class MySQLSchemaFormatter implements SchemaFormatter {
     @Override
     public boolean supportsCombinedAlterStatements() {
         return true; // MySQL/MariaDB supports combining multiple ALTER operations
+    }
+
+    @Override
+    public String formatCreateIndex(String tableName, String indexName, List<String> columns, boolean unique) {
+        return "CREATE " + (unique ? "UNIQUE " : "") + "INDEX " + formatColumnName(indexName)
+                + " ON " + formatTableName(tableName) + " ("
+                + columns.stream().map(this::formatColumnName).collect(Collectors.joining(", ")) + ")";
+    }
+
+    @Override
+    public String formatDropIndex(String tableName, String indexName) {
+        return "DROP INDEX " + formatColumnName(indexName) + " ON " + formatTableName(tableName);
+    }
+
+    @Override
+    public String formatAddForeignKey(String tableName, String constraintName, String columnName,
+                                      String referencedTable, String referencedColumn,
+                                      ForeignKeyAction onDelete, ForeignKeyAction onUpdate) {
+        return "ALTER TABLE " + formatTableName(tableName) + " ADD CONSTRAINT " + formatColumnName(constraintName)
+                + " FOREIGN KEY (" + formatColumnName(columnName) + ") REFERENCES "
+                + formatTableName(referencedTable) + " (" + formatColumnName(referencedColumn) + ")"
+                + " ON DELETE " + onDelete.sql() + " ON UPDATE " + onUpdate.sql();
+    }
+
+    @Override
+    public String formatDropForeignKey(String tableName, String constraintName) {
+        return "ALTER TABLE " + formatTableName(tableName) + " DROP FOREIGN KEY " + formatColumnName(constraintName);
     }
 }

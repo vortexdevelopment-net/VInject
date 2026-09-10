@@ -1,5 +1,10 @@
 package net.vortexdevelopment.vinject.database.formatter;
 
+import net.vortexdevelopment.vinject.annotation.database.ForeignKeyAction;
+
+import java.util.List;
+import java.util.stream.Collectors;
+
 /**
  * Schema formatter implementation for H2 database.
  * Uses double quotes for identifiers and converts MySQL-specific syntax.
@@ -45,5 +50,32 @@ public class H2SchemaFormatter implements SchemaFormatter {
     @Override
     public boolean supportsCombinedAlterStatements() {
         return false; // H2 requires separate ALTER TABLE statements
+    }
+
+    @Override
+    public String formatCreateIndex(String tableName, String indexName, List<String> columns, boolean unique) {
+        return "CREATE " + (unique ? "UNIQUE " : "") + "INDEX " + formatColumnName(indexName)
+                + " ON " + formatTableName(tableName) + " ("
+                + columns.stream().map(this::formatColumnName).collect(Collectors.joining(", ")) + ")";
+    }
+
+    @Override
+    public String formatDropIndex(String tableName, String indexName) {
+        return "DROP INDEX " + formatColumnName(indexName);
+    }
+
+    @Override
+    public String formatAddForeignKey(String tableName, String constraintName, String columnName,
+                                      String referencedTable, String referencedColumn,
+                                      ForeignKeyAction onDelete, ForeignKeyAction onUpdate) {
+        return "ALTER TABLE " + formatTableName(tableName) + " ADD CONSTRAINT " + formatColumnName(constraintName)
+                + " FOREIGN KEY (" + formatColumnName(columnName) + ") REFERENCES "
+                + formatTableName(referencedTable) + " (" + formatColumnName(referencedColumn) + ")"
+                + " ON DELETE " + onDelete.sql() + " ON UPDATE " + onUpdate.sql();
+    }
+
+    @Override
+    public String formatDropForeignKey(String tableName, String constraintName) {
+        return "ALTER TABLE " + formatTableName(tableName) + " DROP CONSTRAINT " + formatColumnName(constraintName);
     }
 }

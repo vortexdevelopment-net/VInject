@@ -63,6 +63,19 @@ public interface CacheManager {
     void registerCache(String name, Cache<?, ?> cache);
 
     /**
+     * Registers a periodic action associated with a cache. Implementations that
+     * do not provide scheduling may leave this as a no-op.
+     */
+    default void registerFlushTask(String name, Runnable action, int intervalSeconds) {
+    }
+
+    /**
+     * Removes a previously registered periodic cache action.
+     */
+    default void unregisterFlushTask(String name) {
+    }
+
+    /**
      * Shutdown the cache manager and flush all caches.
      */
     void shutdown();

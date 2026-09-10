@@ -91,11 +91,15 @@ class CacheCoordinatorTest {
         
         assertThat(cacheManager.getCache(AutoLoadRepository.class.getName()).get(entity.getId())).isNotNull();
 
-        // 2. Trigger coordination unload
+        // 2. Trigger the player lifecycle load and release
+        coordinator.load("player_uuid", playerId);
         coordinator.unload("player_uuid", playerId);
 
-        // 3. Verify removed from cache
-        assertThat(cacheManager.getCache(AutoLoadRepository.class.getName()).get(entity.getId())).isNull();
+        // 3. The entity remains warm but is no longer pinned and can now be
+        // evicted by its configured cache policy.
+        Cache<Object, Object> cache = cacheManager.getCache(AutoLoadRepository.class.getName());
+        assertThat(cache.get(entity.getId())).isNotNull();
+        assertThat(cache.getAllEntries().get(entity.getId()).getPinCount().get()).isZero();
     }
 
     @Test

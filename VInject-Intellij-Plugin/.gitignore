@@ -5,6 +5,7 @@ build/
 !**/src/test/**/build/
 
 *.xml
+!src/main/resources/META-INF/plugin.xml
 .intellijPlatform/
 
 ### IntelliJ IDEA ###

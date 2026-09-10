@@ -1,5 +1,9 @@
 package net.vortexdevelopment.vinject.database.formatter;
 
+import net.vortexdevelopment.vinject.annotation.database.ForeignKeyAction;
+
+import java.util.List;
+
 /**
  * Interface for formatting database schema elements (table names, column names, SQL statements)
  * according to database-specific syntax rules.
@@ -61,4 +65,14 @@ public interface SchemaFormatter {
      * @return true if multiple ALTER operations can be combined, false if they must be executed separately
      */
     boolean supportsCombinedAlterStatements();
+
+    String formatCreateIndex(String tableName, String indexName, List<String> columns, boolean unique);
+
+    String formatDropIndex(String tableName, String indexName);
+
+    String formatAddForeignKey(String tableName, String constraintName, String columnName,
+                               String referencedTable, String referencedColumn,
+                               ForeignKeyAction onDelete, ForeignKeyAction onUpdate);
+
+    String formatDropForeignKey(String tableName, String constraintName);
 }

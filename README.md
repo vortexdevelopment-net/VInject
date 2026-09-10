@@ -10,7 +10,7 @@ For detailed tutorials and references, check out the specialized guides:
 
 * **[Documentation Index](docs/README.md)**: Full guide list and agent quick start.
 * **[Introduction & DI Concepts](docs/introduction.md)**: DI basics, Component vs. Service, writing Beans, and framework-managed class constraints.
-* **[Components & Injection](docs/components-and-injection.md)**: `@Root`, injection modes, `registerSubclasses`, registry annotations.
+* **[Components & Injection](docs/components-and-injection.md)**: `@Root`, automatic type registration, injection modes, registry annotations.
 * **[Lifecycle & Events](docs/lifecycle-and-events.md)**: `@PostConstruct`, `@OnLoad`, `@OnDestroy`, `@OnEvent`.
 * **[Load Order & Extensions](docs/load-order-and-extensions.md)**: Startup phases, `@Registry`, diagnostic codes.
 * **[Agent Reference](docs/agent-reference.md)**: One-page lookup for agents.

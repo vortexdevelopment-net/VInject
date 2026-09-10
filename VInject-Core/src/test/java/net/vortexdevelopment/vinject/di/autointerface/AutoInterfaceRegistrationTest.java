@@ -11,13 +11,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AutoInterfaceRegistrationTest {
 
     @Test
-    void injectsInterfaceWithoutRegisterSubclasses() {
+    void injectsInterfaceAutomatically() {
         try (TestApplicationContext context = TestApplicationContext.builder()
                 .withRootClass(TestRoot.class)
                 .build()) {
             PortConsumer consumer = context.getComponent(PortConsumer.class);
             assertThat(consumer.port).isNotNull();
             assertThat(consumer.port).isInstanceOf(PortImpl.class);
+        }
+    }
+
+    @Test
+    void prefersExactClassOverInheritedSubclassRegistration() {
+        try (TestApplicationContext context = TestApplicationContext.builder()
+                .withRootClass(TestRoot.class)
+                .build()) {
+            ExactClassConsumer consumer = context.getComponent(ExactClassConsumer.class);
+            assertThat(consumer.base).isInstanceOf(BaseComponent.class);
         }
     }
 
@@ -35,5 +45,18 @@ class AutoInterfaceRegistrationTest {
     @Component
     static class PortConsumer {
         @Inject Port port;
+    }
+
+    @Component
+    static class BaseComponent {
+    }
+
+    @Component
+    static class DerivedComponent extends BaseComponent {
+    }
+
+    @Component
+    static class ExactClassConsumer {
+        @Inject BaseComponent base;
     }
 }

@@ -90,4 +90,35 @@ public class RepositoryContainer {
             }
         }
     }
+
+    public void pinByNamespace(String namespace, Object value, String reason) {
+        List<RepositoryInvocationHandler<?, ?>> handlers = namespaceToHandlers.get(namespace);
+        if (handlers != null) {
+            for (RepositoryInvocationHandler<?, ?> handler : handlers) {
+                handler.pinByNamespace(namespace, value, reason);
+            }
+        }
+    }
+
+    public void unpinByNamespace(String namespace, Object value, String reason) {
+        List<RepositoryInvocationHandler<?, ?>> handlers = namespaceToHandlers.get(namespace);
+        if (handlers != null) {
+            for (RepositoryInvocationHandler<?, ?> handler : handlers) {
+                handler.unpinByNamespace(namespace, value, reason);
+            }
+        }
+    }
+
+    /**
+     * Flushes dirty entities in every repository cache.
+     *
+     * @return number of entities successfully flushed
+     */
+    public int flushCaches() {
+        int flushed = 0;
+        for (RepositoryInvocationHandler<?, ?> handler : repositoryProxies.values()) {
+            flushed += handler.flushCache();
+        }
+        return flushed;
+    }
 }

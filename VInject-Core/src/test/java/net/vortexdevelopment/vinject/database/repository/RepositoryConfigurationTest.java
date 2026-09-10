@@ -22,6 +22,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.UUID;
+import java.sql.PreparedStatement;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -199,6 +200,74 @@ class RepositoryConfigurationTest {
         assertThat(cache.get(entity.getId())).isNotNull();
     }
 
+    @Test
+    void pinnedEntrySurvivesTtlUntilLastUnpin() throws InterruptedException {
+        database = MockDatabaseBuilder.createInMemory("config_test_pinned_ttl");
+
+        context = TestApplicationContext.builder()
+                .withRootClass(TestRoot.class)
+                .withDatabase(database)
+                .withComponents(PinnedTtlRepository.class)
+                .build();
+
+        PinnedTtlRepository repository = context.getComponent(PinnedTtlRepository.class);
+        CacheManager cacheManager = context.getComponent(CacheManager.class);
+
+        SimpleEntity entity = new SimpleEntity();
+        entity.setId(UUID.randomUUID());
+        entity.setName("Pinned TTL Test");
+        repository.save(entity);
+        repository.pin(entity, "member-online");
+
+        Thread.sleep(1200);
+
+        Cache<Object, Object> cache = cacheManager.getCache(PinnedTtlRepository.class.getName());
+        assertThat(cache.get(entity.getId())).isNotNull();
+
+        repository.unpin(entity, "member-online");
+        Thread.sleep(1200);
+
+        assertThat(cache.get(entity.getId())).isNull();
+    }
+
+    @Test
+    void writeBackDefersUpdateUntilFlush() throws Exception {
+        database = MockDatabaseBuilder.createInMemory("config_test_write_back");
+
+        context = TestApplicationContext.builder()
+                .withRootClass(TestRoot.class)
+                .withDatabase(database)
+                .withComponents(WriteBackRepository.class)
+                .build();
+
+        WriteBackRepository repository = context.getComponent(WriteBackRepository.class);
+        SimpleEntity entity = new SimpleEntity();
+        entity.setId(UUID.randomUUID());
+        entity.setName("Before");
+        repository.save(entity);
+
+        entity.setName("After");
+        repository.save(entity);
+
+        assertThat(readName(entity.getId())).isEqualTo("Before");
+        assertThat(repository.flushCache()).isEqualTo(1);
+        assertThat(readName(entity.getId())).isEqualTo("After");
+    }
+
+    private String readName(UUID id) throws Exception {
+        String tableName = database.getSchemaFormatter()
+                .formatTableName(Database.getTablePrefix() + "SIMPLE_ENTITIES");
+        return database.connect(connection -> {
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "SELECT name FROM " + tableName + " WHERE id = ?")) {
+                statement.setObject(1, id);
+                try (var resultSet = statement.executeQuery()) {
+                    return resultSet.next() ? resultSet.getString(1) : null;
+                }
+            }
+        });
+    }
+
     @Root(packageName = "net.vortexdevelopment.vinject.database.repository", createInstance = false)
     static class TestRoot {}
 
@@ -221,6 +290,19 @@ class RepositoryConfigurationTest {
     @Repository
     @EnableCaching(policy = CachePolicy.TTL, ttlSeconds = 1)
     public interface TtlRepository extends CrudRepository<SimpleEntity, UUID> {}
+
+    @Repository
+    @EnableCaching(policy = CachePolicy.TTL, ttlSeconds = 1)
+    public interface PinnedTtlRepository extends CachedCrudRepository<SimpleEntity, UUID> {}
+
+    @Repository
+    @EnableCaching(
+            policy = CachePolicy.LRU,
+            maxSize = 100,
+            writeStrategy = net.vortexdevelopment.vinject.database.cache.WriteStrategy.WRITE_BACK,
+            flushIntervalSeconds = 60
+    )
+    public interface WriteBackRepository extends CachedCrudRepository<SimpleEntity, UUID> {}
 
     @Service
     public static class CacheConfigService {

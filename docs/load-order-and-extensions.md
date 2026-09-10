@@ -91,7 +91,6 @@ The Maven plugin and runtime analyzer emit structured diagnostics. Common codes:
 | `VINJECT-DEP-004` | YAML class depends on late-phase provider |
 | `VINJECT-DEP-005` | Named dependency via `@Qualifier` not found |
 | `VINJECT-CYCLE-001` | Hard constructor cycle |
-| `VINJECT-COMP-001` | Invalid optional `registerSubclasses` alias |
 | `VINJECT-REG-001` | `@Registry` class does not extend `AnnotationHandler` |
 
 Full list: [VInject-Analyzer README](../VInject-Analyzer/README.md).

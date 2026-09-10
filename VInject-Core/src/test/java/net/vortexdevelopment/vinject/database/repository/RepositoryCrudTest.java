@@ -1,11 +1,14 @@
 package net.vortexdevelopment.vinject.database.repository;
 
 import lombok.Data;
+import net.vortexdevelopment.vinject.annotation.Inject;
+import net.vortexdevelopment.vinject.annotation.component.Component;
 import net.vortexdevelopment.vinject.annotation.component.Repository;
 import net.vortexdevelopment.vinject.annotation.component.Root;
 import net.vortexdevelopment.vinject.annotation.database.Column;
 import net.vortexdevelopment.vinject.annotation.database.Entity;
 import net.vortexdevelopment.vinject.annotation.database.Id;
+import net.vortexdevelopment.vinject.annotation.lifecycle.PostConstruct;
 import net.vortexdevelopment.vinject.database.Database;
 import net.vortexdevelopment.vinject.testing.MockDatabaseBuilder;
 import net.vortexdevelopment.vinject.testing.RepositoryTestUtils;
@@ -150,6 +153,17 @@ class RepositoryCrudTest {
     }
 
     @Test
+    void hydratesEntityBeforeInjectionAndPostConstruct() {
+        TestUser user = createUser("Hydrated", "hydrated@example.com", 42);
+        userRepository.save(user);
+
+        TestUser found = userRepository.findById(user.getId());
+
+        assertThat(found.dependency).isNotNull();
+        assertThat(found.postConstructSawHydratedName).isTrue();
+    }
+
+    @Test
     void findByEmailFindsCorrectEntity() {
         // Arrange
         TestUser user = createUser("Test", "test@example.com", 25);
@@ -223,6 +237,20 @@ class RepositoryCrudTest {
 
         @Column
         private Integer age;
+
+        @Inject
+        private transient TestEntityDependency dependency;
+
+        private transient boolean postConstructSawHydratedName;
+
+        @PostConstruct
+        private void verifyHydrationOrder() {
+            postConstructSawHydratedName = "Hydrated".equals(name);
+        }
+    }
+
+    @Component
+    public static class TestEntityDependency {
     }
 
     @Repository

@@ -40,7 +40,9 @@ public abstract class BaseMethodHandler implements RepositoryMethodHandler {
     @SuppressWarnings("unchecked")
     protected Object mapEntity(RepositoryInvocationContext<?, ?> context, Connection connection, Class<?> entityCls, ResultSet resultSet) throws Exception {
         EntityMetadata metadata = new EntityMetadata(entityCls, context.getDatabase().getSerializerRegistry());
-        Object entityInstance = context.getDependencyContainer().newInstance(entityCls);
+        // Database entities are hydrated before dependency injection and lifecycle
+        // callbacks. This lets @PostConstruct observe the complete persisted state.
+        Object entityInstance = context.getDependencyContainer().constructInstance(entityCls);
 
         Set<String> processedSerializedFields = new HashSet<>();
 
@@ -138,6 +140,8 @@ public abstract class BaseMethodHandler implements RepositoryMethodHandler {
             }
         }
 
+        context.getDependencyContainer().getInjectionEngine().inject(entityInstance);
+        context.getDependencyContainer().getLifecycleManager().invokePostConstruct(entityInstance);
         context.getDependencyContainer().getLifecycleManager().invokeOnLoad(entityInstance);
         return entityInstance;
     }

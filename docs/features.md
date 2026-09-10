@@ -9,7 +9,7 @@ A comprehensive catalog of annotations and features available in the VInject fra
 | Annotation | Target | Description |
 | --- | --- | --- |
 | `@Root` | Type | Marks the main application class. Triggers package scanning. Configuration properties: `packageName`, `ignoredPackages`, `includedPackages`, `createInstance`, `loadProperties`, `templateDependencies`. |
-| `@Component` | Type | Managed singleton. Auto-registers inherited types. Optional `name`, `registerSubclasses`, `priority`. |
+| `@Component` | Type | Managed singleton. Auto-registers inherited types. Optional `name`, `priority`. |
 | `@Qualifier` | Type, Field, Parameter, Method | Bean name on producer or selector on injection point. |
 | `@Service` | Type | Marks a class as a business-logic service. |
 | `@Bean` | Method | Defines a factory method inside a component/service to register external or dynamically created classes. |
@@ -47,6 +47,8 @@ See [lifecycle-and-events.md](lifecycle-and-events.md) for full detail.
 | `@ColumnPrefix` | Field | Prepends a prefix to nested object column mappings. |
 | `@Temporal` | Field | Configures temporal type mappings (Date, Time, Timestamp) for SQL queries. |
 | `@AutoLoad` | Field | Configures proactive caching namespaces for specific entity fields. |
+| `@Index` | Field, Type | Declares a single-column or ordered composite database index. |
+| `@ForeignKey` | Field | Declares a foreign-key constraint with delete and update actions. |
 | `@CachedField` | Method | Instructs the bytecode transformer to track field changes on entities for dirty tracking. |
 | `@EnableCaching` | Type | Enables caching on repositories with configurable `policy` (LRU, HOT_AWARE) and `writeStrategy` (WRITE_THROUGH, WRITE_BACK). |
 | `@RegisterCacheContributor` | Type | Registers a custom cache coordinator contributor. |

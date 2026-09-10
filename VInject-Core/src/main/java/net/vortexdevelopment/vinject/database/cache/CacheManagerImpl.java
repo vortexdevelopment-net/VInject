@@ -5,6 +5,10 @@ import net.vortexdevelopment.vinject.debug.DebugLogger;
 import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Cache manager implementation.
@@ -13,6 +17,13 @@ import java.util.concurrent.ConcurrentHashMap;
 public class CacheManagerImpl implements CacheManager {
     
     private final Map<String, Cache<?, ?>> caches = new ConcurrentHashMap<>();
+    private final Map<String, ScheduledFuture<?>> flushTasks = new ConcurrentHashMap<>();
+    private final Map<String, ScheduledFuture<?>> maintenanceTasks = new ConcurrentHashMap<>();
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "vinject-cache-flush");
+        thread.setDaemon(true);
+        return thread;
+    });
     
     @Override
     @SuppressWarnings("unchecked")
@@ -24,6 +35,13 @@ public class CacheManagerImpl implements CacheManager {
         
         Cache<K, V> cache = createCacheInstance(config);
         caches.put(name, cache);
+        ScheduledFuture<?> maintenanceTask = scheduler.scheduleAtFixedRate(
+                cache::cleanup,
+                1,
+                1,
+                TimeUnit.SECONDS
+        );
+        maintenanceTasks.put(name, maintenanceTask);
         
         DebugLogger.log("Created %s cache: %s (maxSize=%d, writeStrategy=%s)", 
                 config.getPolicy().name(), name, config.getMaxSize(), 
@@ -34,6 +52,11 @@ public class CacheManagerImpl implements CacheManager {
     
     @Override
     public void destroyCache(String name) {
+        unregisterFlushTask(name);
+        ScheduledFuture<?> maintenanceTask = maintenanceTasks.remove(name);
+        if (maintenanceTask != null) {
+            maintenanceTask.cancel(false);
+        }
         Cache<?, ?> cache = caches.remove(name);
         if (cache != null) {
             DebugLogger.log("Destroying cache: %s", name);
@@ -90,11 +113,40 @@ public class CacheManagerImpl implements CacheManager {
         caches.put(name, cache);
         DebugLogger.log("Registered custom cache: %s", name);
     }
+
+    @Override
+    public void registerFlushTask(String name, Runnable action, int intervalSeconds) {
+        if (intervalSeconds <= 0) {
+            return;
+        }
+        unregisterFlushTask(name);
+        ScheduledFuture<?> task = scheduler.scheduleAtFixedRate(
+                action,
+                intervalSeconds,
+                intervalSeconds,
+                TimeUnit.SECONDS
+        );
+        flushTasks.put(name, task);
+    }
+
+    @Override
+    public void unregisterFlushTask(String name) {
+        ScheduledFuture<?> task = flushTasks.remove(name);
+        if (task != null) {
+            task.cancel(false);
+        }
+    }
     
     @Override
     public void shutdown() {
         DebugLogger.log("Shutting down cache manager, flushing %d caches", caches.size());
         
+        flushTasks.values().forEach(task -> task.cancel(false));
+        flushTasks.clear();
+        maintenanceTasks.values().forEach(task -> task.cancel(false));
+        maintenanceTasks.clear();
+        scheduler.shutdownNow();
+
         for (Map.Entry<String, Cache<?, ?>> entry : caches.entrySet()) {
             String name = entry.getKey();
             Cache<?, ?> cache = entry.getValue();

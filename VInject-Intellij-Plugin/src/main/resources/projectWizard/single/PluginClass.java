@@ -16,7 +16,7 @@ import org.jetbrains.annotations.Nullable;
 public final class $CLASS_NAME$ extends VortexPlugin {
 
     @Override
-    protected void verifyLicense() throws IllegalStateException {
+    protected void verifyLicense() throws net.vortexdevelopment.vortexcore.PluginVerificationException {
 
     }
 

@@ -25,29 +25,16 @@ public class SimpleLRUCache<K, V> implements Cache<K, V> {
     
     public SimpleLRUCache(int maxSize) {
         this.maxSize = maxSize;
-        // LinkedHashMap with access-order and removeEldestEntry override
-        this.storage = new LinkedHashMap<K, CacheEntry<V>>(maxSize, 0.75f, true) {
-            @Override
-            protected boolean removeEldestEntry(Map.Entry<K, CacheEntry<V>> eldest) {
-                boolean shouldRemove = size() > SimpleLRUCache.this.maxSize;
-                if (shouldRemove) {
-                    evictions.incrementAndGet();
-                    DebugLogger.log("Evicting entry for key: %s (LRU)", eldest.getKey());
-                    
-                    // If entry is dirty, log warning
-                    if (eldest.getValue().isDirty()) {
-                        DebugLogger.log("WARNING: Evicting dirty entry for key: %s", eldest.getKey());
-                    }
-                }
-                return shouldRemove;
-            }
-        };
+        // LinkedHashMap with access-order. Eviction is performed explicitly so
+        // pinned and dirty entries can be skipped instead of being discarded.
+        this.storage = new LinkedHashMap<>(maxSize, 0.75f, true);
         DebugLogger.log("Created LRU cache with maxSize=%d", maxSize);
     }
     
     @Override
     public V get(K key) {
-        lock.readLock().lock();
+        // LinkedHashMap access-order updates the map during get().
+        lock.writeLock().lock();
         try {
             CacheEntry<V> entry = storage.get(key);
             if (entry != null) {
@@ -61,7 +48,7 @@ public class SimpleLRUCache<K, V> implements Cache<K, V> {
             DebugLogger.log("Cache MISS for key: %s", key);
             return null;
         } finally {
-            lock.readLock().unlock();
+            lock.writeLock().unlock();
         }
     }
     
@@ -71,9 +58,32 @@ public class SimpleLRUCache<K, V> implements Cache<K, V> {
         try {
             DebugLogger.log("Caching entry for key: %s (current size: %d/%d)", 
                     key, storage.size(), maxSize);
-            storage.put(key, new CacheEntry<>(value));
+            CacheEntry<V> existing = storage.get(key);
+            if (existing != null) {
+                existing.replaceValue(value);
+            } else {
+                storage.put(key, new CacheEntry<>(value));
+            }
+            evictIfNeeded();
         } finally {
             lock.writeLock().unlock();
+        }
+    }
+
+    private void evictIfNeeded() {
+        while (storage.size() > maxSize) {
+            Map.Entry<K, CacheEntry<V>> candidate = storage.entrySet().stream()
+                    .filter(entry -> !entry.getValue().isPinned())
+                    .filter(entry -> !entry.getValue().isDirty())
+                    .findFirst()
+                    .orElse(null);
+            if (candidate == null) {
+                return;
+            }
+
+            storage.remove(candidate.getKey());
+            evictions.incrementAndGet();
+            DebugLogger.log("Evicting entry for key: %s (LRU)", candidate.getKey());
         }
     }
     

@@ -4,6 +4,7 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import lombok.Getter;
 import net.vortexdevelopment.vinject.annotation.database.Entity;
+import net.vortexdevelopment.vinject.annotation.database.ForeignKeyAction;
 import net.vortexdevelopment.vinject.database.formatter.H2SchemaFormatter;
 import net.vortexdevelopment.vinject.database.formatter.MySQLSchemaFormatter;
 import net.vortexdevelopment.vinject.database.formatter.SchemaFormatter;
@@ -11,6 +12,8 @@ import net.vortexdevelopment.vinject.database.mapper.H2Mapper;
 import net.vortexdevelopment.vinject.database.mapper.MySQLMapper;
 import net.vortexdevelopment.vinject.database.meta.EntityMetadata;
 import net.vortexdevelopment.vinject.database.meta.FieldMetadata;
+import net.vortexdevelopment.vinject.database.meta.ForeignKeyMetadata;
+import net.vortexdevelopment.vinject.database.meta.IndexMetadata;
 import net.vortexdevelopment.vinject.database.serializer.DatabaseSerializer;
 import net.vortexdevelopment.vinject.database.serializer.SerializerRegistry;
 import net.vortexdevelopment.vinject.debug.DebugLogger;
@@ -33,7 +36,6 @@ public class Database implements DatabaseConnector {
     private HikariDataSource hikariDataSource;
     private Map<Class<?>, EntityMetadata> entityMetadataMap = new HashMap<>();
     private static String TABLE_PREFIX = "example_";
-    private final List<String> FOREIGN_KEY_QUERIES = new ArrayList<>();
     private static SQLTypeMapper sqlTypeMapper;
     @Getter private SchemaFormatter schemaFormatter;
     @Getter private final SerializerRegistry serializerRegistry = new SerializerRegistry();
@@ -168,8 +170,7 @@ public class Database implements DatabaseConnector {
             try {
                 metadata.resolveFields(entityMetadataMap, serializerRegistry);
             } catch (Exception e) {
-                System.err.println("Could not resolve fields for entity: " + metadata.getTableName());
-                e.printStackTrace();
+                throw new IllegalStateException("Could not resolve fields for entity: " + metadata.getTableName(), e);
             }
         }
     }
@@ -198,15 +199,12 @@ public class Database implements DatabaseConnector {
                     e.printStackTrace();
                 }
             }
-            // Create foreign keys after all tables are created
-            for (String query : FOREIGN_KEY_QUERIES) {
-                try (Statement stmt = connection.createStatement()) {
-                    stmt.executeUpdate(query);
-                    DebugLogger.log(Database.class, "Created foreign key: " + query);
-                } catch (Exception e) {
-                    System.err.println("Error creating foreign key: " + query + ": " + e.getMessage());
-                    e.printStackTrace();
-                }
+            // Relationships are synchronized after every table and column exists.
+            for (EntityMetadata metadata : entityMetadataMap.values()) {
+                synchronizeIndexes(connection, metadata);
+            }
+            for (EntityMetadata metadata : entityMetadataMap.values()) {
+                synchronizeForeignKeys(connection, metadata);
             }
         });
     }
@@ -216,8 +214,6 @@ public class Database implements DatabaseConnector {
                 .append(" (\n");
 
         List<String> pkColumns = new ArrayList<>();
-        List<String> foreignKeys = new ArrayList<>();
-
         for (FieldMetadata fieldMeta : metadata.getFields()) {
             createSQL.append("  ")
                     .append(schemaFormatter.formatColumnDefinition(fieldMeta.getColumnName(), fieldMeta.getSqlType()))
@@ -226,7 +222,6 @@ public class Database implements DatabaseConnector {
             if (fieldMeta.isPrimaryKey()) {
                 pkColumns.add(schemaFormatter.formatColumnName(fieldMeta.getColumnName()));
             }
-            // foreign key handling omitted…
         }
 
         if (!pkColumns.isEmpty()) {
@@ -235,13 +230,9 @@ public class Database implements DatabaseConnector {
                     .append("),\n");
         }
 
-        if (!foreignKeys.isEmpty()) {
-            createSQL.append(String.join(",\n", foreignKeys)).append("\n");
-        } else {
-            // remove trailing comma
-            createSQL.setLength(createSQL.length() - 2);
-            createSQL.append("\n");
-        }
+        // remove trailing comma; indexes and foreign keys are created after every table exists
+        createSQL.setLength(createSQL.length() - 2);
+        createSQL.append("\n");
 
         createSQL.append(");");
 
@@ -330,6 +321,79 @@ public class Database implements DatabaseConnector {
                 }
             }
         }
+    }
+
+    private void synchronizeIndexes(Connection connection, EntityMetadata metadata) throws Exception {
+        Map<String, DBUtils.IndexInfo> existing = DBUtils.getExistingIndexes(connection, metadata.getTableName());
+        try (Statement statement = connection.createStatement()) {
+            for (IndexMetadata expected : metadata.getIndexes()) {
+                String key = expected.getName().toLowerCase(Locale.ENGLISH);
+                DBUtils.IndexInfo actual = existing.get(key);
+                if (actual != null && indexMatches(actual, expected)) {
+                    continue;
+                }
+                if (actual != null) {
+                    String drop = schemaFormatter.formatDropIndex(metadata.getTableName(), actual.name());
+                    statement.executeUpdate(drop);
+                    DebugLogger.log(Database.class, "Dropped mismatched index: " + drop);
+                }
+                String create = schemaFormatter.formatCreateIndex(
+                        metadata.getTableName(), expected.getName(), expected.getColumns(), expected.isUnique());
+                statement.executeUpdate(create);
+                DebugLogger.log(Database.class, "Created index: " + create);
+            }
+        }
+    }
+
+    private void synchronizeForeignKeys(Connection connection, EntityMetadata metadata) throws Exception {
+        Map<String, DBUtils.ForeignKeyInfo> existing = DBUtils.getExistingForeignKeys(connection, metadata.getTableName());
+        try (Statement statement = connection.createStatement()) {
+            for (FieldMetadata field : metadata.getFields()) {
+                if (!field.isForeignKey()) continue;
+                ForeignKeyMetadata expected = field.getForeignKey();
+                String key = expected.getName().toLowerCase(Locale.ENGLISH);
+                DBUtils.ForeignKeyInfo actual = existing.get(key);
+                if (actual != null && foreignKeyMatches(actual, field.getColumnName(), expected)) {
+                    continue;
+                }
+                if (actual != null) {
+                    String drop = schemaFormatter.formatDropForeignKey(metadata.getTableName(), actual.name());
+                    statement.executeUpdate(drop);
+                    DebugLogger.log(Database.class, "Dropped mismatched foreign key: " + drop);
+                }
+                String create = schemaFormatter.formatAddForeignKey(
+                        metadata.getTableName(), expected.getName(), field.getColumnName(),
+                        expected.getReferencedTable(), expected.getReferencedColumn(),
+                        expected.getOnDelete(), expected.getOnUpdate());
+                statement.executeUpdate(create);
+                DebugLogger.log(Database.class, "Created foreign key: " + create);
+            }
+        }
+    }
+
+    private static boolean indexMatches(DBUtils.IndexInfo actual, IndexMetadata expected) {
+        if (actual.unique() != expected.isUnique() || actual.columns().size() != expected.getColumns().size()) {
+            return false;
+        }
+        for (int i = 0; i < actual.columns().size(); i++) {
+            if (!actual.columns().get(i).equalsIgnoreCase(expected.getColumns().get(i))) return false;
+        }
+        return true;
+    }
+
+    private static boolean foreignKeyMatches(DBUtils.ForeignKeyInfo actual, String localColumn,
+                                             ForeignKeyMetadata expected) {
+        return actual.column().equalsIgnoreCase(localColumn)
+                && actual.referencedTable().equalsIgnoreCase(expected.getReferencedTable())
+                && actual.referencedColumn().equalsIgnoreCase(expected.getReferencedColumn())
+                && actionsEquivalent(actual.onDelete(), expected.getOnDelete())
+                && actionsEquivalent(actual.onUpdate(), expected.getOnUpdate());
+    }
+
+    private static boolean actionsEquivalent(ForeignKeyAction actual, ForeignKeyAction expected) {
+        if (actual == expected) return true;
+        return (actual == ForeignKeyAction.NO_ACTION || actual == ForeignKeyAction.RESTRICT)
+                && (expected == ForeignKeyAction.NO_ACTION || expected == ForeignKeyAction.RESTRICT);
     }
 
     private static String normalizeColumnDefinitionForComparison(String definition, boolean h2) {

@@ -6,7 +6,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Annotation for classes that represent database entities.
+ * Marks a class as a persisted database entity.
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.TYPE)

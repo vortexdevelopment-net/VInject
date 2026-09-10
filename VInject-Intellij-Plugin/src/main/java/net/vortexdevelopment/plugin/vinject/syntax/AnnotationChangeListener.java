@@ -11,9 +11,6 @@ import net.vortexdevelopment.plugin.vinject.Plugin;
 import net.vortexdevelopment.plugin.vinject.container.ClassDataManager;
 import org.jetbrains.annotations.NotNull;
 
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
 
 public class AnnotationChangeListener implements PsiTreeChangeListener {
 
@@ -38,31 +35,6 @@ public class AnnotationChangeListener implements PsiTreeChangeListener {
         String oldAnnotationName = oldAnnotation.getQualifiedName();
         String newAnnotationName = newAnnotation.getQualifiedName();
         
-        // Check if both annotations are component annotations
-        if (oldAnnotationName != null && newAnnotationName != null &&
-            ClassDataManager.COMPONENT_ANNOTATIONS.contains(oldAnnotationName) &&
-            ClassDataManager.COMPONENT_ANNOTATIONS.contains(newAnnotationName) &&
-            oldAnnotationName.equals(newAnnotationName)) {
-
-            List<String> oldRegisterSubclasses = ClassDataManager.getClassArray(oldAnnotation, "registerSubclasses");
-            List<String> newRegisterSubclasses = ClassDataManager.getClassArray(newAnnotation, "registerSubclasses");
-
-            //Get the added or removed classes
-            Set<String> addedClasses = new HashSet<>(newRegisterSubclasses);
-            addedClasses.removeAll(oldRegisterSubclasses);
-            Set<String> removedClasses = new HashSet<>(oldRegisterSubclasses);
-            removedClasses.removeAll(newRegisterSubclasses);
-
-            //Add the added classes to the beans
-            for (String className : addedClasses) {
-                //Plugin.addBean(className);
-            }
-
-            //Remove the removed classes from the beans
-            for (String className : removedClasses) {
-                //Plugin.removeBean(className);
-            }
-        }
     }
 
     @Override

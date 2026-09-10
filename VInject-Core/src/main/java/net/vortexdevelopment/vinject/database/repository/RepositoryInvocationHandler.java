@@ -30,6 +30,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
     private final Map<String, RepositoryMethodHandler> exactHandlers = new HashMap<>();
     private final List<RepositoryMethodHandler> patternHandlers = new ArrayList<>();
     private CrudMethodHandler crudHandler;
+    private RepositoryCache<T, ID> repositoryCache;
 
     public RepositoryInvocationHandler(Class<?> repositoryClass,
                                        Class<T> entityClass,
@@ -48,6 +49,7 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
         for (String methodName : CrudMethodHandler.SUPPORTED_METHODS) {
             exactHandlers.put(methodName, crudHandler);
         }
+        this.repositoryCache = new RepositoryCacheImpl<>(context, crudHandler);
 
         // Custom Query Method
         exactHandlers.put("query", new CustomQueryMethodHandler());
@@ -59,8 +61,8 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
         exactHandlers.put("toString", objectHandler);
 
         // Pattern-based Handlers (Dynamic queries, default methods, etc.)
-        patternHandlers.add(new DynamicQueryMethodHandler());
-        patternHandlers.add(new TopQueryMethodHandler());
+        patternHandlers.add(new DynamicQueryMethodHandler(crudHandler));
+        patternHandlers.add(new TopQueryMethodHandler(crudHandler));
         patternHandlers.add(new DefaultMethodHandler());
     }
 
@@ -110,8 +112,27 @@ public class RepositoryInvocationHandler<T, ID> implements InvocationHandler {
         crudHandler.invalidateByNamespace(context, namespace, value);
     }
 
+    public void pinByNamespace(String namespace, Object value, String reason) {
+        crudHandler.pinByNamespace(context, namespace, value, reason);
+    }
+
+    public void unpinByNamespace(String namespace, Object value, String reason) {
+        crudHandler.unpinByNamespace(context, namespace, value, reason);
+    }
+
+    /**
+     * Flushes all dirty entities in this repository cache.
+     */
+    public int flushCache() {
+        return crudHandler.flushAll(context);
+    }
+
     @Override
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        if (method.getName().equals("cache") && method.getParameterCount() == 0) {
+            return repositoryCache;
+        }
+
         // 1. Try exact match lookup (O(1))
         RepositoryMethodHandler handler = exactHandlers.get(method.getName());
         if (handler != null) {

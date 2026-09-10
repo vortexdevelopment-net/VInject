@@ -74,6 +74,7 @@ public class DependencyContainer implements DependencyRepository {
     @Getter private final Map<Class<?>, Object> dependencies;
     private final Map<String, Object> namedDependencies = new ConcurrentHashMap<>();
     private final Map<Class<?>, Set<Object>> ambiguousProviders = new ConcurrentHashMap<>();
+    private final Set<Class<?>> exactProviderTypes = ConcurrentHashMap.newKeySet();
     @Getter private final Class<?> rootClass;
     private final Set<Class<?>> entities;
     private final Set<Class<?>> elementClasses;
@@ -88,6 +89,7 @@ public class DependencyContainer implements DependencyRepository {
     private final ConditionEvaluator conditionEvaluator;
     @Getter private final CacheCoordinator cacheCoordinator;
     @Getter private final CacheManager cacheManager;
+    private final RepositoryContainer repositoryContainer;
     
     // Circular dependency handling
     private final ThreadLocal<Set<Class<?>>> currentlyCreating = ThreadLocal.withInitial(HashSet::new);
@@ -109,6 +111,7 @@ public class DependencyContainer implements DependencyRepository {
         annotationHandlerRegistry = new AnnotationHandlerRegistry();
         argumentResolverRegistry = new ArgumentResolverRegistry();
         componentInterceptors = new java.util.concurrent.CopyOnWriteArrayList<>();
+        this.repositoryContainer = repositoryContainer;
         cacheCoordinator = new CacheCoordinator(repositoryContainer);
         cacheManager = new CacheManagerImpl();
 
@@ -354,6 +357,11 @@ public class DependencyContainer implements DependencyRepository {
     public void release() {
         // Call any OnDestroy methods before clearing
         lifecycleManager.invokeDestroyMethods();
+
+        // Persist write-back repository caches before their scheduler and
+        // database dependencies are released.
+        repositoryContainer.flushCaches();
+        cacheManager.shutdown();
         
         // Stop HTTP Server if present
         try {
@@ -367,6 +375,8 @@ public class DependencyContainer implements DependencyRepository {
         }
 
         dependencies.clear();
+        exactProviderTypes.clear();
+        ambiguousProviders.clear();
         entities.clear();
         annotationHandlerRegistry = null;
         eventManager.clear();
@@ -401,6 +411,10 @@ public class DependencyContainer implements DependencyRepository {
 
     public <T> T newInstance(Class<T> clazz, boolean cache, Object... extraArgs) {
         if (cache) {
+            Set<Object> ambiguous = ambiguousProviders.get(clazz);
+            if (ambiguous != null && !ambiguous.isEmpty()) {
+                throw createAmbiguousDependencyException(clazz, ambiguous);
+            }
             Object component = dependencies.get(clazz);
             if (component != null) {
                 return clazz.cast(component);
@@ -435,14 +449,11 @@ public class DependencyContainer implements DependencyRepository {
             }
 
             // Register the instance in the dependency container BEFORE injecting fields
-            Class<?>[] explicitAliases = {};
             String beanName = "";
             if (clazz.isAnnotationPresent(Component.class)) {
-                Component componentAnnotation = clazz.getAnnotation(Component.class);
-                explicitAliases = componentAnnotation.registerSubclasses();
                 beanName = BeanNamingUtils.resolveComponentName(clazz);
             }
-            registerInstanceAndSubclasses(clazz, instance, explicitAliases, beanName, cache, true);
+            registerInstanceAndSubclasses(clazz, instance, beanName, cache);
             
             // Inject static fields (now safe to refer to the class itself)
             injectionEngine.injectStatic(clazz);
@@ -461,13 +472,51 @@ public class DependencyContainer implements DependencyRepository {
         }
     }
 
+    /**
+     * Constructs an instance without registering or injecting it.
+     *
+     * <p>This is intended for framework hydration paths, such as database
+     * entities, where the object must be populated before field injection and
+     * lifecycle callbacks are run.</p>
+     *
+     * @param clazz the class to construct
+     * @param extraArgs additional arguments available to constructor resolution
+     * @param <T> the instance type
+     * @return the newly constructed instance
+     */
+    public <T> T constructInstance(Class<T> clazz, Object... extraArgs) {
+        Set<Class<?>> creating = currentlyCreating.get();
+        if (creating.contains(clazz)) {
+            throw new RuntimeException(
+                    "Circular dependency detected for class: " + clazz.getName()
+            );
+        }
+
+        try {
+            creating.add(clazz);
+            if (!DependencyUtils.hasDefaultConstructor(clazz)) {
+                Constructor<?> constructor = clazz.getDeclaredConstructors()[0];
+                Object[] parameters = resolveParameters(clazz, constructor, null, extraArgs);
+                constructor.setAccessible(true);
+                return clazz.cast(constructor.newInstance(parameters));
+            }
+
+            Constructor<T> constructor = clazz.getDeclaredConstructor();
+            constructor.setAccessible(true);
+            return constructor.newInstance();
+        } catch (Exception e) {
+            if (e instanceof RuntimeException re) throw re;
+            throw new RuntimeException("Unable to construct instance of class: " + clazz.getName(), e);
+        } finally {
+            creating.remove(clazz);
+        }
+    }
+
     private void registerInstanceAndSubclasses(
             Class<?> clazz,
             Object instance,
-            Class<?>[] explicitSubclasses,
             String beanName,
-            boolean cache,
-            boolean autoRegisterInheritedTypes
+            boolean cache
     ) {
         if (!cache) {
             return;
@@ -484,15 +533,7 @@ public class DependencyContainer implements DependencyRepository {
         }
 
         Set<Class<?>> types = new LinkedHashSet<>();
-        if (autoRegisterInheritedTypes) {
-            types.addAll(TypeHierarchyUtils.collectRegistrationTypes(clazz));
-        }
-        if (explicitSubclasses != null) {
-            for (Class<?> explicitSubclass : explicitSubclasses) {
-                types.add(explicitSubclass);
-            }
-        }
-
+        types.addAll(TypeHierarchyUtils.collectRegistrationTypes(clazz));
         for (Class<?> type : types) {
             registerProviderType(type, instance, true);
         }
@@ -510,8 +551,13 @@ public class DependencyContainer implements DependencyRepository {
 
     private void registerProviderType(Class<?> type, Object instance, boolean inheritedType) {
         if (!inheritedType) {
+            exactProviderTypes.add(type);
             dependencies.put(type, instance);
             ambiguousProviders.remove(type);
+            return;
+        }
+
+        if (exactProviderTypes.contains(type)) {
             return;
         }
 
@@ -530,10 +576,6 @@ public class DependencyContainer implements DependencyRepository {
             providers.add(existing);
         }
         providers.add(instance);
-    }
-
-    private void registerInstanceAndSubclasses(Class<?> clazz, Object instance, Class<?>[] subclasses, boolean cache) {
-        registerInstanceAndSubclasses(clazz, instance, subclasses, "", cache, false);
     }
 
     private Object[] resolveParameters(Class<?> declaringClass, Executable executable, @Nullable Object instance, Object... extraArgs) {
@@ -598,6 +640,10 @@ public class DependencyContainer implements DependencyRepository {
 
     @Override
     public <T> @NotNull T getDependency(Class<T> dependency) {
+        Set<Object> ambiguous = ambiguousProviders.get(dependency);
+        if (ambiguous != null && !ambiguous.isEmpty()) {
+            throw createAmbiguousDependencyException(dependency, ambiguous);
+        }
         Object result = dependencies.get(dependency);
         if (result == null) {
             throw new RuntimeException("Dependency not found for class: " + dependency.getName());
@@ -725,14 +771,11 @@ public class DependencyContainer implements DependencyRepository {
 
                 lifecycleManager.invokePostConstruct(beanInstance);
 
-                Bean annotation = beanMethod.getAnnotation(Bean.class);
                 registerInstanceAndSubclasses(
                         beanMethod.getReturnType(),
                         beanInstance,
-                        annotation.registerSubclasses(),
                         BeanNamingUtils.resolveBeanMethodName(beanMethod),
-                        true,
-                        false
+                        true
                 );
             }
         } catch (Exception e) {

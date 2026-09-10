@@ -35,7 +35,13 @@ public class StaticCache<K, V> implements Cache<K, V> {
     @Override
     public void put(K key, V value) {
         DebugLogger.log("Caching entry for key: %s", key);
-        storage.put(key, new CacheEntry<>(value));
+        storage.compute(key, (ignored, existing) -> {
+            if (existing == null) {
+                return new CacheEntry<>(value);
+            }
+            existing.replaceValue(value);
+            return existing;
+        });
     }
     
     @Override

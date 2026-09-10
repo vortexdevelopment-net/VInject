@@ -14,9 +14,4 @@ public @interface Bean {
      */
     String name() default "";
 
-    /**
-     * Additional types to register the bean under, beyond automatically discovered super-types.
-     * Each entry must be assignable from the bean return type.
-     */
-    public Class<?>[] registerSubclasses() default {};
 }

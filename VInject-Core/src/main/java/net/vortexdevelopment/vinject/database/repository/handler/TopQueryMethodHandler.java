@@ -17,6 +17,12 @@ import java.util.List;
  */
 public class TopQueryMethodHandler extends BaseMethodHandler {
 
+    private final CrudMethodHandler crudHandler;
+
+    public TopQueryMethodHandler(CrudMethodHandler crudHandler) {
+        this.crudHandler = crudHandler;
+    }
+
     @Override
     public boolean canHandle(Method method) {
         String name = method.getName();
@@ -158,6 +164,6 @@ public class TopQueryMethodHandler extends BaseMethodHandler {
 
         DebugLogger.log(context.getRepositoryClass(), "TOP QUERY '%s' executed. Total Time: %d ns (%.3f ms)",
                 methodName, totalNano, totalNano / 1_000_000.0);
-        return result;
+        return crudHandler.canonicalizeResult(context, result);
     }
 }

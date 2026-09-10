@@ -188,6 +188,23 @@ class RepositoryCacheTest {
         assertThat(cacheManager.getCache(CachedUserRepository.class.getName()).get(user2.getId())).isNotNull();
     }
 
+    @Test
+    void repositoryExposesPinningThroughCachedCrudRepository() {
+        CachedUser user = new CachedUser();
+        user.setId(UUID.randomUUID());
+        user.setName("Pinned");
+        repository.save(user);
+
+        repository.pin(user, "member-online");
+        repository.pin(user, "member-online");
+        assertThat(repository.cache().pinCount(user)).isEqualTo(2);
+
+        repository.unpin(user, "member-online");
+        assertThat(repository.cache().pinCount(user)).isEqualTo(1);
+        repository.unpin(user, "member-online");
+        assertThat(repository.cache().pinCount(user)).isZero();
+    }
+
     private void updateUserInDb(UUID id, String newName) throws Exception {
         String tableName = context.getDatabase().getSchemaFormatter().formatTableName(Database.getTablePrefix() + "CACHED_USERS");
         context.getDatabase().connect(conn -> {
@@ -214,5 +231,5 @@ class RepositoryCacheTest {
 
     @Repository
     @EnableDebug
-    public interface CachedUserRepository extends CrudRepository<CachedUser, UUID> {}
+    public interface CachedUserRepository extends CachedCrudRepository<CachedUser, UUID> {}
 }

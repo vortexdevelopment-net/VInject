@@ -23,12 +23,6 @@ public @interface Component {
     String name() default "";
 
     /**
-     * Additional types to register this component under, beyond the automatically discovered
-     * super-types. Each entry must be implemented or extended by this class.
-     */
-    public Class<?>[] registerSubclasses() default {};
-
-    /**
      * Register priority. Lower numbers are loaded first.
      * @return The load priority of the component.
      */

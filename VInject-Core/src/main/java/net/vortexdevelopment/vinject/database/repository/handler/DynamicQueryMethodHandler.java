@@ -20,6 +20,11 @@ import java.util.concurrent.ConcurrentHashMap;
 public class DynamicQueryMethodHandler extends BaseMethodHandler {
 
     private final Map<Method, QueryInfo> queryCache = new ConcurrentHashMap<>();
+    private final CrudMethodHandler crudHandler;
+
+    public DynamicQueryMethodHandler(CrudMethodHandler crudHandler) {
+        this.crudHandler = crudHandler;
+    }
 
     @Override
     public boolean canHandle(Method method) {
@@ -118,11 +123,11 @@ public class DynamicQueryMethodHandler extends BaseMethodHandler {
         }
 
         long connStart = System.currentTimeMillis();
-        return context.getDatabase().connect(connection -> {
+        Object result = context.getDatabase().connect(connection -> {
             timings[0] = System.currentTimeMillis() - connStart;
             long execStart = System.currentTimeMillis();
             
-            Object result;
+            Object queryResult;
             if (isCollection || info.isMultiple) {
                 List<Object> results = new ArrayList<>();
                 try (PreparedStatement statement = connection.prepareStatement(info.sql)) {
@@ -133,21 +138,22 @@ public class DynamicQueryMethodHandler extends BaseMethodHandler {
                         }
                     }
                 }
-                result = results;
+                queryResult = results;
             } else {
-                result = null;
+                queryResult = null;
                 try (PreparedStatement statement = connection.prepareStatement(info.sql)) {
                     RepositoryUtils.setStatementParameters(statement, parameters);
                     try (ResultSet rs = statement.executeQuery()) {
                         if (rs.next()) {
-                            result = mapEntity(context, connection, context.getEntityClass(), rs);
+                            queryResult = mapEntity(context, connection, context.getEntityClass(), rs);
                         }
                     }
                 }
             }
             timings[1] = System.currentTimeMillis() - execStart;
-            return result;
+            return queryResult;
         });
+        return crudHandler.canonicalizeResult(context, result);
     }
 
     private Object handleDelete(RepositoryInvocationContext<?, ?> context, Method method, Object[] args, QueryInfo info, long[] timings) throws Exception {
