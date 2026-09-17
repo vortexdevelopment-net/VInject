@@ -1,6 +1,6 @@
 package ${PACKAGE_NAME};
 
-import net.vortexdevelopment.vinject.annotation.Component;
+import net.vortexdevelopment.vinject.annotation.component.Component;
 
 @Component
 public class ${NAME} {

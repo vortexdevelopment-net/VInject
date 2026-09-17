@@ -1,31 +1,28 @@
 package $PACKAGE$;
 
+import com.songoda.core.SongodaPlugin;
+import lombok.Getter;
 import net.vortexdevelopment.vinject.annotation.component.Root;
 import net.vortexdevelopment.vinject.annotation.template.TemplateDependency;
-import net.vortexdevelopment.vortexcore.PluginVerificationException;
-import net.vortexdevelopment.vortexcore.VortexPlugin;
-import net.vortexdevelopment.vortexcore.compatibility.KnownServerVersions;
-import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+@Getter
 @Root(
         packageName = "$PACKAGE$",
         createInstance = false,
         templateDependencies = {
-                @TemplateDependency(groupId = "net.vortexdevelopment", artifactId = "VortexCore", version = "latest")
-        },
-        loadProperties = false
+                @TemplateDependency(
+                        groupId = "com.songoda",
+                        artifactId = "SongodaCore",
+                        version = "latest"
+                )
+        }
 )
-public final class $CLASS_NAME$ extends VortexPlugin {
+public final class $CLASS_NAME$ extends SongodaPlugin {
 
     @Override
-    protected void verifyLicense() throws PluginVerificationException {
+    protected void verifyLicense() {
 
-    }
-
-    @Override
-    protected @NotNull KnownServerVersions getMinimumServerVersion() {
-        return KnownServerVersions.V1_18_2;
     }
 
     @Override
@@ -40,6 +37,7 @@ public final class $CLASS_NAME$ extends VortexPlugin {
 
     @Override
     protected void onPluginEnable() {
+
     }
 
     @Override

@@ -59,6 +59,11 @@ public class DatabaseSettings {
 }
 ```
 
+Nested `@YamlItem` callbacks run in post-order after the complete YAML object graph is
+mapped. Child items receive `@OnLoad` before their parent, and map-backed items receive
+their `@YamlId` before `@OnLoad` is invoked. Fields declared `transient` are runtime-only:
+they are neither loaded from nor saved to YAML.
+
 ---
 
 ## 3. Directory Batch Loading (`@YamlDirectory`)

@@ -48,6 +48,8 @@ public class ProjectWizardStep implements NewProjectWizardStep {
     public static final Key<Boolean> INCLUDE_SECURITY_KEY = Key.create("INCLUDE_SECURITY");
     public static final Key<Boolean> INCLUDE_CONTEXT_KEY = Key.create("INCLUDE_CONTEXT");
 
+    private final ProjectMode projectMode;
+
     // Properties for the fields
     private final GraphProperty<String> locationProperty;
     private final GraphProperty<String> groupIdProperty;
@@ -61,13 +63,20 @@ public class ProjectWizardStep implements NewProjectWizardStep {
     private final Logger logger = LoggerFactory.getLogger(ProjectWizardStep.class);
 
     public ProjectWizardStep(@NotNull WizardContext context) {
+        this(context, ProjectMode.VORTEX);
+    }
+
+    public ProjectWizardStep(@NotNull WizardContext context, @NotNull ProjectMode projectMode) {
         this.context = context;
+        this.projectMode = projectMode;
         // Initialize properties
-        groupIdProperty = getPropertyGraph().property("com.example");
+        String defaultGroupId = (projectMode == ProjectMode.SONGODA) ? "com.songoda" : "com.example";
+        groupIdProperty = getPropertyGraph().property(defaultGroupId);
         artifactIdProperty = getPropertyGraph().property("untitled");
         locationProperty = getPropertyGraph().property(System.getProperty("user.home"));
 
         // Add Default Project Type
+        context.putUserData(GROUP_ID_KEY, defaultGroupId);
         context.putUserData(PROJECT_TYPE_KEY, "Minecraft Plugin (Multi-Module)");
         context.putUserData(INCLUDE_HTTP_KEY, false);
         context.putUserData(INCLUDE_SECURITY_KEY, false);
@@ -108,7 +117,8 @@ public class ProjectWizardStep implements NewProjectWizardStep {
                 panel.row("Group ID:", new Function1<Row, Unit>() {
                     @Override
                     public Unit invoke(Row row) {
-                        JBTextField textField = new JBTextField("com.example", 20);
+                        String defaultGroupId = (projectMode == ProjectMode.SONGODA) ? "com.songoda" : "com.example";
+                        JBTextField textField = new JBTextField(defaultGroupId, 20);
                         row.cell(textField).onChanged(jbTextField -> {
                             // Validate Group ID
                             String groupId = jbTextField.getText();
@@ -151,11 +161,17 @@ public class ProjectWizardStep implements NewProjectWizardStep {
 
                 // Add this combo box to your setupUI method:
                 panel.row("Project Type:", (Row row) -> {
-                    com.intellij.openapi.ui.ComboBox<String> typeComboBox = new com.intellij.openapi.ui.ComboBox<>(new String[]{
-                            "Minecraft Plugin (Single Module)",
-                            "Minecraft Plugin (Multi-Module)",
-                            "Standalone Application"
-                    });
+                    String[] projectTypes = (projectMode == ProjectMode.SONGODA)
+                            ? new String[]{
+                                    "Minecraft Plugin (Multi-Module)",
+                                    "Minecraft Plugin (Single Module)"
+                            }
+                            : new String[]{
+                                    "Minecraft Plugin (Single Module)",
+                                    "Minecraft Plugin (Multi-Module)",
+                                    "Standalone Application"
+                            };
+                    com.intellij.openapi.ui.ComboBox<String> typeComboBox = new com.intellij.openapi.ui.ComboBox<>(projectTypes);
                     typeComboBox.setSelectedItem("Minecraft Plugin (Multi-Module)");
                     row.cell(typeComboBox)
                             .onChanged(selected -> {
@@ -164,38 +180,40 @@ public class ProjectWizardStep implements NewProjectWizardStep {
                             });
                     return Unit.INSTANCE;
                 });
-                panel.row("Include HTTP Support:", (Row row) -> {
-                    JCheckBox checkBox = new JCheckBox();
-                    checkBox.setSelected(false);
-                    row.cell(checkBox)
-                            .onChanged(selected -> {
-                                context.putUserData(INCLUDE_HTTP_KEY, selected.isSelected());
-                                return Unit.INSTANCE;
-                            });
-                    return Unit.INSTANCE;
-                });
+                if (projectMode == ProjectMode.VORTEX) {
+                    panel.row("Include HTTP Support:", (Row row) -> {
+                        JCheckBox checkBox = new JCheckBox();
+                        checkBox.setSelected(false);
+                        row.cell(checkBox)
+                                .onChanged(selected -> {
+                                    context.putUserData(INCLUDE_HTTP_KEY, selected.isSelected());
+                                    return Unit.INSTANCE;
+                                });
+                        return Unit.INSTANCE;
+                    });
 
-                panel.row("Include Security (CORS/CSRF):", (Row rowSecurity) -> {
-                    JCheckBox securityCheckBox = new JCheckBox();
-                    securityCheckBox.setSelected(false);
-                    rowSecurity.cell(securityCheckBox)
-                            .onChanged(selected -> {
-                                context.putUserData(INCLUDE_SECURITY_KEY, selected.isSelected());
-                                return Unit.INSTANCE;
-                            });
-                    return Unit.INSTANCE;
-                });
+                    panel.row("Include Security (CORS/CSRF):", (Row rowSecurity) -> {
+                        JCheckBox securityCheckBox = new JCheckBox();
+                        securityCheckBox.setSelected(false);
+                        rowSecurity.cell(securityCheckBox)
+                                .onChanged(selected -> {
+                                    context.putUserData(INCLUDE_SECURITY_KEY, selected.isSelected());
+                                    return Unit.INSTANCE;
+                                });
+                        return Unit.INSTANCE;
+                    });
 
-                panel.row("Include Request Context (Scoped Values):", (Row rowContext) -> {
-                    JCheckBox contextCheckBox = new JCheckBox();
-                    contextCheckBox.setSelected(false);
-                    rowContext.cell(contextCheckBox)
-                            .onChanged(selected -> {
-                                context.putUserData(INCLUDE_CONTEXT_KEY, selected.isSelected());
-                                return Unit.INSTANCE;
-                            });
-                    return Unit.INSTANCE;
-                });
+                    panel.row("Include Request Context (Scoped Values):", (Row rowContext) -> {
+                        JCheckBox contextCheckBox = new JCheckBox();
+                        contextCheckBox.setSelected(false);
+                        rowContext.cell(contextCheckBox)
+                                .onChanged(selected -> {
+                                    context.putUserData(INCLUDE_CONTEXT_KEY, selected.isSelected());
+                                    return Unit.INSTANCE;
+                                });
+                        return Unit.INSTANCE;
+                    });
+                }
 
                 //Location
                 panel.row("Location:", new Function1<Row, Unit>() {
@@ -319,14 +337,15 @@ public class ProjectWizardStep implements NewProjectWizardStep {
         try {
             if ("Minecraft Plugin (Multi-Module)".equals(projectType)) {
                 // Generate project with API module
+                String multiTemplateDir = (projectMode == ProjectMode.SONGODA) ? "/projectWizard/songoda/multi/" : "/projectWizard/multi/";
 
-                String pluginYml = new String(Plugin.class.getResourceAsStream("/projectWizard/multi/plugin.yml").readAllBytes(), StandardCharsets.UTF_8);
+                String pluginYml = new String(Plugin.class.getResourceAsStream(multiTemplateDir + "plugin.yml").readAllBytes(), StandardCharsets.UTF_8);
                 pluginYml = pluginYml.replace("$MAIN$", groupIdLower + "." + artifactId.toLowerCase(Locale.ENGLISH) + "." + artifactId);
 
-                //Load templates from resources/projectWizard/multi/ - api.pom.xml, main.pom.xml, parent.pom.xml
-                String parentPom = new String(Plugin.class.getResourceAsStream("/projectWizard/multi/parent.pom.xml").readAllBytes(), StandardCharsets.UTF_8);
-                String apiPom = new String(Plugin.class.getResourceAsStream("/projectWizard/multi/api.pom.xml").readAllBytes(), StandardCharsets.UTF_8);
-                String mainPom = new String(Plugin.class.getResourceAsStream("/projectWizard/multi/main.pom.xml").readAllBytes(), StandardCharsets.UTF_8);
+                //Load templates from resources
+                String parentPom = new String(Plugin.class.getResourceAsStream(multiTemplateDir + "parent.pom.xml").readAllBytes(), StandardCharsets.UTF_8);
+                String apiPom = new String(Plugin.class.getResourceAsStream(multiTemplateDir + "api.pom.xml").readAllBytes(), StandardCharsets.UTF_8);
+                String mainPom = new String(Plugin.class.getResourceAsStream(multiTemplateDir + "main.pom.xml").readAllBytes(), StandardCharsets.UTF_8);
 
                 // Resolve "latest" version placeholders before other replacements
                 parentPom = resolveLatestVersions(parentPom);
@@ -341,19 +360,15 @@ public class ProjectWizardStep implements NewProjectWizardStep {
                         .replace("$GROUP_ID_SLASHES$", groupIdLower.replace(".", "/"))
                         .replace("$ARTIFACT_ID_LOWER$", artifactId.toLowerCase(Locale.ENGLISH));
 
-                String apiClass = new String(Plugin.class.getResourceAsStream("/projectWizard/multi/ApiClass.java").readAllBytes(), StandardCharsets.UTF_8);
+                String apiClass = new String(Plugin.class.getResourceAsStream(multiTemplateDir + "ApiClass.java").readAllBytes(), StandardCharsets.UTF_8);
                 apiClass = apiClass.replace("$PACKAGE$", groupIdLower + "." + artifactId.toLowerCase(Locale.ENGLISH) + ".api")
-
                         .replace("$CLASS_NAME$", artifactId + "Api");
 
-                String pluginClass = new String(Plugin.class.getResourceAsStream("/projectWizard/multi/PluginClass.java").readAllBytes(), StandardCharsets.UTF_8);
+                String pluginClass = new String(Plugin.class.getResourceAsStream(multiTemplateDir + "PluginClass.java").readAllBytes(), StandardCharsets.UTF_8);
                 // Resolve "latest" version in PluginClass.java annotation
                 pluginClass = resolveLatestVersions(pluginClass);
                 pluginClass = pluginClass.replace("$PACKAGE$", groupIdLower + "." + artifactId.toLowerCase(Locale.ENGLISH))
                         .replace("$CLASS_NAME$", artifactId);
-
-
-
 
                 //Create directories for the project
                 File base = new File(baseDir.getPath());
@@ -420,12 +435,13 @@ public class ProjectWizardStep implements NewProjectWizardStep {
                 Files.write(pluginYmlFile.toPath(), pluginYml.getBytes(StandardCharsets.UTF_8));
 
             } else if ("Minecraft Plugin (Single Module)".equals(projectType)) {
-                String pluginYml = new String(Plugin.class.getResourceAsStream("/projectWizard/single/plugin.yml").readAllBytes(), StandardCharsets.UTF_8);
+                String singleTemplateDir = (projectMode == ProjectMode.SONGODA) ? "/projectWizard/songoda/single/" : "/projectWizard/single/";
+
+                String pluginYml = new String(Plugin.class.getResourceAsStream(singleTemplateDir + "plugin.yml").readAllBytes(), StandardCharsets.UTF_8);
                 pluginYml = pluginYml.replace("$MAIN$", groupIdLower + "." + artifactId.toLowerCase(Locale.ENGLISH) + "." + artifactId);
 
                 // Generate project without API module
-                //Load templates from resources/projectWizard/single/ - pom.xml, main.java
-                String pom = new String(Plugin.class.getResourceAsStream("/projectWizard/single/main.pom.xml").readAllBytes(), StandardCharsets.UTF_8);
+                String pom = new String(Plugin.class.getResourceAsStream(singleTemplateDir + "main.pom.xml").readAllBytes(), StandardCharsets.UTF_8);
                 // Resolve "latest" version placeholders
                 pom = resolveLatestVersions(pom);
                 pom = pom.replace("$GROUP_ID$", groupId)
@@ -446,11 +462,11 @@ public class ProjectWizardStep implements NewProjectWizardStep {
                 srcMainJava.mkdirs();
 
                 //Create groupIdLower.artifactIdLower package
-                File pluginPackage = new File(srcMainJava, groupIdLower + "/" + artifactId.toLowerCase(Locale.ENGLISH));
+                File pluginPackage = new File(srcMainJava, groupIdLower.replace(".", "/") + "/" + artifactId.toLowerCase(Locale.ENGLISH));
                 pluginPackage.mkdirs();
 
                 //Load main.java template
-                String pluginClass = new String(Plugin.class.getResourceAsStream("/projectWizard/single/PluginClass.java").readAllBytes(), StandardCharsets.UTF_8);
+                String pluginClass = new String(Plugin.class.getResourceAsStream(singleTemplateDir + "PluginClass.java").readAllBytes(), StandardCharsets.UTF_8);
                 // Resolve "latest" version in PluginClass.java annotation
                 pluginClass = resolveLatestVersions(pluginClass);
                 pluginClass = pluginClass.replace("$PACKAGE$", groupIdLower + "." + artifactId.toLowerCase(Locale.ENGLISH))
@@ -597,8 +613,28 @@ public class ProjectWizardStep implements NewProjectWizardStep {
         MavenVersionResolver resolver = MavenVersionResolver.getInstance();
         String result = templateContent;
 
+        // Resolve SongodaCore version
+        if ((result.contains("SongodaCore") || result.contains("songoda.core.version")) && result.contains("latest")) {
+            String songodaCoreVersion = resolver.resolveVersion("com.songoda", "SongodaCore");
+
+            result = result.replaceAll(
+                    "(<songoda\\.core\\.version>)latest(</songoda\\.core\\.version>)",
+                    "$1" + songodaCoreVersion + "$2"
+            );
+
+            result = result.replaceAll(
+                    "(<groupId>com\\.songoda</groupId>\\s*<artifactId>SongodaCore</artifactId>\\s*<version>)latest(</version>)",
+                    "$1" + songodaCoreVersion + "$2"
+            );
+
+            result = result.replaceAll(
+                    "(artifactId\\s*=\\s*\"SongodaCore\",\\s*version\\s*=\\s*\")latest(\")",
+                    "$1" + songodaCoreVersion + "$2"
+            );
+        }
+
         // Resolve VortexCore version
-        if (result.contains("VortexCore") && result.contains("latest")) {
+        if ((result.contains("VortexCore") || result.contains("vortexcore.version")) && result.contains("latest")) {
             String vortexCoreVersion = resolver.resolveVersion("net.vortexdevelopment", "VortexCore");
 
             result = result.replaceAll(
@@ -633,8 +669,14 @@ public class ProjectWizardStep implements NewProjectWizardStep {
         }
 
         // Resolve VInject-Core version
-        if (result.contains("VInject-Core") && result.contains("latest")) {
+        if ((result.contains("VInject-Core") || result.contains("vinject.version")) && result.contains("latest")) {
             String vinjectFrameworkVersion = resolver.resolveVersion("net.vortexdevelopment", "VInject-Core");
+
+            // Replace property format: <vinject.version>latest</vinject.version>
+            result = result.replaceAll(
+                    "(<vinject\\.version>)latest(</vinject\\.version>)",
+                    "$1" + vinjectFrameworkVersion + "$2"
+            );
 
             // Replace in POM format: <version>latest</version>
             result = result.replaceAll(

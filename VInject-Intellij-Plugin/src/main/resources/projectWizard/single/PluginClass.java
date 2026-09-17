@@ -2,7 +2,10 @@ package $PACKAGE$;
 
 import net.vortexdevelopment.vinject.annotation.component.Root;
 import net.vortexdevelopment.vinject.annotation.template.TemplateDependency;
+import net.vortexdevelopment.vortexcore.PluginVerificationException;
 import net.vortexdevelopment.vortexcore.VortexPlugin;
+import net.vortexdevelopment.vortexcore.compatibility.KnownServerVersions;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 @Root(
@@ -16,8 +19,13 @@ import org.jetbrains.annotations.Nullable;
 public final class $CLASS_NAME$ extends VortexPlugin {
 
     @Override
-    protected void verifyLicense() throws net.vortexdevelopment.vortexcore.PluginVerificationException {
+    protected void verifyLicense() throws PluginVerificationException {
 
+    }
+
+    @Override
+    protected @NotNull KnownServerVersions getMinimumServerVersion() {
+        return KnownServerVersions.V1_18_2;
     }
 
     @Override
@@ -41,6 +49,6 @@ public final class $CLASS_NAME$ extends VortexPlugin {
 
     @Override
     protected @Nullable Integer getBstatsPluginId() {
-        return 0;
+        return null;
     }
 }

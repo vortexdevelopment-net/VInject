@@ -635,7 +635,8 @@ public class YamlConfig implements ConfigurationSection {
         Class<?> currentClass = clazz;
         while (currentClass != null && currentClass != Object.class) {
             for (Field field : currentClass.getDeclaredFields()) {
-                if (Modifier.isStatic(field.getModifiers()) || field.isSynthetic()) continue;
+                int modifiers = field.getModifiers();
+                if (Modifier.isStatic(modifiers) || Modifier.isTransient(modifiers) || field.isSynthetic()) continue;
                 if (field.isAnnotationPresent(YamlId.class)
                         || field.isAnnotationPresent(ItemRoot.class)
                         || field.getName().startsWith("__vinject_yaml")) continue;
@@ -677,7 +678,8 @@ public class YamlConfig implements ConfigurationSection {
         Field itemRootField = null;
         for (Class<?> c = clazz; c != null && c != Object.class; c = c.getSuperclass()) {
             for (Field f : c.getDeclaredFields()) {
-                if (Modifier.isStatic(f.getModifiers())) continue;
+                int modifiers = f.getModifiers();
+                if (Modifier.isStatic(modifiers) || Modifier.isTransient(modifiers) || f.isSynthetic()) continue;
                 if (f.isAnnotationPresent(ItemRoot.class)) {
                     itemRootCount++;
                     itemRootField = f;
@@ -690,7 +692,8 @@ public class YamlConfig implements ConfigurationSection {
         Set<String> claimed = new LinkedHashSet<>();
         for (Class<?> c = clazz; c != null && c != Object.class; c = c.getSuperclass()) {
             for (Field f : c.getDeclaredFields()) {
-                if (Modifier.isStatic(f.getModifiers())) continue;
+                int modifiers = f.getModifiers();
+                if (Modifier.isStatic(modifiers) || Modifier.isTransient(modifiers) || f.isSynthetic()) continue;
                 if (f.isAnnotationPresent(YamlId.class)
                         || f.isAnnotationPresent(ItemRoot.class)
                         || f.getName().startsWith("__vinject_yaml")) continue;

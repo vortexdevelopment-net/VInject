@@ -62,7 +62,8 @@ public final class YamlReflectiveMapping {
     private static boolean hasMappableFields(Class<?> clazz) {
         for (Class<?> current = clazz; current != null && current != Object.class; current = current.getSuperclass()) {
             for (Field field : current.getDeclaredFields()) {
-                if (Modifier.isStatic(field.getModifiers()) || field.isSynthetic()) {
+                int modifiers = field.getModifiers();
+                if (Modifier.isStatic(modifiers) || Modifier.isTransient(modifiers) || field.isSynthetic()) {
                     continue;
                 }
                 if (field.isAnnotationPresent(YamlId.class)

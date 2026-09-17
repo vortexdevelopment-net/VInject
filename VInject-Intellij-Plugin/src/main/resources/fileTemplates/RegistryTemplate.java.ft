@@ -1,6 +1,6 @@
 package ${PACKAGE_NAME};
 
-import net.vortexdevelopment.vinject.annotation.Registry;
+import net.vortexdevelopment.vinject.annotation.component.Registry;
 
 @Registry
 public class ${NAME} {

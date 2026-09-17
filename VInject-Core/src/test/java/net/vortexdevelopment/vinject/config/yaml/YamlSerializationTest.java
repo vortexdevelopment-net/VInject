@@ -212,6 +212,18 @@ public class YamlSerializationTest {
         assertTrue(rendered.contains("subValue: \"Test Value\""), "Should contain subValue");
         assertTrue(rendered.contains("the-number: 123"), "Should contain the-number");
     }
+
+    @Test
+    public void testTransientFieldsAreNotSerialized() {
+        YamlConfig config = new YamlConfig(new DocumentNode());
+        config.set("item", new ItemWithTransientState());
+
+        String rendered = config.render();
+
+        assertTrue(rendered.contains("value: \"configured\""));
+        assertFalse(rendered.contains("runtimeValues"));
+    }
+
     @Test
     public void testTypeCheckersAndLists() {
         String yaml = "Settings:\n" +
@@ -254,6 +266,12 @@ public class YamlSerializationTest {
         public int getId() {
             return id;
         }
+    }
+
+    @YamlItem
+    public static class ItemWithTransientState {
+        private String value = "configured";
+        private transient Set<String> runtimeValues = Set.of("derived");
     }
 
     @Test

@@ -61,6 +61,8 @@ public class CacheWarmer {
 Runs when a **YAML config object** or **database entity** is materialized - not for every `@Component` at startup.
 
 Called from `ConfigurationContainer` after mapping YAML into an instance, and after entity field hydration.
+For nested YAML graphs, child `@YamlItem` callbacks run before their parent callback,
+after all mapped fields and `@YamlId` values are populated.
 
 ```java
 @YamlItem

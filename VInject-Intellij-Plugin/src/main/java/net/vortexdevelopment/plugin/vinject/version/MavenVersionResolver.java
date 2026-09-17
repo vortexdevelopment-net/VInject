@@ -32,7 +32,8 @@ public class MavenVersionResolver {
             "net.vortexdevelopment:vinject-maven-plugin", "1.0.0",
             "net.vortexdevelopment:VInject-Core", "2.0.0-SNAPSHOT",
             "net.vortexdevelopment:VInject-HTTP", "2.0.0-SNAPSHOT",
-            "net.vortexdevelopment:VInject-Parent", "2.0.0-SNAPSHOT"
+            "net.vortexdevelopment:VInject-Parent", "2.0.0-SNAPSHOT",
+            "com.songoda:SongodaCore", "5.0.0-SNAPSHOT"
     );
     
     private static volatile MavenVersionResolver instance;
@@ -44,7 +45,6 @@ public class MavenVersionResolver {
                 .connectTimeout(HTTP_TIMEOUT)
                 .build();
     }
-    
     /**
      * Get the singleton instance of MavenVersionResolver.
      */
@@ -143,6 +143,10 @@ public class MavenVersionResolver {
     @NotNull
     private String buildMetadataUrl(@NotNull String groupId, @NotNull String artifactId) {
         String groupPath = groupId.replace(".", "/");
+        if (groupId.startsWith("com.songoda")) {
+            return String.format("https://repo.songoda-reborn.com/repository/maven-public/%s/%s/maven-metadata.xml",
+                    groupPath, artifactId);
+        }
         return String.format("%s/%s/%s/maven-metadata.xml", 
                 REPOSITORY_BASE_URL, groupPath, artifactId);
     }
@@ -197,4 +201,3 @@ public class MavenVersionResolver {
         return versions.get(0);
     }
 }
-

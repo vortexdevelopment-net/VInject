@@ -254,7 +254,7 @@ public class ConfigurationContainer {
 
                 // Invoke @OnLoad methods after all data is loaded
                 if (container != null) {
-                    container.getLifecycleManager().invokeOnLoad(instance);
+                    mapper.invokeOnLoadRecursively(instance);
                 }
                 if (missingKeys) {
                     saveToFile(instance, cfgClass, filePath, charset, annotation);
@@ -360,6 +360,7 @@ public class ConfigurationContainer {
         try {
             T instance = container.newInstance(clazz, false);
             mapper.mapToInstance(section, instance, clazz, "");
+            mapper.invokeOnLoadRecursively(instance);
             return instance;
         } catch (Exception e) {
             throw new RuntimeException("Failed to map section to class: " + clazz.getName(), e);
@@ -681,7 +682,7 @@ public class ConfigurationContainer {
                               items.put(key, itemInstance);
                               
                               if (container != null) {
-                                  container.getLifecycleManager().invokeOnLoad(itemInstance);
+                                  mapper.invokeOnLoadRecursively(itemInstance);
                               }
                           }
                       } catch (Exception e) {
@@ -743,7 +744,7 @@ public class ConfigurationContainer {
         if (instance != null) {
             try {
                 mapper.mapToInstance(config, instance, configClass, entry.annotation.path());
-                container.getLifecycleManager().invokeOnLoad(instance);
+                mapper.invokeOnLoadRecursively(instance);
             } catch (Exception e) {
                 e.printStackTrace();
             }

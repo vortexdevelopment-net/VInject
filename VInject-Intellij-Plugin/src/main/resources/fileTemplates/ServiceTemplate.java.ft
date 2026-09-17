@@ -1,6 +1,6 @@
 package ${PACKAGE_NAME};
 
-import net.vortexdevelopment.vinject.annotation.Service;
+import net.vortexdevelopment.vinject.annotation.component.Service;
 
 @Service
 public class ${NAME} {

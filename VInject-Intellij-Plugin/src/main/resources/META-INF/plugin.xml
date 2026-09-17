@@ -45,6 +45,10 @@
                 builderClass="net.vortexdevelopment.plugin.vinject.project.VInjectModuleBuilder"
                 order="last"
                 id="MY_PLUGIN_SINGLE_PAGE_BUILDER"/>
+        <moduleBuilder
+                builderClass="net.vortexdevelopment.plugin.vinject.project.SongodaModuleBuilder"
+                order="last"
+                id="SONGODA_PLUGIN_BUILDER"/>
 
         <!-- Discord RPC Configuration -->
         <projectConfigurable

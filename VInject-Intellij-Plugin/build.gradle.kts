@@ -29,6 +29,7 @@ dependencies {
         bundledPlugin("com.intellij.java")
     }
     // Note: Java 11+ HttpClient and javax.xml are built-in, no external dependencies needed
+    testImplementation("junit:junit:4.13.2")
 }
 
 java {

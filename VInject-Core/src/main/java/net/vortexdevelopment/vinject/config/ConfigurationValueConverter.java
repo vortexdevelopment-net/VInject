@@ -44,7 +44,7 @@ public final class ConfigurationValueConverter {
         try {
             int itemRootCount = 0;
             for (Field f : clazz.getDeclaredFields()) {
-                if (Modifier.isStatic(f.getModifiers()) || f.isSynthetic()) {
+                if (shouldSkipField(f)) {
                     continue;
                 }
                 if (f.isAnnotationPresent(ItemRoot.class)) {
@@ -60,7 +60,7 @@ public final class ConfigurationValueConverter {
                     : root.getSection(basePath);
 
             for (Field field : clazz.getDeclaredFields()) {
-                if (Modifier.isStatic(field.getModifiers()) || field.isSynthetic()) {
+                if (shouldSkipField(field)) {
                     continue;
                 }
                 field.setAccessible(true);
@@ -345,5 +345,10 @@ public final class ConfigurationValueConverter {
             if (pt.getRawType() instanceof Class<?>) return (Class<?>) pt.getRawType();
         }
         return Object.class;
+    }
+
+    private static boolean shouldSkipField(Field field) {
+        int modifiers = field.getModifiers();
+        return Modifier.isStatic(modifiers) || Modifier.isTransient(modifiers) || field.isSynthetic();
     }
 }
