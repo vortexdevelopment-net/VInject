@@ -9,6 +9,8 @@ import net.vortexdevelopment.vinject.di.DependencyContainer;
 import net.vortexdevelopment.vinject.http.annotation.*;
 import net.vortexdevelopment.vinject.di.context.InjectionContext;
 import net.vortexdevelopment.vinject.http.annotation.*;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
 
 import jakarta.servlet.AsyncContext;
 import java.io.IOException;
@@ -130,6 +132,7 @@ public class VInjectDispatcherServlet extends HttpServlet {
                 Map<Class<?>, Object> requestContext = new HashMap<>();
                 requestContext.put(HttpServletRequest.class, req);
                 requestContext.put(HttpServletResponse.class, resp);
+                requestContext.put(PathVariablesHolder.class, new PathVariablesHolder(handler.getPathVariables(path)));
 
                 RouteHandler finalHandler = handler;
                 Object result = InjectionContext.runWithContext(requestContext, () -> finalHandler.invoke(container));
@@ -183,6 +186,8 @@ public class VInjectDispatcherServlet extends HttpServlet {
         private final String httpMethod;
         private final Object instance;
         private final Method method;
+        private final Pattern pathPattern;
+        private final List<String> variableNames = new ArrayList<>();
 
         public RouteHandler(String path, String httpMethod, Object instance, Method method) {
             this.path = path;
@@ -190,11 +195,41 @@ public class VInjectDispatcherServlet extends HttpServlet {
             this.instance = instance;
             this.method = method;
             this.method.setAccessible(true);
+            this.pathPattern = compilePattern(path);
+        }
+
+        private Pattern compilePattern(String pathTemplate) {
+            StringBuilder regex = new StringBuilder("^");
+            Matcher matcher = Pattern.compile("\\{([a-zA-Z0-9_]+)\\}").matcher(pathTemplate);
+            int lastEnd = 0;
+            while (matcher.find()) {
+                String literal = pathTemplate.substring(lastEnd, matcher.start());
+                regex.append(Pattern.quote(literal));
+                String varName = matcher.group(1);
+                variableNames.add(varName);
+                regex.append("([^/]+)");
+                lastEnd = matcher.end();
+            }
+            if (lastEnd < pathTemplate.length()) {
+                regex.append(Pattern.quote(pathTemplate.substring(lastEnd)));
+            }
+            regex.append("$");
+            return Pattern.compile(regex.toString());
         }
 
         public boolean matches(String requestPath, String requestMethod) {
-            // Very basic matching, could be enhanced for path variables
-            return this.path.equals(requestPath) && this.httpMethod.equals(requestMethod);
+            return this.httpMethod.equals(requestMethod) && this.pathPattern.matcher(requestPath).matches();
+        }
+
+        public Map<String, String> getPathVariables(String requestPath) {
+            Map<String, String> pathVars = new HashMap<>();
+            Matcher matcher = pathPattern.matcher(requestPath);
+            if (matcher.matches()) {
+                for (int i = 0; i < variableNames.size(); i++) {
+                    pathVars.put(variableNames.get(i), matcher.group(i + 1));
+                }
+            }
+            return pathVars;
         }
 
         public Object invoke(DependencyContainer container) throws InvocationTargetException, IllegalAccessException {

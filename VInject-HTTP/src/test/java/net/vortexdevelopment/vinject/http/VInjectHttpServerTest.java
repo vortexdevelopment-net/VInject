@@ -1,11 +1,14 @@
 package net.vortexdevelopment.vinject.http;
 
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import net.vortexdevelopment.vinject.VInjectApplication;
 import net.vortexdevelopment.vinject.annotation.component.Root;
 import net.vortexdevelopment.vinject.annotation.lifecycle.PostConstruct;
 import net.vortexdevelopment.vinject.di.DependencyContainer;
 import net.vortexdevelopment.vinject.http.annotation.GetMapping;
 import net.vortexdevelopment.vinject.http.annotation.PostMapping;
+import net.vortexdevelopment.vinject.http.annotation.PathVariable;
 import net.vortexdevelopment.vinject.http.annotation.RestController;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -116,6 +119,46 @@ public class VInjectHttpServerTest {
         assertEquals(404, response.statusCode());
     }
 
+    @Test
+    public void testPathVariableDownload() throws Exception {
+        HttpClient client = HttpClient.newHttpClient();
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create("http://localhost:8081/api/download/mydata.bin"))
+                .GET()
+                .build();
+
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        assertTrue(response.headers().firstValue("Content-Type").orElse("").startsWith("application/octet-stream"));
+        assertTrue(response.headers().firstValue("Content-Disposition").orElse("").contains("mydata.bin"));
+        assertEquals("mock-file-content-for-mydata.bin", response.body());
+    }
+
+    @Test
+    public void testUploadMultipart() throws Exception {
+        HttpClient client = HttpClient.newHttpClient();
+        String boundary = "TestBoundary" + System.currentTimeMillis();
+        java.io.ByteArrayOutputStream stream = new java.io.ByteArrayOutputStream();
+        stream.write(("--" + boundary + "\r\n").getBytes());
+        stream.write(("Content-Disposition: form-data; name=\"file\"; filename=\"testfile.txt\"\r\n").getBytes());
+        stream.write(("Content-Type: text/plain\r\n\r\n").getBytes());
+        stream.write(("hello world file content").getBytes());
+        stream.write(("\r\n--" + boundary + "--\r\n").getBytes());
+        byte[] body = stream.toByteArray();
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create("http://localhost:8081/api/upload"))
+                .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                .build();
+
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        assertTrue(response.body().contains("testfile.txt"));
+    }
+
     @RestController
     private static class TestController {
 
@@ -133,6 +176,28 @@ public class VInjectHttpServerTest {
         public String postData() {
             return "{\"message\": \"Data received\"}";
         }
+
+        @GetMapping("/api/download/{filename}")
+        public void download(@PathVariable("filename") String filename, HttpServletResponse response) throws Exception {
+            response.setContentType("application/octet-stream");
+            response.setHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+            response.getWriter().write("mock-file-content-for-" + filename);
+        }
+
+        @PostMapping("/api/upload")
+        public String upload(HttpServletRequest request) throws Exception {
+            String contentType = request.getContentType();
+            String boundary = contentType.substring(contentType.indexOf("boundary=") + 9).trim();
+            byte[] body = request.getInputStream().readAllBytes();
+
+            String bodyStr = new String(body, java.nio.charset.StandardCharsets.UTF_8);
+            String filename = "unknown";
+            java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("filename=\"([^\"]+)\"").matcher(bodyStr);
+            if (matcher.find()) {
+                filename = matcher.group(1);
+            }
+            return "{\"uploaded\": \"" + filename + "\"}";
+        }
     }
 
     public static void main(String[] args) throws Exception {
@@ -143,6 +208,8 @@ public class VInjectHttpServerTest {
             test.testStaticContent();
             test.testPostEndpoint();
             test.testNotFoundEndpoint();
+            test.testPathVariableDownload();
+            test.testUploadMultipart();
             System.out.println("Tests passed!");
         } finally {
             teardown();

@@ -1,6 +1,5 @@
 # User-specific stuff
 .idea/
-.vscode
 
 *.iml
 *.ipr
@@ -112,7 +111,5 @@ buildNumber.properties
 
 # Common working directory
 run/
-
-# Testing files
-VInject-Framework/test-config.yml
-VInject-Framework/test.yml
+.vscode/
+bin/
