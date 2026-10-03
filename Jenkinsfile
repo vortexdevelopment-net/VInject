@@ -2,5 +2,6 @@
 
 vortexPipeline(
     pluginId: 'vinject',
-    mavenDeploy: true
+    mavenDeploy: true,
+    mavenReleaseScope: 'all'
 )
