@@ -32,4 +32,25 @@ public class YamlParserQuotedKeyTest {
         assertTrue(keys.contains("false"), "Keys were: " + keys);
         assertEquals("PAPER", root.getConfigurationSection("false").getString("Material"));
     }
+
+    @Test
+    public void parsesNamespacedMappingKeys() {
+        YamlConfig config = YamlConfig.load("""
+                vortexskyblock:member:
+                  Display Name: Member
+                Permissions:
+                  vortexskyblock:island_build: true
+                """);
+
+        assertEquals(Set.of("vortexskyblock:member", "Permissions"), config.getKeys(false));
+        assertEquals("Member", config.get("vortexskyblock:member.Display Name"));
+        assertEquals(Boolean.TRUE, config.get("Permissions.vortexskyblock:island_build"));
+    }
+
+    @Test
+    public void preservesNamespacedScalarValues() {
+        YamlConfig config = YamlConfig.load("Parent: \"vortexskyblock:member\"\n");
+
+        assertEquals("vortexskyblock:member", config.get("Parent"));
+    }
 }

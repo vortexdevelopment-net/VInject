@@ -75,6 +75,7 @@ public class DependencyContainer implements DependencyRepository {
     private final Map<String, Object> namedDependencies = new ConcurrentHashMap<>();
     private final Map<Class<?>, Set<Object>> ambiguousProviders = new ConcurrentHashMap<>();
     private final Set<Class<?>> exactProviderTypes = ConcurrentHashMap.newKeySet();
+    private final Map<Class<?>, Set<Class<?>>> componentImplementations = new ConcurrentHashMap<>();
     @Getter private final Class<?> rootClass;
     private final Set<Class<?>> entities;
     private final Set<Class<?>> elementClasses;
@@ -252,6 +253,7 @@ public class DependencyContainer implements DependencyRepository {
                 .loadPredicate(this::canLoadClass)
                 .build());
         handleAnalyzerDiagnostics(analysisResult);
+        indexComponentImplementations(analysisResult.loadPlan().componentLoadOrder());
 
         processAnnotationHandlers(RegistryOrder.FIRST, scanner);
 
@@ -377,6 +379,7 @@ public class DependencyContainer implements DependencyRepository {
         dependencies.clear();
         exactProviderTypes.clear();
         ambiguousProviders.clear();
+        componentImplementations.clear();
         entities.clear();
         annotationHandlerRegistry = null;
         eventManager.clear();
@@ -539,6 +542,35 @@ public class DependencyContainer implements DependencyRepository {
         }
 
         notifyComponentRegistered(clazz, instance);
+    }
+
+    private void indexComponentImplementations(Collection<Class<?>> componentClasses) {
+        for (Class<?> componentClass : componentClasses) {
+            if (!componentClass.isAnnotationPresent(Component.class)) {
+                continue;
+            }
+
+            for (Class<?> type : TypeHierarchyUtils.collectRegistrationTypes(componentClass)) {
+                componentImplementations
+                        .computeIfAbsent(type, ignored -> ConcurrentHashMap.newKeySet())
+                        .add(componentClass);
+            }
+        }
+    }
+
+    /**
+     * Find the unique component implementation registered for an inherited type.
+     *
+     * @param type the interface or superclass requested by injection
+     * @return the implementation class when exactly one exists, otherwise {@code null}
+     */
+    @Nullable
+    public Class<?> getUniqueComponentImplementation(Class<?> type) {
+        Set<Class<?>> implementations = componentImplementations.get(type);
+        if (implementations == null || implementations.size() != 1) {
+            return null;
+        }
+        return implementations.iterator().next();
     }
 
     private void notifyComponentRegistered(Class<?> clazz, Object instance) {

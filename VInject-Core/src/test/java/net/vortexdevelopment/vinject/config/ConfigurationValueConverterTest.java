@@ -4,6 +4,7 @@ import net.vortexdevelopment.vinject.annotation.yaml.Key;
 import net.vortexdevelopment.vinject.config.yaml.YamlConfig;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
@@ -60,6 +61,21 @@ class ConfigurationValueConverterTest {
         assertArrayEquals(new String[]{"STONE", "DIAMOND"}, names);
     }
 
+    @Test
+    void convertsYamlNumbersToBigDecimal() throws Exception {
+        YamlConfig config = YamlConfig.load("""
+                IntegerDecimal: 0
+                Fraction: 1.25
+                """);
+        ConfigurationValueConverter converter = new ConfigurationValueConverter(clazz -> null);
+        BigDecimalHolder holder = new BigDecimalHolder();
+
+        converter.mapToInstance(config, holder, BigDecimalHolder.class, "");
+
+        assertEquals(BigDecimal.ZERO, holder.integerDecimal);
+        assertEquals(new BigDecimal("1.25"), holder.fraction);
+    }
+
     static class UpgradeCostsHolder {
         @Key("Upgrade Costs")
         private Map<String, List<Double>> costs;
@@ -72,5 +88,13 @@ class ConfigurationValueConverterTest {
 
         @Key("Decimals")
         private double[] decimals;
+    }
+
+    static class BigDecimalHolder {
+        @Key("IntegerDecimal")
+        private BigDecimal integerDecimal;
+
+        @Key("Fraction")
+        private BigDecimal fraction;
     }
 }

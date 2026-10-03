@@ -198,7 +198,7 @@ public class DiscordSettingsPanel extends JPanel {
             // Test Discord connection in background
             SwingUtilities.invokeLater(() -> {
                 try {
-                    if (DiscordHook.isConnected()) {
+                    if (DiscordHook.getInstance().isConnected()) {
                         connectionStatusLabel.setText("✓ Connected to Discord");
                         connectionStatusLabel.setForeground(Color.GREEN);
                     } else {

@@ -14,6 +14,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -161,6 +162,11 @@ public final class ConfigurationValueConverter {
         }
 
         if (targetClass == String.class) return value.toString();
+        if (targetClass == BigDecimal.class) {
+            return value instanceof BigDecimal
+                    ? value
+                    : new BigDecimal(value.toString());
+        }
         if (targetClass == int.class || targetClass == Integer.class) return (value instanceof Number n) ? n.intValue() : Integer.parseInt(value.toString());
         if (targetClass == long.class || targetClass == Long.class) return (value instanceof Number n) ? n.longValue() : Long.parseLong(value.toString());
         if (targetClass == boolean.class || targetClass == Boolean.class) return (value instanceof Boolean b) ? b : Boolean.parseBoolean(value.toString());

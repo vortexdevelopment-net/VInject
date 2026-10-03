@@ -1,5 +1,5 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
-<idea-plugin>
+<idea-plugin require-restart="false">
     <!-- Unique identifier of the plugin. It should be FQN. It cannot be changed between the plugin versions. -->
     <id>net.vortexdevelopment.VInject-Framework</id>
 
@@ -41,13 +41,11 @@
         <lang.inspectionSuppressor id="UnusedDeclarationComponent"
                                    language="JAVA"
                                    implementationClass="net.vortexdevelopment.plugin.vinject.syntax.SuppressUnusedServiceInspection"/>
-        <moduleBuilder
-                builderClass="net.vortexdevelopment.plugin.vinject.project.VInjectModuleBuilder"
-                order="last"
+        <newProjectWizard.generator
+                implementation="net.vortexdevelopment.plugin.vinject.project.VInjectProjectWizard"
                 id="MY_PLUGIN_SINGLE_PAGE_BUILDER"/>
-        <moduleBuilder
-                builderClass="net.vortexdevelopment.plugin.vinject.project.SongodaModuleBuilder"
-                order="last"
+        <newProjectWizard.generator
+                implementation="net.vortexdevelopment.plugin.vinject.project.SongodaProjectWizard"
                 id="SONGODA_PLUGIN_BUILDER"/>
 
         <!-- Discord RPC Configuration -->

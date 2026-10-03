@@ -31,6 +31,19 @@ class AutoInterfaceRegistrationTest {
         }
     }
 
+    @Test
+    void resolvesInterfaceFieldCycleByCreatingConcreteProvider() {
+        try (TestApplicationContext context = TestApplicationContext.builder()
+                .withRootClass(TestRoot.class)
+                .build()) {
+            CycleAImpl a = context.getComponent(CycleAImpl.class);
+            CycleBImpl b = context.getComponent(CycleBImpl.class);
+
+            assertThat(a.b).isSameAs(b);
+            assertThat(b.a).isSameAs(a);
+        }
+    }
+
     @Root(packageName = "net.vortexdevelopment.vinject.di.autointerface", createInstance = false)
     static class TestRoot {
     }
@@ -58,5 +71,21 @@ class AutoInterfaceRegistrationTest {
     @Component
     static class ExactClassConsumer {
         @Inject BaseComponent base;
+    }
+
+    interface CycleA {
+    }
+
+    interface CycleB {
+    }
+
+    @Component
+    static class CycleAImpl implements CycleA {
+        @Inject CycleB b;
+    }
+
+    @Component
+    static class CycleBImpl implements CycleB {
+        @Inject CycleA a;
     }
 }

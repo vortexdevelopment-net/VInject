@@ -71,7 +71,7 @@ public class TopQueryMethodHandler extends BaseMethodHandler {
         }
 
         String wherePart = remaining.substring(0, orderByIndex);
-        String orderByPart = remaining.substring(orderByIndex + 8);
+        String orderByPart = remaining.substring(orderByIndex + "OrderBy".length());
 
         if (orderByPart.endsWith("Desc")) {
             orderByField = orderByPart.substring(0, orderByPart.length() - 4);

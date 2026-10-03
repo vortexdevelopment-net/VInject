@@ -1,5 +1,7 @@
 package net.vortexdevelopment.plugin.vinject.version;
 
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.components.Service;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,7 +21,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * Resolves latest Maven artifact versions from the VortexDevelopment repository.
  * Falls back to built-in versions if repository query fails.
  */
-public class MavenVersionResolver {
+@Service(Service.Level.APP)
+public final class MavenVersionResolver {
     private static final Logger logger = LoggerFactory.getLogger(MavenVersionResolver.class);
     
     private static final String REPOSITORY_BASE_URL = "https://repo.vortexdevelopment.net/api/repository";
@@ -36,11 +39,10 @@ public class MavenVersionResolver {
             "com.songoda:SongodaCore", "5.0.0-SNAPSHOT"
     );
     
-    private static volatile MavenVersionResolver instance;
     private final HttpClient httpClient;
     private final Map<String, String> versionCache = new ConcurrentHashMap<>();
     
-    private MavenVersionResolver() {
+    MavenVersionResolver() {
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(HTTP_TIMEOUT)
                 .build();
@@ -50,14 +52,7 @@ public class MavenVersionResolver {
      */
     @NotNull
     public static MavenVersionResolver getInstance() {
-        if (instance == null) {
-            synchronized (MavenVersionResolver.class) {
-                if (instance == null) {
-                    instance = new MavenVersionResolver();
-                }
-            }
-        }
-        return instance;
+        return ApplicationManager.getApplication().getService(MavenVersionResolver.class);
     }
     
     /**

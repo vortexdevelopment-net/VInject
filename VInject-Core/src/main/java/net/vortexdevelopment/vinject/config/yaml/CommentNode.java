@@ -19,7 +19,12 @@ public class CommentNode extends YamlNode {
         String indentStr = " ".repeat(getIndentation());
         String[] lines = comment.split("\n");
         for (int i = 0; i < lines.length; i++) {
-            sb.append(indentStr).append("# ").append(lines[i].trim());
+            String line = lines[i];
+            sb.append(indentStr).append('#');
+            if (!line.isEmpty() && !Character.isWhitespace(line.charAt(0))) {
+                sb.append(' ');
+            }
+            sb.append(line);
             if (i < lines.length - 1) sb.append("\n");
         }
         return sb.toString();

@@ -1,24 +1,26 @@
 package net.vortexdevelopment.plugin.vinject.discord;
 
+import com.intellij.openapi.Disposable;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.components.Service;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.diagnostic.Logger;
-import net.vortexdevelopment.plugin.vinject.Plugin;
-import net.vortexdevelopment.plugin.vinject.project.ProjectSettings;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class DiscordHook {
+@Service(Service.Level.APP)
+public final class DiscordHook implements Disposable {
 
     private static final Logger LOG = Logger.getInstance(DiscordHook.class);
-    private static DiscordBridge bridge;
-    private static ExecutorService executorService;
-    private static boolean initialized = false;
-    private static boolean connected = false;
-    private static String currentClientId;
+    private DiscordBridge bridge;
+    private ExecutorService executorService;
+    private boolean initialized = false;
+    private boolean connected = false;
+    private String currentClientId;
 
-    public static void init(Project project) {
+    public void init(Project project) {
         LOG.info("DiscordHook.init() called for project: " + project.getName());
 
         if (initialized) {
@@ -55,7 +57,7 @@ public class DiscordHook {
         }
     }
 
-    public static CompletableFuture<Void> connect() {
+    public CompletableFuture<Void> connect() {
         System.out.println("🔗 Attempting to connect to Discord RPC...");
         System.out.println("State - Initialized: " + initialized + ", Connected: " + connected + ", Bridge: "
                 + (bridge != null ? "present" : "null"));
@@ -85,7 +87,7 @@ public class DiscordHook {
                 });
     }
 
-    public static CompletableFuture<Void> updatePresence(DiscordPresenceBuilder presence) {
+    public CompletableFuture<Void> updatePresence(DiscordPresenceBuilder presence) {
         LOG.info("DiscordHook.updatePresence() called");
         LOG.info("State - Initialized: " + initialized + ", Connected: " + connected + ", Bridge: "
                 + (bridge != null ? "present" : "null"));
@@ -109,7 +111,7 @@ public class DiscordHook {
                 });
     }
 
-    public static void disconnect() {
+    public void disconnect() {
         if (bridge != null && connected) {
             try {
                 bridge.close();
@@ -121,7 +123,7 @@ public class DiscordHook {
         }
     }
 
-    public static void shutdown() {
+    public void shutdown() {
         disconnect();
         if (executorService != null && !executorService.isShutdown()) {
             executorService.shutdown();
@@ -131,7 +133,7 @@ public class DiscordHook {
         currentClientId = null;
     }
 
-    public static boolean isConnected() {
+    public boolean isConnected() {
         boolean result = initialized && connected && bridge != null && bridge.isConnected();
         LOG.info("isConnected() check - initialized=" + initialized + ", connected=" + connected +
                 ", bridge=" + (bridge != null ? "present" : "null") +
@@ -140,7 +142,7 @@ public class DiscordHook {
         return result;
     }
 
-    public static boolean isEnabled(Project project) {
+    public boolean isEnabled(Project project) {
         try {
             DiscordSettings settings = DiscordSettings.getInstance(project);
             boolean enabled = settings.isDiscordRpcEnabled();
@@ -156,7 +158,7 @@ public class DiscordHook {
      * Test Discord connection with detailed debugging output
      * Call this method to manually test the Discord integration
      */
-    public static void testConnection(Project project) {
+    public void testConnection(Project project) {
         System.out.println("🧪 === DISCORD CONNECTION TEST START ===");
 
         try {
@@ -216,6 +218,15 @@ public class DiscordHook {
             e.printStackTrace();
             System.err.println("🧪 === DISCORD CONNECTION TEST FAILED ===");
         }
+    }
+
+    public static DiscordHook getInstance() {
+        return ApplicationManager.getApplication().getService(DiscordHook.class);
+    }
+
+    @Override
+    public void dispose() {
+        shutdown();
     }
 
 }

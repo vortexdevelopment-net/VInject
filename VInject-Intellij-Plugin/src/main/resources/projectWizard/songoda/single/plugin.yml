@@ -1,4 +1,4 @@
-name: $NAME$
+name: ${project.name}
 version: ${project.version}
 main: $MAIN$
 api-version: '1.18'

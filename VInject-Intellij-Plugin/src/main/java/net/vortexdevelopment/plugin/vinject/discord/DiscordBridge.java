@@ -2,6 +2,7 @@ package net.vortexdevelopment.plugin.vinject.discord;
 
 import ai.grazie.utils.json.JSONObject;
 import com.google.gson.JsonObject;
+import com.intellij.openapi.Disposable;
 import com.intellij.openapi.diagnostic.Logger;
 import com.jagrosh.discordipc.IPCClient;
 import com.jagrosh.discordipc.IPCListener;
@@ -15,10 +16,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 
-public class DiscordBridge {
+public class DiscordBridge implements Disposable {
 
     private static final Logger LOG = Logger.getInstance(DiscordBridge.class);
-    private static final ExecutorService executor = Executors.newCachedThreadPool(r -> {
+    private final ExecutorService executor = Executors.newCachedThreadPool(r -> {
         Thread thread = new Thread(r, "Discord-IPC-Worker");
         thread.setDaemon(true);
         return thread;
@@ -189,5 +190,11 @@ public class DiscordBridge {
         } catch (Exception e) {
             LOG.error("Error disconnecting from Discord", e);
         }
+    }
+
+    @Override
+    public void dispose() {
+        executor.shutdownNow();
+        close();
     }
 }

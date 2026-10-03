@@ -156,6 +156,25 @@ public class InjectArgumentResolver implements ArgumentResolverProcessor {
                         throw new RuntimeException("Unable to create dependency: " + targetType.getName() + " for field: " + field.getName(), e);
                     }
                 }
+
+                // An interface cannot be instantiated directly, but the analyzer knows
+                // which component provides it. This also allows field-injected cycles to
+                // complete when the concrete providers have default constructors.
+                Class<?> implementationType = context.getContainer().getUniqueComponentImplementation(targetType);
+                if (implementationType != null) {
+                    try {
+                        dependency = context.getContainer().newInstance(implementationType);
+                        if (dependency != null) {
+                            return dependency;
+                        }
+                    } catch (RuntimeException e) {
+                        if (e.getMessage() != null && e.getMessage().contains("Circular dependency detected")) {
+                            throw e;
+                        }
+                        throw new RuntimeException("Unable to create dependency implementation: "
+                                + implementationType.getName() + " for field: " + field.getName(), e);
+                    }
+                }
                 
                 // Not a Component or couldn't create it - throw error
                 throw new RuntimeException("Dependency not found for field: " + targetType + " " + field.getName() + 

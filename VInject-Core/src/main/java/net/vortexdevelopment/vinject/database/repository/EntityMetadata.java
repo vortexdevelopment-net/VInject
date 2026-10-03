@@ -44,26 +44,11 @@ public class EntityMetadata {
 
         for (Field field : entityClass.getDeclaredFields()) {
             field.setAccessible(true);
-            String columnName = field.getName();
-            if (field.isAnnotationPresent(Id.class)) {
+            Column column = field.getAnnotation(Column.class);
+            String columnName = physicalColumnName(field, column);
+            if (field.isAnnotationPresent(Id.class) || (column != null && column.primaryKey())) {
                 pkColumn = columnName;
                 pkField = field;
-            } else if (field.isAnnotationPresent(Column.class)) {
-                Column column = field.getAnnotation(Column.class);
-                if (!column.name().isEmpty()) {
-                    columnName = column.name();
-                }
-                if (column.primaryKey()) {
-                    pkColumn = columnName;
-                    pkField = field;
-                }
-            }
-
-            if (field.isAnnotationPresent(Temporal.class)) {
-                Temporal temporal = field.getAnnotation(Temporal.class);
-                if (!temporal.name().isEmpty()) {
-                    columnName = temporal.name();
-                }
             }
 
             // Check if this field type has a serializer
@@ -97,6 +82,19 @@ public class EntityMetadata {
         }
         this.primaryKeyColumn = pkColumn;
         this.primaryKeyField = pkField;
+    }
+
+    private static String physicalColumnName(Field field, Column column) {
+        Temporal temporal = field.getAnnotation(Temporal.class);
+        if (temporal != null && !temporal.name().isEmpty()) {
+            return temporal.name();
+        }
+
+        if (column != null && !column.name().isEmpty()) {
+            return column.name();
+        }
+
+        return field.getName();
     }
 
     public String getTableName() {

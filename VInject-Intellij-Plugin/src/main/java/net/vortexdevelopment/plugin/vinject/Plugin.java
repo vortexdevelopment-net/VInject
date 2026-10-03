@@ -11,7 +11,6 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.roots.ProjectFileIndex;
 import com.intellij.openapi.roots.ProjectRootManager;
 import com.intellij.openapi.startup.ProjectActivity;
-import com.intellij.openapi.startup.StartupActivity;
 import com.intellij.openapi.util.Computable;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiFile;
@@ -19,19 +18,16 @@ import com.intellij.psi.PsiManager;
 import kotlin.Unit;
 import kotlin.coroutines.Continuation;
 import net.vortexdevelopment.plugin.vinject.container.ClassDataManager;
-import net.vortexdevelopment.plugin.vinject.discord.DiscordHook;
 import net.vortexdevelopment.plugin.vinject.discord.DiscordActivityManager;
+import net.vortexdevelopment.plugin.vinject.discord.DiscordHook;
 import net.vortexdevelopment.plugin.vinject.discord.DiscordSettings;
 import net.vortexdevelopment.plugin.vinject.syntax.AnnotationChangeListener;
 import net.vortexdevelopment.plugin.vinject.templates.TemplateManager;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class Plugin implements ProjectActivity, Disposable {
 
@@ -214,18 +210,18 @@ public class Plugin implements ProjectActivity, Disposable {
 
         try {
             // Check if Discord RPC is enabled in any project's settings
-            if (!DiscordHook.isEnabled(project)) {
+            if (!DiscordHook.getInstance().isEnabled(project)) {
                 System.out.println("Discord RPC is disabled in settings, skipping initialization");
                 return;
             }
 
             System.out.println("🔧 Initializing Discord RPC globally...");
             // Initialize Discord RPC globally
-            DiscordHook.init(project);
+            DiscordHook.getInstance().init(project);
 
             System.out.println("🔗 Attempting to connect to Discord...");
             // Connect to Discord
-            DiscordHook.connect().thenRun(() -> {
+            DiscordHook.getInstance().connect().thenRun(() -> {
                 System.out.println("Discord connection successful! Starting global activity monitoring...");
                 try {
                     // Start global activity monitoring
@@ -257,7 +253,7 @@ public class Plugin implements ProjectActivity, Disposable {
             globalDiscordActivityManager.stopMonitoring();
             globalDiscordActivityManager = null;
         }
-        DiscordHook.shutdown();
+        DiscordHook.getInstance().shutdown();
         discordInitialized = false;
 
         PsiManager.getInstance(project).removePsiTreeChangeListener(annotationChangeListener);

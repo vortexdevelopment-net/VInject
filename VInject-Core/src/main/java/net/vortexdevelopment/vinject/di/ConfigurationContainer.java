@@ -1,6 +1,7 @@
 package net.vortexdevelopment.vinject.di;
 
 import net.vortexdevelopment.vinject.annotation.util.Injectable;
+import net.vortexdevelopment.vinject.annotation.yaml.Key;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlCollection;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlConfiguration;
 import net.vortexdevelopment.vinject.annotation.yaml.YamlDirectory;
@@ -17,6 +18,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.net.URL;
 import java.net.URLDecoder;
 import java.nio.charset.Charset;
@@ -666,25 +668,33 @@ public class ConfigurationContainer {
                               return;
                           }
 
-                          for (String key : source.getKeys(false)) {
-                              Object itemInstance = container.newInstance(ann.target(), false);
-                              mapper.mapToInstance(source.getConfigurationSection(key), itemInstance, ann.target(), "");
-                              
-                              Field idField = mapper.findIdFieldForClass(ann.target());
-                              if (idField != null) {
-                                  idField.setAccessible(true);
-                                  idField.set(itemInstance, key);
-                              }
+                           if (isSingleItemSource(source, ann.target())) {
+                               Object itemInstance = container.newInstance(ann.target(), false);
+                               mapper.mapToInstance(source, itemInstance, ann.target(), "");
+                               registerLoadedBatchItem(
+                                       id,
+                                       p,
+                                       itemInstance,
+                                       resolveSingleItemId(source, p, itemInstance, ann.target())
+                               );
+                           } else {
+                               for (String key : source.getKeys(false)) {
+                                   ConfigurationSection itemSource = source.getConfigurationSection(key);
+                                   if (itemSource == null) {
+                                       continue;
+                                   }
 
-                              instrumentItemInstance(itemInstance, id, p.toAbsolutePath().toString());
-                              
-                              Map<String, Object> items = batchStores.computeIfAbsent(id, k -> new LinkedHashMap<>());
-                              items.put(key, itemInstance);
-                              
-                              if (container != null) {
-                                  mapper.invokeOnLoadRecursively(itemInstance);
-                              }
-                          }
+                                   Object itemInstance = container.newInstance(ann.target(), false);
+                                   mapper.mapToInstance(itemSource, itemInstance, ann.target(), "");
+
+                                   Field idField = mapper.findIdFieldForClass(ann.target());
+                                   if (idField != null) {
+                                       idField.setAccessible(true);
+                                       idField.set(itemInstance, key);
+                                   }
+                                   registerLoadedBatchItem(id, p, itemInstance, key);
+                               }
+                           }
                       } catch (Exception e) {
                           e.printStackTrace();
                       }
@@ -705,6 +715,73 @@ public class ConfigurationContainer {
             e.printStackTrace();
         }
         return id;
+    }
+
+    private boolean isSingleItemSource(ConfigurationSection source, Class<?> targetClass) {
+        for (Field field : targetClass.getDeclaredFields()) {
+            int modifiers = field.getModifiers();
+            if (Modifier.isStatic(modifiers) || Modifier.isTransient(modifiers) || field.isSynthetic()) {
+                continue;
+            }
+            if (source.contains(field.getName())) {
+                return true;
+            }
+            Key key = field.getAnnotation(Key.class);
+            if (key != null && source.contains(key.value())) {
+                return true;
+            }
+        }
+        return source.getKeys(false).stream()
+                .noneMatch(key -> source.getConfigurationSection(key) != null);
+    }
+
+    private String resolveSingleItemId(
+            ConfigurationSection source,
+            Path file,
+            Object itemInstance,
+            Class<?> targetClass
+    ) throws IllegalAccessException {
+        Field idField = mapper.findIdFieldForClass(targetClass);
+        if (idField != null) {
+            idField.setAccessible(true);
+            Object mappedId = idField.get(itemInstance);
+            if (mappedId instanceof String id && !id.isBlank()) {
+                return id;
+            }
+
+            Object configuredId = source.get("Id");
+            if (configuredId == null) {
+                configuredId = source.get("id");
+            }
+            if (configuredId instanceof String id && !id.isBlank()) {
+                idField.set(itemInstance, id);
+                return id;
+            }
+
+            String fileName = file.getFileName().toString();
+            int extensionIndex = fileName.lastIndexOf('.');
+            String fallbackId = extensionIndex > 0 ? fileName.substring(0, extensionIndex) : fileName;
+            idField.set(itemInstance, fallbackId);
+            return fallbackId;
+        }
+
+        return file.getFileName().toString();
+    }
+
+    private void registerLoadedBatchItem(
+            String batchId,
+            Path file,
+            Object itemInstance,
+            String itemId
+    ) {
+        instrumentItemInstance(itemInstance, batchId, file.toAbsolutePath().toString());
+
+        Map<String, Object> items = batchStores.computeIfAbsent(batchId, ignored -> new LinkedHashMap<>());
+        items.put(itemId, itemInstance);
+
+        if (container != null) {
+            mapper.invokeOnLoadRecursively(itemInstance);
+        }
     }
 
     public Map<String, Object> getBatch(String id) {

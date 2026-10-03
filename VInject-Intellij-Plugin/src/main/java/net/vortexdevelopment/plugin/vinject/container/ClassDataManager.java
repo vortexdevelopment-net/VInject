@@ -31,7 +31,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class ClassDataManager {
-
     private static final String REGISTRY_ANNOTATION = BaseComponents.REGISTRY;
     public static final Set<String> COMPONENT_ANNOTATIONS = ConcurrentHashMap.newKeySet();
     public static final Set<String> COMPONENT_ANNOTATION_PACKAGES = Set.of(

@@ -376,13 +376,13 @@ public class DiscordSettingsConfigurable implements Configurable {
             // Run the actual connection test
             SwingUtilities.invokeLater(() -> {
                 try {
-                    DiscordHook.testConnection(project);
+                    DiscordHook.getInstance().testConnection(project);
 
                     // Poll for result a short time since connect/presence are async
                     new Thread(() -> {
                         try { Thread.sleep(6000); } catch (InterruptedException ignored) {}
                         SwingUtilities.invokeLater(() -> {
-                            if (DiscordHook.isConnected()) {
+                            if (DiscordHook.getInstance().isConnected()) {
                                 connectionStatusLabel.setText("✓ Connected to Discord");
                                 connectionStatusLabel.setForeground(Color.GREEN);
                             } else {

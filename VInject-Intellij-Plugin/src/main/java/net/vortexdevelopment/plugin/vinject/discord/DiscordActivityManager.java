@@ -10,6 +10,7 @@ import com.intellij.openapi.fileEditor.FileEditorManagerEvent;
 import com.intellij.openapi.fileEditor.FileEditorManagerListener;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.openapi.Disposable;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.util.messages.MessageBusConnection;
 import net.vortexdevelopment.plugin.vinject.discord.DiscordSettings;
@@ -18,7 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
-public class DiscordActivityManager implements FileEditorManagerListener, EditorFactoryListener {
+public class DiscordActivityManager implements FileEditorManagerListener, EditorFactoryListener, Disposable {
     
     private static final Logger LOG = Logger.getInstance(DiscordActivityManager.class);
     private Project currentProject;
@@ -161,13 +162,13 @@ public class DiscordActivityManager implements FileEditorManagerListener, Editor
     }
 
     private void updatePresence() {
-        if (!DiscordHook.isConnected() || !settings.isDiscordRpcEnabled()) {
+        if (!DiscordHook.getInstance().isConnected() || !settings.isDiscordRpcEnabled()) {
             return;
         }
 
         try {
             DiscordPresenceBuilder presence = buildPresence();
-            DiscordHook.updatePresence(presence);
+            DiscordHook.getInstance().updatePresence(presence);
         } catch (Exception e) {
             LOG.warn("Failed to update Discord presence", e);
         }
@@ -336,5 +337,10 @@ public class DiscordActivityManager implements FileEditorManagerListener, Editor
     public void setActive() {
         this.isActive = true;
         updatePresence();
+    }
+
+    @Override
+    public void dispose() {
+        stopMonitoring();
     }
 } 

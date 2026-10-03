@@ -2,6 +2,8 @@ package net.vortexdevelopment.plugin.vinject.templates;
 
 import com.intellij.ide.fileTemplates.FileTemplate;
 import com.intellij.ide.fileTemplates.FileTemplateManager;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.components.Service;
 import com.intellij.openapi.module.Module;
 import com.intellij.openapi.module.ModuleManager;
 import com.intellij.openapi.project.Project;
@@ -25,7 +27,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.jar.JarFile;
 
-public class TemplateManager {
+@Service(Service.Level.APP)
+public final class TemplateManager {
 
     // Built-in templates
     private static final String[] DEFAULT_TEMPLATES = {
@@ -36,15 +39,14 @@ public class TemplateManager {
             "RegistryTemplate",
     };
 
-    private static final TemplateManager instance = new TemplateManager();
     private final Map<String, UnregisteredTemplate> templates = new LinkedHashMap<>();
     private final Map<String, Set<String>> fileTemplates = new ConcurrentHashMap<>();
 
     public static TemplateManager getInstance() {
-        return instance;
+        return ApplicationManager.getApplication().getService(TemplateManager.class);
     }
 
-    private TemplateManager() {
+    TemplateManager() {
         for (String template : DEFAULT_TEMPLATES) {
             templates.put(template, new UnregisteredTemplate(template, getDefaultTemplateContent(template), "java"));
         }
