@@ -43,7 +43,9 @@ public class EntityMetadata {
         indexes.clear();
         serializedFields.clear();
 
-        Object entityInstance = clazz.getDeclaredConstructor().newInstance();
+        var constructor = clazz.getDeclaredConstructor();
+        constructor.setAccessible(true);
+        Object entityInstance = constructor.newInstance();
         for (Field field : clazz.getDeclaredFields()) {
             field.setAccessible(true);
             if (!isPersistent(field)) continue;
