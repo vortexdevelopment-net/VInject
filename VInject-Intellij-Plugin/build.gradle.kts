@@ -19,8 +19,8 @@ repositories {
 
 dependencies {
     implementation("org.jetbrains:annotations:26.0.1")
-    implementation("net.vortexdevelopment:VInject-API:2.0.0-SNAPSHOT")
-    implementation("net.vortexdevelopment:VInject-Analyzer:2.0.0-SNAPSHOT")
+    implementation("net.vortexdevelopment:VInject-API:2.0.1")
+    implementation("net.vortexdevelopment:VInject-Analyzer:2.0.1")
     implementation("io.github.cdagaming:DiscordIPC:1.0.0")
     implementation("com.google.code.gson:gson:2.10.1")
     intellijPlatform {

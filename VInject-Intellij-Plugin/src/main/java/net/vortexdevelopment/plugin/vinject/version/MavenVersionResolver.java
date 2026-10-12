@@ -33,9 +33,9 @@ public final class MavenVersionResolver {
             "net.vortexdevelopment:VortexCore", "3.0.0",
             "net.vortexdevelopment:VortexCore-Paper", "3.0.0",
             "net.vortexdevelopment:vinject-maven-plugin", "1.0.0",
-            "net.vortexdevelopment:VInject-Core", "2.0.0-SNAPSHOT",
-            "net.vortexdevelopment:VInject-HTTP", "2.0.0-SNAPSHOT",
-            "net.vortexdevelopment:VInject-Parent", "2.0.0-SNAPSHOT",
+            "net.vortexdevelopment:VInject-Core", "2.0.1",
+            "net.vortexdevelopment:VInject-HTTP", "2.0.1",
+            "net.vortexdevelopment:VInject-Parent", "2.0.1",
             "com.songoda:SongodaCore", "5.0.0-SNAPSHOT"
     );
     

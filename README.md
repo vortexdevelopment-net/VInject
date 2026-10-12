@@ -36,7 +36,7 @@ Add the following repository and dependency to your `pom.xml`:
 <dependency>
     <groupId>net.vortexdevelopment</groupId>
     <artifactId>VInject-Core</artifactId>
-    <version>2.0.0-SNAPSHOT</version>
+    <version>2.0.1</version>
     <scope>compile</scope>
 </dependency>
 ```
@@ -48,7 +48,7 @@ The `vinject-maven-plugin` is required for entity dirty tracking (`@CachedField`
 <plugin>
     <groupId>net.vortexdevelopment</groupId>
     <artifactId>vinject-maven-plugin</artifactId>
-    <version>2.0.0-SNAPSHOT</version>
+    <version>2.0.1</version>
     <executions>
         <execution>
             <id>process-classes</id>

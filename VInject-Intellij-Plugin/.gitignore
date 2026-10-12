@@ -6,6 +6,8 @@ build/
 
 *.xml
 !src/main/resources/META-INF/plugin.xml
+!src/main/resources/projectWizard/songoda/multi/*.pom.xml
+!src/main/resources/projectWizard/songoda/single/*.pom.xml
 .intellijPlatform/
 
 ### IntelliJ IDEA ###

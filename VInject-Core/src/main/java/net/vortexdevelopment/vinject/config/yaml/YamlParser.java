@@ -126,14 +126,14 @@ public class YamlParser {
                 if (isListItem) {
                     handleListItem(item.group(1), indent, parent, stack);
                 } else {
-                    Matcher entry = KEY_VALUE_PATTERN.matcher(line);
-                    if (!entry.matches()) {
+                    int separator = findMappingSeparator(trimmed);
+                    if (separator < 0) {
                         if (!handlePendingScalar(line, indent, stack)) {
                             throw unsupported(line);
                         }
                         continue;
                     }
-                    handleMappingEntry(normalizeMappingKey(entry.group(1).trim()), entry.group(2), indent, parent, stack);
+                    handleMappingEntry(normalizeMappingKey(trimmed.substring(0, separator).trim()), trimmed.substring(separator + 1).trim(), indent, parent, stack);
                 }
             }
 
@@ -293,6 +293,7 @@ public class YamlParser {
         }
 
         Modifiers modifiers = parseModifiers(content);
+        registerAnchor(modifiers.anchor(), node);
         String remainder = modifiers.remainder();
         if (remainder.isEmpty()) {
             this.cursor++;
@@ -313,15 +314,46 @@ public class YamlParser {
             return;
         }
 
-        Matcher entry = KEY_VALUE_PATTERN.matcher(remainder);
-        if (entry.matches()) {
-            String key = normalizeMappingKey(entry.group(1).trim());
-            handleMappingEntry(key, entry.group(2), indent + this.indentStep, node, stack);
+        int separator = findMappingSeparator(remainder);
+        if (separator >= 0) {
+            String key = normalizeMappingKey(remainder.substring(0, separator).trim());
+            handleMappingEntry(key, remainder.substring(separator + 1).trim(), indent + this.indentStep, node, stack);
             return;
         }
 
         node.setValue(parseValue(modifiers, indent));
         this.cursor++;
+    }
+
+    private int findMappingSeparator(String text) {
+        char quote = 0;
+        boolean escaped = false;
+        int nesting = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (quote != 0) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\' && quote == '"') {
+                    escaped = true;
+                } else if (c == quote) {
+                    if (quote == '\'' && i + 1 < text.length() && text.charAt(i + 1) == '\'') {
+                        i++;
+                    } else {
+                        quote = 0;
+                    }
+                }
+            } else if ((c == '\'' || c == '"') && (i == 0 || nesting > 0)) {
+                quote = c;
+            } else if (c == '[' || c == '{') {
+                nesting++;
+            } else if (c == ']' || c == '}') {
+                nesting--;
+            } else if (c == ':' && nesting == 0 && (i + 1 == text.length() || Character.isWhitespace(text.charAt(i + 1)))) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     /**

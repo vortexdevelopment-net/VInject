@@ -50,6 +50,15 @@ public class YamlValueFormatter {
         return val.toString();
     }
 
+    static String serializeKey(String key) {
+        for (int i = 0; i < key.length(); i++) {
+            if (key.charAt(i) == ':' && (i + 1 == key.length() || Character.isWhitespace(key.charAt(i + 1)))) {
+                return quote(key);
+            }
+        }
+        return key;
+    }
+
     /**
      * Renders a string as a single line YAML double quoted scalar.
      *
@@ -92,7 +101,7 @@ public class YamlValueFormatter {
             if (!first) {
                 sb.append(", ");
             }
-            sb.append(entry.getKey() == null ? "~" : String.valueOf(entry.getKey())).append(": ")
+            sb.append(entry.getKey() == null ? "~" : serializeKey(String.valueOf(entry.getKey()))).append(": ")
                     .append(serialize(entry.getValue(), contextPath));
             first = false;
         }
