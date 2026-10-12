@@ -81,6 +81,7 @@ public class ConfigurationContainer {
         final String baseDir;
         final Class<?> targetClass;
         final Object holderInstance;
+        final Set<String> filePaths = new HashSet<>();
 
         BatchInfo(String rootKey, String baseDir, Class<?> targetClass, Object holderInstance) {
             this.rootKey = rootKey;
@@ -594,6 +595,10 @@ public class ConfigurationContainer {
     }
 
     private void updateHolderCollections(Object holderInstance, Class<?> holderClass, Map<String, Object> loadedItems) {
+        updateHolderCollections(holderInstance, holderClass, loadedItems, false);
+    }
+
+    private void updateHolderCollections(Object holderInstance, Class<?> holderClass, Map<String, Object> loadedItems, boolean replace) {
         for (Field field : holderClass.getDeclaredFields()) {
             boolean isMap = Map.class.isAssignableFrom(field.getType());
             boolean isCollection = Collection.class.isAssignableFrom(field.getType());
@@ -608,10 +613,16 @@ public class ConfigurationContainer {
                     if (isMap) {
                         @SuppressWarnings("unchecked")
                         Map<Object, Object> holderMap = (Map<Object, Object>) colValue;
+                        if (replace) {
+                            holderMap.clear();
+                        }
                         holderMap.putAll(loadedItems);
                     } else if (isCollection) {
                         @SuppressWarnings("unchecked")
                         Collection<Object> holderColl = (Collection<Object>) colValue;
+                        if (replace) {
+                            holderColl.clear();
+                        }
                         for (Object val : loadedItems.values()) {
                             if (!holderColl.contains(val)) {
                                 holderColl.add(val);
@@ -650,17 +661,25 @@ public class ConfigurationContainer {
             }
         }
 
-        if (!Files.exists(start)) {
-            return id;
-        }
+        reloadBatchDirectory(ann, holderClass, id);
+        return id;
+    }
 
-        try {
-            Stream<Path> pathStream = ann.recursive() ? Files.walk(start) : Files.list(start);
+    private void reloadBatchDirectory(YamlDirectory ann, Class<?> holderClass, String id) {
+        BatchInfo info = batches.get(id);
+        Path start = resolvePath(ann.dir());
+        Map<String, Object> loadedItems = new LinkedHashMap<>();
+        Map<String, YamlConfig> loadedFiles = new LinkedHashMap<>();
+
+        try (Stream<Path> pathStream = !Files.exists(start) ? Stream.empty()
+                : ann.recursive() ? Files.walk(start) : Files.list(start)) {
             pathStream.filter(p -> Files.isRegularFile(p) && (p.toString().endsWith(".yml") || p.toString().endsWith(".yaml")))
+                  .sorted()
                   .forEach(p -> {
                       try {
                           String absPath = p.toAbsolutePath().toString();
-                          YamlConfig config = fileDataMaps.computeIfAbsent(absPath, k -> YamlConfig.load(p.toFile()));
+                          YamlConfig config = YamlConfig.load(p.toFile());
+                          loadedFiles.put(absPath, config);
                           ConfigurationSection source = (ann.rootKey() == null || ann.rootKey().isEmpty()) 
                                   ? config : config.getConfigurationSection(ann.rootKey());
                           
@@ -670,8 +689,14 @@ public class ConfigurationContainer {
 
                            if (isSingleItemSource(source, ann.target())) {
                                Object itemInstance = container.newInstance(ann.target(), false);
-                               mapper.mapToInstance(source, itemInstance, ann.target(), "");
+                               String itemId = resolveSourceEntryId(source, p, ann.target());
+                               try {
+                                   mapper.mapToInstance(source, itemInstance, ann.target(), "");
+                               } catch (Exception e) {
+                                   throw new YamlEntryLoadException(p, itemId, e.getMessage(), e);
+                               }
                                registerLoadedBatchItem(
+                                       loadedItems,
                                        id,
                                        p,
                                        itemInstance,
@@ -685,36 +710,46 @@ public class ConfigurationContainer {
                                    }
 
                                    Object itemInstance = container.newInstance(ann.target(), false);
-                                   mapper.mapToInstance(itemSource, itemInstance, ann.target(), "");
+                                   try {
+                                       mapper.mapToInstance(itemSource, itemInstance, ann.target(), "");
+                                   } catch (Exception e) {
+                                       throw new YamlEntryLoadException(p, key, e.getMessage(), e);
+                                   }
 
                                    Field idField = mapper.findIdFieldForClass(ann.target());
                                    if (idField != null) {
                                        idField.setAccessible(true);
                                        idField.set(itemInstance, key);
                                    }
-                                   registerLoadedBatchItem(id, p, itemInstance, key);
+                                   registerLoadedBatchItem(loadedItems, id, p, itemInstance, key);
                                }
                            }
                       } catch (Exception e) {
-                          e.printStackTrace();
+                          if (e instanceof YamlEntryLoadException yamlEntryLoadException) {
+                              throw yamlEntryLoadException;
+                          }
+                          throw new IllegalStateException("Unable to load YAML directory file " + p.toAbsolutePath(), e);
                       }
                   });
-            pathStream.close();
-
-            // Populate any Map or Collection fields in the holder instance
-            if (holderInstance != null) {
-                Map<String, Object> loadedItems = batchStores.get(id);
-                if (loadedItems != null) {
-                    updateHolderCollections(holderInstance, holderClass, loadedItems);
-                    if (container != null) {
-                        container.getLifecycleManager().invokeOnLoad(holderInstance);
-                    }
-                }
-            }
         } catch (IOException e) {
-            e.printStackTrace();
+            throw new IllegalStateException("Unable to read YAML directory " + start, e);
         }
-        return id;
+
+        // Commit only after every file has parsed and mapped successfully.
+        for (String filePath : info.filePaths) {
+            fileDataMaps.remove(filePath);
+        }
+        fileDataMaps.putAll(loadedFiles);
+        info.filePaths.clear();
+        info.filePaths.addAll(loadedFiles.keySet());
+        Map<String, Object> items = batchStores.computeIfAbsent(id, ignored -> new LinkedHashMap<>());
+        items.clear();
+        items.putAll(loadedItems);
+        updateHolderCollections(info.holderInstance, holderClass, loadedItems, true);
+        for (Object item : loadedItems.values()) {
+            mapper.invokeOnLoadRecursively(item);
+        }
+        container.getLifecycleManager().invokeOnLoad(info.holderInstance);
     }
 
     private boolean isSingleItemSource(ConfigurationSection source, Class<?> targetClass) {
@@ -733,6 +768,21 @@ public class ConfigurationContainer {
         }
         return source.getKeys(false).stream()
                 .noneMatch(key -> source.getConfigurationSection(key) != null);
+    }
+
+    private String resolveSourceEntryId(ConfigurationSection source, Path file, Class<?> targetClass) {
+        Field idField = mapper.findIdFieldForClass(targetClass);
+        if (idField != null) {
+            Key key = idField.getAnnotation(Key.class);
+            String idKey = key != null ? key.value() : idField.getName();
+            Object configuredId = source.get(idKey);
+            if (configuredId != null && !configuredId.toString().isBlank()) {
+                return configuredId.toString();
+            }
+        }
+        String fileName = file.getFileName().toString();
+        int extensionIndex = fileName.lastIndexOf('.');
+        return extensionIndex > 0 ? fileName.substring(0, extensionIndex) : fileName;
     }
 
     private String resolveSingleItemId(
@@ -769,6 +819,7 @@ public class ConfigurationContainer {
     }
 
     private void registerLoadedBatchItem(
+            Map<String, Object> items,
             String batchId,
             Path file,
             Object itemInstance,
@@ -776,12 +827,7 @@ public class ConfigurationContainer {
     ) {
         instrumentItemInstance(itemInstance, batchId, file.toAbsolutePath().toString());
 
-        Map<String, Object> items = batchStores.computeIfAbsent(batchId, ignored -> new LinkedHashMap<>());
         items.put(itemId, itemInstance);
-
-        if (container != null) {
-            mapper.invokeOnLoadRecursively(itemInstance);
-        }
     }
 
     public Map<String, Object> getBatch(String id) {
@@ -809,6 +855,11 @@ public class ConfigurationContainer {
     }
 
     public void reloadConfig(Class<?> configClass) {
+        String batchId = directoryClassToBatchId.get(configClass);
+        if (batchId != null) {
+            reloadBatchDirectory(configClass.getAnnotation(YamlDirectory.class), configClass, batchId);
+            return;
+        }
         ConfigEntry entry = configs.get(configClass);
         if (entry == null) {
             return;

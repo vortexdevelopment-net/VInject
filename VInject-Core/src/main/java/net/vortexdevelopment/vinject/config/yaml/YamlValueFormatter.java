@@ -116,7 +116,7 @@ public class YamlValueFormatter {
             if (!first) {
                 sb.append(", ");
             }
-            sb.append(entry.getKey() == null ? "~" : String.valueOf(entry.getKey())).append(": ")
+            sb.append(entry.getKey() == null ? "~" : YamlPaths.formatMappingKey(String.valueOf(entry.getKey()))).append(": ")
                     .append(serialize(entry.getValue(), contextPath));
             first = false;
         }

@@ -9,10 +9,10 @@ public class ListNode extends KeyedNode {
     public String render(RenderOptions options) {
         StringBuilder sb = new StringBuilder();
         String key = YamlPaths.formatMappingKey(getKey());
-        if (getChildren().isEmpty()) {
-            return " ".repeat(getIndentation()) + key + ": []";
-        }
         sb.append(" ".repeat(getIndentation())).append(key).append(":");
+        if (getChildren().stream().noneMatch(ListItemNode.class::isInstance)) {
+            sb.append(" []");
+        }
         for (YamlNode child : getChildren()) {
             String rendered = child.render(options);
             if (!rendered.isEmpty() || child instanceof BlankLineNode) {

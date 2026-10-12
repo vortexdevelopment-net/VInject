@@ -1,0 +1,18 @@
+Commands:
+  - "broadcast Hi: all"
+  - 'broadcast Hi: all'
+  - "broadcast \"Hi: all\""
+  - 'don''t split: this'
+Lore:
+  - "Price: $100"
+  - 'Path: C:\kits'
+Tagged:
+  - !!str "broadcast Hi: all"
+Anchored:
+  - &command "broadcast Hi: all"
+  - *command
+Mappings:
+  - "quoted: key": value
+  - 'another: key': value
+  - Chance: 50
+Empty: []
