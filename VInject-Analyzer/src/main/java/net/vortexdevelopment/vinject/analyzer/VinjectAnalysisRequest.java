@@ -2,6 +2,7 @@ package net.vortexdevelopment.vinject.analyzer;
 
 import lombok.Getter;
 import net.vortexdevelopment.vinject.annotation.component.Root;
+import org.reflections.Reflections;
 
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -13,6 +14,7 @@ public final class VinjectAnalysisRequest {
 
     private final Root rootAnnotation;
     private final Class<?> rootClass;
+    private final Reflections reflections;
     private final Set<Class<?>> candidateClasses;
     private final Set<Class<?>> preRegisteredTypes;
     private final Set<String> preRegisteredTypeNames;
@@ -21,6 +23,7 @@ public final class VinjectAnalysisRequest {
     private VinjectAnalysisRequest(Builder builder) {
         this.rootAnnotation = builder.rootAnnotation;
         this.rootClass = builder.rootClass;
+        this.reflections = builder.reflections;
         this.candidateClasses = Collections.unmodifiableSet(new LinkedHashSet<>(builder.candidateClasses));
         this.preRegisteredTypes = Collections.unmodifiableSet(new LinkedHashSet<>(builder.preRegisteredTypes));
         this.preRegisteredTypeNames = Collections.unmodifiableSet(new LinkedHashSet<>(builder.preRegisteredTypeNames));
@@ -34,6 +37,7 @@ public final class VinjectAnalysisRequest {
     public static final class Builder {
         private Root rootAnnotation;
         private Class<?> rootClass;
+        private Reflections reflections;
         private final Set<Class<?>> candidateClasses = new LinkedHashSet<>();
         private final Set<Class<?>> preRegisteredTypes = new LinkedHashSet<>();
         private final Set<String> preRegisteredTypeNames = new LinkedHashSet<>();
@@ -42,6 +46,11 @@ public final class VinjectAnalysisRequest {
         public Builder root(Root rootAnnotation, Class<?> rootClass) {
             this.rootAnnotation = rootAnnotation;
             this.rootClass = rootClass;
+            return this;
+        }
+
+        public Builder reflections(Reflections reflections) {
+            this.reflections = reflections;
             return this;
         }
 

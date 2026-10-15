@@ -21,6 +21,7 @@ import net.vortexdevelopment.vinject.analyzer.fixtures.root.IncludedPackageRoot;
 import net.vortexdevelopment.vinject.analyzer.fixtures.root.RootPackageComponent;
 import net.vortexdevelopment.vinject.di.registry.AnnotationHandler;
 import org.junit.jupiter.api.Test;
+import org.reflections.Reflections;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -180,6 +181,21 @@ class VinjectAnalyzerTest {
     }
 
     @Test
+    void reusesProvidedReflectionsIndexInsteadOfScanningRootPackageAgain() {
+        Reflections preScannedIndex = new Reflections("net.vortexdevelopment.vinject.analyzer.fixtures");
+        Root root = UnscannableRoot.class.getAnnotation(Root.class);
+
+        VinjectAnalysisResult result = new VinjectAnalyzer().analyze(VinjectAnalysisRequest.builder()
+                .root(root, UnscannableRoot.class)
+                .reflections(preScannedIndex)
+                .build());
+
+        assertThat(result.hasErrors()).isFalse();
+        assertThat(result.loadPlan().componentLoadOrder())
+                .contains(RootPackageComponent.class, IncludedPackageComponent.class);
+    }
+
+    @Test
     void acceptsJavaFieldAndPhysicalColumnNamesInIndexesAndForeignKeys() {
         VinjectAnalysisResult result = analyze(ValidIsland.class, ValidUpgrade.class, ValidPlayer.class);
 
@@ -253,6 +269,10 @@ class VinjectAnalyzerTest {
         return new VinjectAnalyzer().analyze(VinjectAnalysisRequest.builder()
                 .candidateClasses(Set.of(classes))
                 .build());
+    }
+
+    @Root(packageName = "net.vortexdevelopment.vinject.analyzer.fixtures.noresult", createInstance = false)
+    static class UnscannableRoot {
     }
 
     @Component
