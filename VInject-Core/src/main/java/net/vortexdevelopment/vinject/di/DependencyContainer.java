@@ -249,6 +249,7 @@ public class DependencyContainer implements DependencyRepository {
 
         VinjectAnalysisResult analysisResult = new VinjectAnalyzer().analyze(VinjectAnalysisRequest.builder()
                 .root(rootAnnotation, rootClass)
+                .reflections(reflections)
                 .preRegisteredTypes(dependencies.keySet())
                 .loadPredicate(this::canLoadClass)
                 .build());

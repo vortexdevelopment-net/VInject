@@ -452,7 +452,10 @@ public class VinjectAnalyzer {
             return candidates;
         }
 
-        Reflections reflections = new Reflections(createConfiguration(root, rootClass));
+        Reflections reflections = request.getReflections();
+        if (reflections == null) {
+            reflections = new Reflections(createConfiguration(root, rootClass));
+        }
         candidates.add(rootClass);
         candidates.addAll(reflections.getTypesAnnotatedWith(Component.class));
         candidates.addAll(reflections.getTypesAnnotatedWith(Service.class));
